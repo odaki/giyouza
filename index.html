@@ -35,10 +35,16 @@ canvas {
   h1 { display: none; }
 }
 /* 全画面ボタン */
+/* キャンバスラッパー: ボタンをキャンバス上に重ねるための基準 */
+#canvas-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
 #fs-btn {
-  position: fixed;
-  bottom: 14px;
-  right: 14px;
+  position: absolute; /* キャンバス内の右下に固定 */
+  bottom: 10px;
+  right: 10px;
   width: 36px;
   height: 36px;
   padding: 0;
@@ -59,8 +65,10 @@ canvas {
 </head>
 <body>
 <h1>ギヨウザルーレット</h1>
-<canvas id="c"></canvas>
-<button id="fs-btn" aria-label="全画面切替"></button>
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+  <button id="fs-btn" aria-label="全画面切替"></button>
+</div>
 
 <script>
 'use strict';
@@ -71,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.06';
+const VERSION = 'v1.07';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
