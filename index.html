@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.10';
+const VERSION = 'v1.11';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -1824,8 +1824,10 @@ canvas.addEventListener('mousedown', e=>{
   if (phase==='done'&&canRestart) init(); else onShoot();
 });
 
-/* タッチ操作対応 */
-canvas.addEventListener('touchstart', e=>{
+/* タッチ操作対応（ページ内どこでもタップで反応） */
+document.addEventListener('touchstart', e=>{
+  /* フルスクリーンボタンは除外 */
+  if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
   if (phase==='done'&&canRestart) init(); else onShoot();
 }, { passive: false });
