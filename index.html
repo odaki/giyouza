@@ -49,7 +49,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.02';
+const VERSION = 'v1.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1602,13 +1602,13 @@ canvas.addEventListener('touchstart', e=>{
 
 /* ── キャンバスをビューポートに合わせてスケール ── */
 function fitCanvas() {
-  const h1El  = document.querySelector('h1');
+  const h1El   = document.querySelector('h1');
   const titleH = (h1El && getComputedStyle(h1El).display !== 'none')
     ? h1El.getBoundingClientRect().height + 6 : 0;
-  const scale = Math.min(
-    window.innerWidth        / W,
-    (window.innerHeight - titleH) / H
-  );
+  const MARGIN = 8; // box-shadow の縁取り分の余白
+  const availW = document.documentElement.clientWidth  - MARGIN * 2;
+  const availH = document.documentElement.clientHeight - MARGIN * 2;
+  const scale  = Math.min(availW / W, (availH - titleH) / H);
   canvas.style.width  = Math.floor(W * scale) + 'px';
   canvas.style.height = Math.floor(H * scale) + 'px';
 }
