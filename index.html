@@ -42,6 +42,8 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
+const VERSION = 'v1.00';
+
 /* ── カラー ── */
 const Y   = '#f5d020';
 const YD  = '#c8a800';
@@ -1358,6 +1360,13 @@ function drawBottomBar() {
       ctx.fillText('・',cx,cy);
     }
   }
+  /* バージョン表示: 右下に小さく薄く */
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = 'rgba(245,208,32,0.22)';
+  ctx.fillText(VERSION, W - 38, H - 8);
+
   ctx.restore();
 }
 
