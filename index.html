@@ -321,18 +321,12 @@ function drawWorms() {
 }
 
 /* ════════════════ 落下ギヨウザ ════════════════ */
-function initGyozas() { gyozas = []; }
-
-function spawnGyoza() {
-  gyozas.push({
-    x:        Math.random() * (W + 80) - 40,
-    y:        -50,
-    vx:       (Math.random() - 0.5) * 4,
-    vy:       Math.random() * 1.5 + 0.5,
-    rot:      Math.random() * Math.PI * 2,
-    rotSpd:   (Math.random() - 0.5) * 0.14,
-    size:     34 + Math.random() * 8,
-    /* 各個体の緑ドット位置を固定 */
+function makeGyozaObj(x, y, vx, vy) {
+  return {
+    x, y, vx, vy,
+    rot:    Math.random() * Math.PI * 2,
+    rotSpd: (Math.random() - 0.5) * 0.14,
+    size:   34 + Math.random() * 8,
     greens: Array.from({length:5}, ()=>({
       dx: (Math.random()-0.5)*0.55,
       dy: (Math.random()-0.5)*0.35,
@@ -340,10 +334,30 @@ function spawnGyoza() {
       ry: 0.035+Math.random()*0.03,
       a:  (Math.random()-0.5)*1.2,
     })),
-    /* ランダムな茶色みのある生地色 */
     skinL: `hsl(${42+Math.random()*12},${48+Math.random()*12}%,${78+Math.random()*8}%)`,
     skinD: `hsl(${38+Math.random()*10},${50+Math.random()*14}%,${62+Math.random()*8}%)`,
-  });
+  };
+}
+
+function initGyozas() {
+  gyozas = [];
+  /* 最初に中央からどさっとまとめて投下 */
+  const BURST = 100;
+  for (let i = 0; i < BURST; i++) {
+    const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
+    const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
+    const vx   = (Math.random()-0.5) * 5;
+    const vy   = 1.5 + Math.random() * 4;
+    gyozas.push(makeGyozaObj(cx, y, vx, vy));
+  }
+}
+
+function spawnGyoza() {
+  /* 通常スポーン: 画面全体からランダムに */
+  const x  = Math.random() * (W + 80) - 40;
+  const vy = Math.random() * 1.5 + 0.5;
+  const vx = (Math.random() - 0.5) * 4;
+  gyozas.push(makeGyozaObj(x, -50, vx, vy));
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
