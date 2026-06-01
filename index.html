@@ -28,17 +28,37 @@ h1 {
 canvas {
   display: block;
   box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 3px #c8a800;
-  touch-action: manipulation; /* ダブルタップズーム防止 */
+  touch-action: manipulation;
 }
 /* 横向き小型画面: タイトルを非表示にしてキャンバスを最大化 */
 @media (max-height: 480px) and (orientation: landscape) {
   h1 { display: none; }
+}
+/* 全画面ボタン */
+#fs-btn {
+  position: fixed;
+  bottom: 14px;
+  right: 14px;
+  padding: 6px 11px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(245,208,32,0.55);
+  border-radius: 6px;
+  color: #f5d020;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  display: none; /* タッチデバイスのみJS側で表示 */
+  z-index: 200;
 }
 </style>
 </head>
 <body>
 <h1>ギヨウザルーレット</h1>
 <canvas id="c"></canvas>
+<button id="fs-btn">全画面</button>
 
 <script>
 'use strict';
@@ -49,7 +69,10 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.04';
+const VERSION = 'v1.05';
+
+/* タッチデバイス判定 */
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1537,7 +1560,7 @@ function drawEndScreen() {
     ctx.globalAlpha=blink;
     ctx.font=`18px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.fillStyle=YD; ctx.shadowBlur=0;
-    ctx.fillText('[ スペースキー ] でもう一度',W/2,cy+134);
+    ctx.fillText(IS_TOUCH ? '[ タップ ] でもう一度' : '[ スペースキー ] でもう一度',W/2,cy+134);
     ctx.globalAlpha=1;
   }
   ctx.restore();
@@ -1545,10 +1568,11 @@ function drawEndScreen() {
 
 function drawInstruction(){
   const blink=0.45+0.45*Math.sin(Date.now()/550);
+  const msg = IS_TOUCH ? '[ タップ ] で矢を放つ！' : '[ スペースキー ] で矢を放つ！';
   ctx.save(); ctx.globalAlpha=blink;
   ctx.font=`16px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign='center'; ctx.textBaseline='bottom';
-  ctx.fillStyle=YD; ctx.fillText('[ スペースキー ] で矢を放つ！',W/2,H-8);
+  ctx.fillStyle=YD; ctx.fillText(msg,W/2,H-8);
   ctx.restore();
 }
 
@@ -1615,6 +1639,36 @@ function fitCanvas() {
 window.addEventListener('resize', fitCanvas);
 window.addEventListener('orientationchange', ()=> setTimeout(fitCanvas, 150));
 fitCanvas();
+
+/* ── 全画面ボタン（タッチデバイスのみ表示） ── */
+const fsBtn = document.getElementById('fs-btn');
+if (IS_TOUCH) {
+  fsBtn.style.display = 'block';
+
+  function toggleFullscreen() {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) req.call(el).catch(()=>{});
+    } else {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) exit.call(document).catch(()=>{});
+    }
+  }
+
+  fsBtn.addEventListener('click', e => { e.stopPropagation(); toggleFullscreen(); });
+  fsBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation(); toggleFullscreen();
+  }, { passive: false });
+
+  function onFsChange() {
+    const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    fsBtn.textContent = inFs ? '元に戻す' : '全画面';
+    setTimeout(fitCanvas, 150);
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+}
 </script>
 </body>
 </html>
