@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.08';
+const VERSION = 'v1.09';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -1658,8 +1658,9 @@ if (window.visualViewport) {
 }
 fitCanvas();
 
-/* ── 全画面ボタン（タッチデバイスのみ表示） ── */
+/* ── 全画面ボタン（Fullscreen API 対応環境のみ表示） ── */
 const fsBtn = document.getElementById('fs-btn');
+const FS_SUPPORTED = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
 
 /* SVGアイコン: Material Design fullscreen / fullscreen_exit */
 const FS_SVG_ENTER = `<svg viewBox="0 0 24 24" width="20" height="20" fill="#f5d020" xmlns="http://www.w3.org/2000/svg">
@@ -1669,7 +1670,7 @@ const FS_SVG_EXIT  = `<svg viewBox="0 0 24 24" width="20" height="20" fill="#f5d
   <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
 </svg>`;
 
-if (IS_TOUCH) {
+if (FS_SUPPORTED) {
   fsBtn.style.display = 'flex';
   fsBtn.innerHTML = FS_SVG_ENTER;
 
