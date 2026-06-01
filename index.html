@@ -39,18 +39,20 @@ canvas {
   position: fixed;
   bottom: 14px;
   right: 14px;
-  padding: 6px 11px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   background: rgba(0,0,0,0.55);
   border: 1px solid rgba(245,208,32,0.55);
   border-radius: 6px;
-  color: #f5d020;
-  font-size: 13px;
-  letter-spacing: 0.05em;
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   display: none; /* タッチデバイスのみJS側で表示 */
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
   z-index: 200;
 }
 </style>
@@ -58,7 +60,7 @@ canvas {
 <body>
 <h1>ギヨウザルーレット</h1>
 <canvas id="c"></canvas>
-<button id="fs-btn">全画面</button>
+<button id="fs-btn" aria-label="全画面切替"></button>
 
 <script>
 'use strict';
@@ -69,7 +71,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.05';
+const VERSION = 'v1.06';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -1642,8 +1644,18 @@ fitCanvas();
 
 /* ── 全画面ボタン（タッチデバイスのみ表示） ── */
 const fsBtn = document.getElementById('fs-btn');
+
+/* SVGアイコン: Material Design fullscreen / fullscreen_exit */
+const FS_SVG_ENTER = `<svg viewBox="0 0 24 24" width="20" height="20" fill="#f5d020" xmlns="http://www.w3.org/2000/svg">
+  <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+</svg>`;
+const FS_SVG_EXIT  = `<svg viewBox="0 0 24 24" width="20" height="20" fill="#f5d020" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+</svg>`;
+
 if (IS_TOUCH) {
-  fsBtn.style.display = 'block';
+  fsBtn.style.display = 'flex';
+  fsBtn.innerHTML = FS_SVG_ENTER;
 
   function toggleFullscreen() {
     const el = document.documentElement;
@@ -1663,7 +1675,7 @@ if (IS_TOUCH) {
 
   function onFsChange() {
     const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    fsBtn.textContent = inFs ? '元に戻す' : '全画面';
+    fsBtn.innerHTML = inFs ? FS_SVG_EXIT : FS_SVG_ENTER;
     setTimeout(fitCanvas, 150);
   }
   document.addEventListener('fullscreenchange', onFsChange);
