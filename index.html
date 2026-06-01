@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.07';
+const VERSION = 'v1.08';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -1636,18 +1636,26 @@ canvas.addEventListener('touchstart', e=>{
 
 /* ── キャンバスをビューポートに合わせてスケール ── */
 function fitCanvas() {
+  /* visualViewport はブラウザUIを除いた実際の表示領域を返す
+     iOS Safari のアドレスバー・タブバーがある場合も正確なサイズが得られる */
+  const vv     = window.visualViewport;
+  const vpW    = vv ? vv.width  : document.documentElement.clientWidth;
+  const vpH    = vv ? vv.height : document.documentElement.clientHeight;
+
   const h1El   = document.querySelector('h1');
   const titleH = (h1El && getComputedStyle(h1El).display !== 'none')
     ? h1El.getBoundingClientRect().height + 6 : 0;
-  const MARGIN = 8; // box-shadow の縁取り分の余白
-  const availW = document.documentElement.clientWidth  - MARGIN * 2;
-  const availH = document.documentElement.clientHeight - MARGIN * 2;
-  const scale  = Math.min(availW / W, (availH - titleH) / H);
+  const MARGIN = 8;
+  const scale  = Math.min((vpW - MARGIN * 2) / W, (vpH - MARGIN * 2 - titleH) / H);
   canvas.style.width  = Math.floor(W * scale) + 'px';
   canvas.style.height = Math.floor(H * scale) + 'px';
 }
 window.addEventListener('resize', fitCanvas);
-window.addEventListener('orientationchange', ()=> setTimeout(fitCanvas, 150));
+window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 200));
+/* visualViewport のリサイズ（アドレスバー出現・消滅）にも追従 */
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', fitCanvas);
+}
 fitCanvas();
 
 /* ── 全画面ボタン（タッチデバイスのみ表示） ── */
