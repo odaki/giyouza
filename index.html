@@ -49,7 +49,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.03';
+const VERSION = 'v1.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -71,9 +71,9 @@ const YOYOYOYO = ['ヨ', 'ヨ', 'ヨ', 'ヨ'];  // 中当たり⑥
 const UUUU     = ['ウ', 'ウ', 'ウ', 'ウ'];  // 中当たり⑦
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 中当たり⑧
 
-const WR  = 88;
+const WR  = 95;
 const WY  = 255;
-const WXS = [200, 388, 576, 764];
+const WXS = [230, 430, 630, 830];
 
 /* ── game state ── */
 let wheels, curIdx, phase, particles;
@@ -1207,7 +1207,7 @@ function drawWheel(i) {
     ctx.fillStyle=grd; ctx.fill();
     ctx.strokeStyle='rgba(245,208,32,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
     const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
-    const fs=Math.max(12,Math.min(30,(s.span/(Math.PI*2))*108));
+    const fs=Math.max(12,Math.min(33,(s.span/(Math.PI*2))*116));
     ctx.save(); ctx.translate(tx,ty);
     ctx.font=`bold ${fs}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
