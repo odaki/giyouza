@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.12';
+const VERSION = 'v1.13';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -241,14 +241,17 @@ function update() {
         if (isZazazaza) initZazazaza();
         if (isGyogyo)   initGyogyo();
       } else if (curIdx === 3) {
-        /* 3本目が刺さった → リーチ判定 */
+        /* 3本目が刺さった → リーチ判定
+           ※ 4本目の自然な結果が「ザ」の場合のみリーチ発動（内部決定制）
+              そうでない場合は通常どおり idle へ戻してプレイヤーに射撃させる */
         const r3 = [wheels[0].result, wheels[1].result, wheels[2].result];
-        if (r3.every((r, i) => r === TARGET[i])) {
-          /* 大当たりリーチ発動！ */
+        const w4 = wheels[3];
+        const natural4 = hitResult(w4); // 今の角度で刺さったら何か
+        if (r3.every((r, i) => r === TARGET[i]) && natural4 === TARGET[3]) {
+          /* 大当たりリーチ発動！(自然結果もザ → 演出のみ) */
           phase = 'reach';
           isReach = true;
           reachTimer = 0;
-          const w4 = wheels[3];
           reachStartRot = w4.rot;
           const seg = w4.segs.find(s => s.char === TARGET[3]); // ザ
           let endRot = -Math.PI / 2 - (seg.start + seg.span / 2);
