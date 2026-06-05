@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.17';
+const VERSION = 'v1.18';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -232,14 +232,16 @@ function update() {
         isGyogyo   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && !isZazazaza && res.every((r, i) => r === GYOGYO[i]);
         if (isJackpot) {
           if (isReach) {
-            /* リーチ経由大当たり: 白フラッシュ + 一斉花火10発 */
+            /* リーチ経由大当たり: 白フラッシュ + 一斉花火10発 + ギヨウザ100個 */
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
+            initGyozas(100);
           } else {
+            /* 通常大当たり: ギヨウザ70個、追加スポーンなし */
             launchFireworks();
+            initGyozas(70);
           }
-          initGyozas();
         }
         if (isGizagiza) launchGizaFireworks();
         if (isUyouyo)   initWorms();
@@ -470,11 +472,10 @@ function makeGyozaObj(x, y, vx, vy) {
   };
 }
 
-function initGyozas() {
+function initGyozas(burst = 70) {
   gyozas = [];
   /* 最初に中央からどさっとまとめて投下 */
-  const BURST = 100;
-  for (let i = 0; i < BURST; i++) {
+  for (let i = 0; i < burst; i++) {
     const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
     const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
     const vx   = (Math.random()-0.5) * 5;
@@ -502,9 +503,11 @@ const WALL_RELEASE = 220;      // この endTimer を超えると左右壁を撤
    ・支えを失ったギヨウザは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
 function updateGyozas() {
-  /* スポーン */
-  const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
-  if (endTimer % spawnRate === 0 && gyozas.length < 240) spawnGyoza();
+  /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ */
+  if (isReachJackpot) {
+    const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
+    if (endTimer % spawnRate === 0 && gyozas.length < 240) spawnGyoza();
+  }
 
   const GRAVITY     = 0.38;
   const RESTITUTION = 0.06;   // 反発係数(低=ほぼ非弾性)
