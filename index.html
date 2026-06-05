@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.21';
+const VERSION = 'v1.22';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -131,6 +131,30 @@ const PAYOUT_RATE = {
 };
 let coins, bet, betLocked, isGameOver;
 let payoutAmt, payoutTimer; // 獲得ポップアップ用
+let bestCoins; // ハイスコア
+
+/* ── localStorage ── */
+const LS_COINS = 'giyouza_coins';
+const LS_BEST  = 'giyouza_best';
+function lsSave() {
+  try {
+    localStorage.setItem(LS_COINS, coins);
+    if (coins > bestCoins) {
+      bestCoins = coins;
+      localStorage.setItem(LS_BEST, bestCoins);
+    }
+  } catch(e) {}
+}
+function lsLoad() {
+  try {
+    const c = parseInt(localStorage.getItem(LS_COINS));
+    const b = parseInt(localStorage.getItem(LS_BEST));
+    coins     = (c > 0) ? c : 100;
+    bestCoins = (b > 0) ? b : coins;
+  } catch(e) {
+    coins = 100; bestCoins = 100;
+  }
+}
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
 const REACH_MIN_SPEED    = 0.030; // 最低回転速度（リーチ減速後の速さ）
 let worms, uzaTexts, gyozas, giugiuCells;
@@ -153,9 +177,17 @@ const CLOUDS = [
 /* ════════════════ Init ════════════════ */
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
-  coins      = 100;
-  bet        = 10;  // デフォルトベット
+  lsLoad();           // 保存済みコインを復元
+  bet        = 10;
   isGameOver = false;
+  init();
+}
+
+function gameOverReset() {
+  coins      = 100;
+  bestCoins  = Math.max(bestCoins ?? 0, 0); // best はそのまま
+  isGameOver = false;
+  lsSave();           // リセット後の100を保存
   init();
 }
 
@@ -314,6 +346,7 @@ function update() {
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
         if (coins <= 0) isGameOver = true;
+        lsSave(); // コイン状態を保存
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
            ギ・ヨ・ウが揃ったらリーチ発動。
@@ -1823,6 +1856,14 @@ function drawBottomBar() {
   ctx.fillText('ギヨウザ', coinX, barY + 68);
   ctx.restore();
 
+  /* ベストスコア表示 */
+  if (bestCoins > 0) {
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(245,208,32,0.35)';
+    ctx.fillText(`BEST: ${bestCoins}ギヨウザ`, W - 44, H - 106 + 56);
+  }
+
   /* バージョン表示 */
   ctx.font = '11px monospace';
   ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
@@ -2218,7 +2259,7 @@ document.addEventListener('keydown', e=>{
   if (e.code==='Space') {
     e.preventDefault();
     if (phase==='done'&&canRestart) {
-      if (isGameOver) initGame(); else init();
+      if (isGameOver) gameOverReset(); else init();
     } else {
       onShoot();
     }
@@ -2240,7 +2281,7 @@ document.addEventListener('keydown', e=>{
 canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
   if (phase==='done'&&canRestart) {
-    if (isGameOver) initGame(); else init();
+    if (isGameOver) gameOverReset(); else init();
   } else {
     onShoot();
   }
@@ -2262,7 +2303,7 @@ document.addEventListener('touchstart', e=>{
   }
 
   if (phase==='done'&&canRestart) {
-    if (isGameOver) initGame(); else init();
+    if (isGameOver) gameOverReset(); else init();
   } else {
     onShoot();
   }
