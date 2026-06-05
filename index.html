@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.13';
+const VERSION = 'v1.14';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -116,7 +116,7 @@ let isJackpot, isGizagiza, isUyouyo, isUzauza, isGiugiu;
 let isGigigigi, isYoyoyoyo, isUuuu, isZazazaza, isGyogyo;
 let endTimer, canRestart;
 /* リーチ演出 */
-let isReach, reachTimer, reachStartRot, reachMidRot, reachEndRot;
+let isReach, reachTimer, reachStartRot, reachMidRot, reachEndRot, reachFinalResult;
 const REACH_FRAMES      = 220;  // 約3.7秒
 const REACH_CRAWL_START = 0.68; // ここからコマ送りフェーズ
 const REACH_CRAWL_STEPS = 9;   // コマ送りのステップ数
@@ -157,9 +157,10 @@ function init() {
   isZazazaza = false;
   isGyogyo   = false;
   endTimer   = 0;
-  isReach      = false;
-  reachTimer   = 0;
+  isReach       = false;
+  reachTimer    = 0;
   reachStartRot = reachMidRot = reachEndRot = 0;
+  reachFinalResult = null;
   canRestart = false;
   worms      = [];
   uzaTexts   = [];
@@ -242,25 +243,24 @@ function update() {
         if (isGyogyo)   initGyogyo();
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
-           ※ 4本目の自然な結果が「ザ」の場合のみリーチ発動（内部決定制）
-              そうでない場合は通常どおり idle へ戻してプレイヤーに射撃させる */
+           ギ・ヨ・ウが揃ったら無条件にリーチ発動（パチンコ方式）。
+           4本目の結果はリーチ開始時点の角度で内部決定し、
+           その結果に向けてホイールをアニメーションさせる。
+           結果がザなら大当たり、違えば惜しくも外れ。 */
         const r3 = [wheels[0].result, wheels[1].result, wheels[2].result];
-        const w4 = wheels[3];
-        const natural4 = hitResult(w4); // 今の角度で刺さったら何か
-        if (r3.every((r, i) => r === TARGET[i]) && natural4 === TARGET[3]) {
-          /* 大当たりリーチ発動！(自然結果もザ → 演出のみ) */
+        if (r3.every((r, i) => r === TARGET[i])) {
+          /* リーチ発動！ 4本目の結果を今の角度で内部決定 */
+          const w4 = wheels[3];
+          reachFinalResult = hitResult(w4); // 現在角度でサンプリング = 内部決定
           phase = 'reach';
           isReach = true;
           reachTimer = 0;
           reachStartRot = w4.rot;
-          const seg = w4.segs.find(s => s.char === TARGET[3]); // ザ
+          const seg = w4.segs.find(s => s.char === reachFinalResult);
           let endRot = -Math.PI / 2 - (seg.start + seg.span / 2);
-          /* 現在位置より必ず前方へ */
           while (endRot < reachStartRot) endRot += Math.PI * 2;
-          /* 迫力のため1.5周多く回す */
-          endRot += Math.PI * 2 * 1.5;
+          endRot += Math.PI * 2 * 1.5; // 迫力のため1.5周余分に回す
           reachEndRot = endRot;
-          /* コマ送り開始地点(全行程の75%地点) */
           reachMidRot = reachStartRot + (reachEndRot - reachStartRot) * 0.75;
         } else {
           phase = 'idle';
@@ -288,19 +288,37 @@ function update() {
       const step   = Math.floor(crawlT * REACH_CRAWL_STEPS) / REACH_CRAWL_STEPS;
       w4.rot = reachMidRot + (reachEndRot - reachMidRot) * step;
     } else {
-      /* リーチ完了 → 大当たり確定 */
+      /* リーチ完了 → 内部決定済みの結果で判定 */
       w4.rot       = reachEndRot;
-      w4.result    = TARGET[3]; // 'ザ'
+      w4.result    = reachFinalResult;
       w4.locked    = true;
       w4.resultPop = 0;
       w4.hasArrow  = true;
       curIdx = 4;
       spawnImpact(WXS[3], WY - WR - 5);
-      launchFireworks();
-      phase     = 'done';
-      endTimer  = 0;
-      isJackpot = true;
-      initGyozas();
+      phase    = 'done';
+      endTimer = 0;
+      /* 4本全結果で当たり判定（通常の done 遷移と同じロジック） */
+      const res = wheels.map(w => w.result);
+      isJackpot  = res.every((r, i) => r === TARGET[i]);
+      isGizagiza = !isJackpot && res.every((r, i) => r === GIZAGIZA[i]);
+      isUyouyo   = !isJackpot && !isGizagiza && res.every((r, i) => r === UYOUYO[i]);
+      isUzauza   = !isJackpot && !isGizagiza && !isUyouyo && res.every((r, i) => r === UZAUZA[i]);
+      isGiugiu   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && res.every((r, i) => r === GIUGIU[i]);
+      isGigigigi = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && res.every((r, i) => r === GIGIGIGI[i]);
+      isYoyoyoyo = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && res.every((r, i) => r === YOYOYOYO[i]);
+      isUuuu     = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && res.every((r, i) => r === UUUU[i]);
+      isZazazaza = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && res.every((r, i) => r === ZAZAZAZA[i]);
+      isGyogyo   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && !isZazazaza && res.every((r, i) => r === GYOGYO[i]);
+      if (isJackpot)  { launchFireworks(); initGyozas(); }
+      if (isGizagiza) launchGizaFireworks();
+      if (isUyouyo)   initWorms();
+      if (isUzauza)   initUzaTexts();
+      if (isGiugiu)   initGiugiu();
+      if (isYoyoyoyo) initYoyoyoyo();
+      if (isUuuu)     initUuuu();
+      if (isZazazaza) initZazazaza();
+      if (isGyogyo)   initGyogyo();
     }
 
     /* 金色パーティクル (第4ホイール周辺) */
