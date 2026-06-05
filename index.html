@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.16';
+const VERSION = 'v1.17';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -116,7 +116,8 @@ let isJackpot, isGizagiza, isUyouyo, isUzauza, isGiugiu;
 let isGigigigi, isYoyoyoyo, isUuuu, isZazazaza, isGyogyo;
 let endTimer, canRestart;
 /* リーチ演出 */
-let isReach, reachTimer;
+let isReach, reachTimer, isReachJackpot;
+let reachFlash = 0; // 白フラッシュ用タイマー
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
 const REACH_MIN_SPEED    = 0.010; // 最低回転速度
 let worms, uzaTexts, gyozas, giugiuCells;
@@ -156,8 +157,10 @@ function init() {
   isZazazaza = false;
   isGyogyo   = false;
   endTimer   = 0;
-  isReach    = false;
-  reachTimer = 0;
+  isReach       = false;
+  reachTimer    = 0;
+  isReachJackpot = false;
+  reachFlash    = 0;
   canRestart = false;
   worms      = [];
   uzaTexts   = [];
@@ -227,7 +230,17 @@ function update() {
         isUuuu     = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && res.every((r, i) => r === UUUU[i]);
         isZazazaza = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && res.every((r, i) => r === ZAZAZAZA[i]);
         isGyogyo   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && !isZazazaza && res.every((r, i) => r === GYOGYO[i]);
-        if (isJackpot)  { launchFireworks(); initGyozas(); }
+        if (isJackpot) {
+          if (isReach) {
+            /* リーチ経由大当たり: 白フラッシュ + 一斉花火10発 */
+            isReachJackpot = true;
+            reachFlash = 1;
+            launchReachFireworks();
+          } else {
+            launchFireworks();
+          }
+          initGyozas();
+        }
         if (isGizagiza) launchGizaFireworks();
         if (isUyouyo)   initWorms();
         if (isUzauza)   initUzaTexts();
@@ -294,7 +307,9 @@ function update() {
   if (phase === 'done') {
     endTimer++;
     if (endTimer > 130) canRestart = true;
-    if (isJackpot  && endTimer % 85  === 40) launchFireworks();
+    if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
+    if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks(); // リーチ大当たりは頻繁に派手な花火
+    else if (isJackpot && endTimer % 85 === 40) launchFireworks();
     if (isJackpot)  updateGyozas();
     if (isGizagiza && endTimer % 120 === 60) launchGizaFireworks();
     if (isUyouyo)  updateWorms();
@@ -323,6 +338,28 @@ function launchFireworks() {
       const a=(i/32)*Math.PI*2+Math.random()*0.4, spd=Math.random()*5+2;
       particles.push({ x:bx, y:by, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd,
         color:pal[Math.floor(Math.random()*pal.length)], life:70+Math.random()*50, r:Math.random()*4.5+1.5 });
+    }
+  }
+}
+
+/* リーチ大当たり専用: 虹色10発一斉打ち上げ */
+function launchReachFireworks() {
+  const RAINBOW = ['#ff4444','#ff9900','#ffee00','#44ee44','#44aaff','#aa44ff','#ff44aa','#ffffff'];
+  for (let b = 0; b < 10; b++) {
+    /* 画面全体に広く分散 */
+    const bx = 60 + (b / 9) * (W - 120) + (Math.random() - 0.5) * 80;
+    const by = 50 + Math.random() * (H * 0.5);
+    const col = RAINBOW[b % RAINBOW.length];
+    for (let i = 0; i < 48; i++) {
+      const a = (i / 48) * Math.PI * 2 + Math.random() * 0.3;
+      const spd = Math.random() * 7 + 3;
+      particles.push({
+        x: bx, y: by,
+        vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        color: Math.random() < 0.3 ? '#ffffff' : col,
+        life: 90 + Math.random() * 60,
+        r: Math.random() * 5.5 + 2,
+      });
     }
   }
 }
@@ -1453,6 +1490,15 @@ function draw() {
   if (isZazazaza && endTimer>50)       drawZazazaza();      // ザザザザ: 雨
   if (isGyogyo   && endTimer>45)       drawGyogyo();        // ギョギョ: びっくり魚
 
+  /* 白フラッシュ (リーチ大当たり確定の瞬間) */
+  if (reachFlash > 0) {
+    ctx.save();
+    ctx.globalAlpha = reachFlash;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
   /* 3. テキスト最前面 */
   if (phase==='done'&&endTimer>45) drawEndScreen();
   if (phase==='reach')              drawReachText();
@@ -1749,19 +1795,53 @@ function drawEndScreen() {
   /* ━━ 大当たり ━━ */
   if (isJackpot) {
     for (const c of CLOUDS) drawCloud(c.x,c.y,c.s*1.2,Math.min(0.9,c.a+0.2),c.r);
-    const pulse=1+0.06*Math.sin(endTimer*0.12);
-    ctx.save(); ctx.translate(W/2,cy); ctx.scale(pulse,pulse);
-    const halo=ctx.createRadialGradient(0,0,20,0,0,230);
-    halo.addColorStop(0,'rgba(245,208,32,0.4)'); halo.addColorStop(1,'rgba(245,208,32,0)');
-    ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(0,0,230,0,Math.PI*2); ctx.fill();
-    ctx.font=`bold 88px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=Y; ctx.shadowBlur=55;
-    outText('大当たり！',0,0, Y, 'rgba(0,0,0,0.9)', 11);
-    ctx.shadowBlur=20;
-    ctx.font=`bold 32px 'Hiragino Mincho ProN',serif`;
-    outText('ギ ヨ ウ ザ 達成！',0,80, '#fffde7', 'rgba(0,0,0,0.85)', 7);
-    ctx.restore();
+
+    if (isReachJackpot) {
+      /* ── リーチ経由: 虹色・大型・激しいパルス ── */
+      const pulse = 1 + 0.12 * Math.sin(endTimer * 0.18);
+      ctx.save(); ctx.translate(W/2, cy); ctx.scale(pulse, pulse);
+
+      /* 虹色の大光輪 */
+      const haloR = ctx.createRadialGradient(0,0,30,0,0,280);
+      const hue = (endTimer * 2) % 360;
+      haloR.addColorStop(0,   `hsla(${hue},100%,70%,0.45)`);
+      haloR.addColorStop(0.5, `hsla(${(hue+120)%360},100%,60%,0.2)`);
+      haloR.addColorStop(1,   'rgba(0,0,0,0)');
+      ctx.fillStyle = haloR;
+      ctx.beginPath(); ctx.arc(0,0,280,0,Math.PI*2); ctx.fill();
+
+      /* 虹色グラデーションテキスト */
+      ctx.font = `bold 96px 'Hiragino Mincho ProN',serif`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      const grad = ctx.createLinearGradient(-200,0,200,0);
+      grad.addColorStop(0,   `hsl(${hue},100%,65%)`);
+      grad.addColorStop(0.25,`hsl(${(hue+60)%360},100%,65%)`);
+      grad.addColorStop(0.5, `hsl(${(hue+120)%360},100%,65%)`);
+      grad.addColorStop(0.75,`hsl(${(hue+200)%360},100%,65%)`);
+      grad.addColorStop(1,   `hsl(${(hue+300)%360},100%,65%)`);
+      ctx.shadowColor = '#fff'; ctx.shadowBlur = 60;
+      outText('超大当たり！！',0,0, grad, 'rgba(0,0,0,0.92)', 13);
+      ctx.shadowBlur = 22;
+      ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
+      outText('リーチ達成！ ギ ヨ ウ ザ',0,92, '#ffffff', 'rgba(0,0,0,0.88)', 8);
+      ctx.restore();
+
+    } else {
+      /* ── 通常大当たり ── */
+      const pulse=1+0.06*Math.sin(endTimer*0.12);
+      ctx.save(); ctx.translate(W/2,cy); ctx.scale(pulse,pulse);
+      const halo=ctx.createRadialGradient(0,0,20,0,0,230);
+      halo.addColorStop(0,'rgba(245,208,32,0.4)'); halo.addColorStop(1,'rgba(245,208,32,0)');
+      ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(0,0,230,0,Math.PI*2); ctx.fill();
+      ctx.font=`bold 88px 'Hiragino Mincho ProN',serif`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.shadowColor=Y; ctx.shadowBlur=55;
+      outText('大当たり！',0,0, Y, 'rgba(0,0,0,0.9)', 11);
+      ctx.shadowBlur=20;
+      ctx.font=`bold 32px 'Hiragino Mincho ProN',serif`;
+      outText('ギ ヨ ウ ザ 達成！',0,80, '#fffde7', 'rgba(0,0,0,0.85)', 7);
+      ctx.restore();
+    }
 
   /* ━━ ギザギザ 中当たり ━━ */
   } else if (isGizagiza) {
