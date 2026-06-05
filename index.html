@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.18';
+const VERSION = 'v1.19';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -308,7 +308,8 @@ function update() {
 
   if (phase === 'done') {
     endTimer++;
-    if (endTimer > 130) canRestart = true;
+    const restartWait = (isJackpot||isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo) ? 130 : 55;
+    if (endTimer > restartWait) canRestart = true;
     if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks(); // リーチ大当たりは頻繁に派手な花火
     else if (isJackpot && endTimer % 85 === 40) launchFireworks();
