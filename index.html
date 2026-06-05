@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.14';
+const VERSION = 'v1.15';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -116,10 +116,9 @@ let isJackpot, isGizagiza, isUyouyo, isUzauza, isGiugiu;
 let isGigigigi, isYoyoyoyo, isUuuu, isZazazaza, isGyogyo;
 let endTimer, canRestart;
 /* リーチ演出 */
-let isReach, reachTimer, reachStartRot, reachMidRot, reachEndRot, reachFinalResult;
-const REACH_FRAMES      = 220;  // 約3.7秒
-const REACH_CRAWL_START = 0.68; // ここからコマ送りフェーズ
-const REACH_CRAWL_STEPS = 9;   // コマ送りのステップ数
+let isReach, reachTimer;
+const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
+const REACH_MIN_SPEED    = 0.010; // 最低回転速度
 let worms, uzaTexts, gyozas, giugiuCells;
 let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
 
@@ -157,10 +156,8 @@ function init() {
   isZazazaza = false;
   isGyogyo   = false;
   endTimer   = 0;
-  isReach       = false;
-  reachTimer    = 0;
-  reachStartRot = reachMidRot = reachEndRot = 0;
-  reachFinalResult = null;
+  isReach    = false;
+  reachTimer = 0;
   canRestart = false;
   worms      = [];
   uzaTexts   = [];
@@ -206,10 +203,8 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
-  for (let i = 0; i < wheels.length; i++) {
-    const w = wheels[i];
-    /* reach中の第4ホイールは手動制御するので自動回転をスキップ */
-    if (!w.locked && !(phase === 'reach' && i === 3)) w.rot += w.speed;
+  for (const w of wheels) {
+    if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
   }
 
@@ -243,25 +238,16 @@ function update() {
         if (isGyogyo)   initGyogyo();
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
-           ギ・ヨ・ウが揃ったら無条件にリーチ発動（パチンコ方式）。
-           4本目の結果はリーチ開始時点の角度で内部決定し、
-           その結果に向けてホイールをアニメーションさせる。
-           結果がザなら大当たり、違えば惜しくも外れ。 */
+           ギ・ヨ・ウが揃ったらリーチ発動。
+           第4ホイールは減速しながら回り続け、
+           プレイヤーが自分のタイミングで矢を放つ。 */
         const r3 = [wheels[0].result, wheels[1].result, wheels[2].result];
         if (r3.every((r, i) => r === TARGET[i])) {
-          /* リーチ発動！ 4本目の結果を今の角度で内部決定 */
-          const w4 = wheels[3];
-          reachFinalResult = hitResult(w4); // 現在角度でサンプリング = 内部決定
           phase = 'reach';
           isReach = true;
           reachTimer = 0;
-          reachStartRot = w4.rot;
-          const seg = w4.segs.find(s => s.char === reachFinalResult);
-          let endRot = -Math.PI / 2 - (seg.start + seg.span / 2);
-          while (endRot < reachStartRot) endRot += Math.PI * 2;
-          endRot += Math.PI * 2 * 1.5; // 迫力のため1.5周余分に回す
-          reachEndRot = endRot;
-          reachMidRot = reachStartRot + (reachEndRot - reachStartRot) * 0.75;
+          /* 第4ホイールの初期スピードを記録（減衰に使う） */
+          wheels[3]._reachSpeed0 = wheels[3].speed;
         } else {
           phase = 'idle';
         }
@@ -274,52 +260,11 @@ function update() {
   /* ── リーチ演出アップデート ── */
   if (phase === 'reach') {
     reachTimer++;
+    /* 第4ホイールをなめらかに減速させる（止まらない、プレイヤーが射る） */
     const w4 = wheels[3];
-    const t = reachTimer / REACH_FRAMES;
-
-    if (t < REACH_CRAWL_START) {
-      /* フェーズ1: スムーズ減速 (ease-out) */
-      const tn   = t / REACH_CRAWL_START;
-      const ease = 1 - Math.pow(1 - tn, 2.8);
-      w4.rot = reachStartRot + (reachMidRot - reachStartRot) * ease;
-    } else if (t < 1) {
-      /* フェーズ2: コマ送り */
-      const crawlT = (t - REACH_CRAWL_START) / (1 - REACH_CRAWL_START);
-      const step   = Math.floor(crawlT * REACH_CRAWL_STEPS) / REACH_CRAWL_STEPS;
-      w4.rot = reachMidRot + (reachEndRot - reachMidRot) * step;
-    } else {
-      /* リーチ完了 → 内部決定済みの結果で判定 */
-      w4.rot       = reachEndRot;
-      w4.result    = reachFinalResult;
-      w4.locked    = true;
-      w4.resultPop = 0;
-      w4.hasArrow  = true;
-      curIdx = 4;
-      spawnImpact(WXS[3], WY - WR - 5);
-      phase    = 'done';
-      endTimer = 0;
-      /* 4本全結果で当たり判定（通常の done 遷移と同じロジック） */
-      const res = wheels.map(w => w.result);
-      isJackpot  = res.every((r, i) => r === TARGET[i]);
-      isGizagiza = !isJackpot && res.every((r, i) => r === GIZAGIZA[i]);
-      isUyouyo   = !isJackpot && !isGizagiza && res.every((r, i) => r === UYOUYO[i]);
-      isUzauza   = !isJackpot && !isGizagiza && !isUyouyo && res.every((r, i) => r === UZAUZA[i]);
-      isGiugiu   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && res.every((r, i) => r === GIUGIU[i]);
-      isGigigigi = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && res.every((r, i) => r === GIGIGIGI[i]);
-      isYoyoyoyo = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && res.every((r, i) => r === YOYOYOYO[i]);
-      isUuuu     = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && res.every((r, i) => r === UUUU[i]);
-      isZazazaza = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && res.every((r, i) => r === ZAZAZAZA[i]);
-      isGyogyo   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && !isZazazaza && res.every((r, i) => r === GYOGYO[i]);
-      if (isJackpot)  { launchFireworks(); initGyozas(); }
-      if (isGizagiza) launchGizaFireworks();
-      if (isUyouyo)   initWorms();
-      if (isUzauza)   initUzaTexts();
-      if (isGiugiu)   initGiugiu();
-      if (isYoyoyoyo) initYoyoyoyo();
-      if (isUuuu)     initUuuu();
-      if (isZazazaza) initZazazaza();
-      if (isGyogyo)   initGyogyo();
-    }
+    const decayT = Math.min(1, reachTimer / REACH_DECEL_FRAMES);
+    const ease   = 1 - Math.pow(1 - decayT, 2.5); // ease-out
+    w4.speed = w4._reachSpeed0 * (1 - ease) + REACH_MIN_SPEED * ease;
 
     /* 金色パーティクル (第4ホイール周辺) */
     if (reachTimer % 3 === 0) {
@@ -1435,13 +1380,9 @@ function draw() {
     shakeX += (Math.random()-0.5)*14*k;
     shakeY += (Math.random()-0.5)*10*k;
   }
-  if (phase === 'reach') {                    // リーチ: コマ送り中に微振動
-    const rt = reachTimer / REACH_FRAMES;
-    if (rt >= REACH_CRAWL_START) {
-      const k = Math.min(1, (rt - REACH_CRAWL_START) / 0.1);
-      shakeX += (Math.random()-0.5)*3*k;
-      shakeY += (Math.random()-0.5)*2*k;
-    }
+  if (phase === 'reach' && reachTimer > REACH_DECEL_FRAMES) { // リーチ減速後: 微振動
+    shakeX += (Math.random()-0.5)*2;
+    shakeY += (Math.random()-0.5)*1.5;
   }
 
   ctx.save();
@@ -1465,7 +1406,7 @@ function draw() {
 
   /* ホイール番号 */
   for (let i=0;i<4;i++){
-    const active=i===curIdx&&phase==='idle';
+    const active=i===curIdx&&(phase==='idle'||phase==='reach');
     ctx.font=`bold 12px serif`; ctx.textAlign='center';
     ctx.fillStyle=active?Y:'rgba(245,208,32,0.38)';
     ctx.fillText(`第${i+1}的`,WXS[i],WY-WR-44);
@@ -1520,7 +1461,7 @@ function draw() {
 }
 
 function drawWheel(i) {
-  const w=wheels[i], active=i===curIdx&&phase==='idle';
+  const w=wheels[i], active=i===curIdx&&(phase==='idle'||phase==='reach');
   ctx.save(); ctx.translate(w.x,w.y);
   if (active){ctx.shadowColor=Y;ctx.shadowBlur=50;}
 
@@ -1706,7 +1647,6 @@ function drawBottomBar() {
 /* ── リーチ演出: スポットライトオーバーレイ ── */
 function drawReachOverlay() {
   const fadeIn = Math.min(1, reachTimer / 35);
-  const t      = reachTimer / REACH_FRAMES;
   const wx = WXS[3], wy = WY;
 
   ctx.save();
@@ -1724,10 +1664,9 @@ function drawReachOverlay() {
   ctx.fillStyle = spot;
   ctx.fillRect(0, 0, W, H);
 
-  /* コマ送りフェーズ: ホイール枠を強く光らせる */
-  if (t >= REACH_CRAWL_START) {
-    const crawlT  = (t - REACH_CRAWL_START) / (1 - REACH_CRAWL_START);
-    const flicker = Math.floor(crawlT * REACH_CRAWL_STEPS) % 2 === 0 ? 1 : 0.5;
+  /* 減速が完了したらホイール枠をフリッカー */
+  if (reachTimer > REACH_DECEL_FRAMES) {
+    const flicker = Math.floor(reachTimer / 8) % 2 === 0 ? 1 : 0.5;
     ctx.beginPath();
     ctx.arc(wx, wy, WR + 8, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(245,208,32,${0.7 * flicker * fadeIn})`;
@@ -1744,7 +1683,6 @@ function drawReachOverlay() {
 function drawReachText() {
   const fadeIn = Math.min(1, Math.max(0, (reachTimer - 18) / 28));
   if (fadeIn <= 0) return;
-  const t = reachTimer / REACH_FRAMES;
 
   ctx.save();
 
@@ -1762,14 +1700,15 @@ function drawReachText() {
   outText('リーチ！', 0, 0, Y, 'rgba(0,0,0,0.92)', 10);
   ctx.restore();
 
-  /* コマ送り中のサブテキスト */
-  if (t >= REACH_CRAWL_START) {
-    const crawlFade = Math.min(1, (t - REACH_CRAWL_START) / 0.05);
-    ctx.globalAlpha = crawlFade * 0.85 * fadeIn;
-    ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
+  /* 減速完了後: 操作を促すサブテキスト */
+  if (reachTimer > REACH_DECEL_FRAMES) {
+    const blink = 0.45 + 0.45 * Math.sin(reachTimer * 0.15);
+    ctx.globalAlpha = blink * fadeIn;
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign = 'center';
-    ctx.shadowColor = Y; ctx.shadowBlur = 20;
-    outText('ザ…？', W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
+    ctx.shadowColor = Y; ctx.shadowBlur = 18;
+    const msg = IS_TOUCH ? '[ タップ ] で矢を放て！' : '[ スペース ] で矢を放て！';
+    outText(msg, W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
   }
 
   /* 第4的の上に▼マーカー (注目を誘導) */
@@ -1979,7 +1918,9 @@ init();
 (function loop(){ update(); draw(); requestAnimationFrame(loop); })();
 
 function onShoot(){
-  if (phase!=='idle'||curIdx>=4) return;
+  /* idle と reach の両フェーズで矢を放てる */
+  if (phase!=='idle' && phase!=='reach') return;
+  if (curIdx>=4) return;
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
