@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.20';
+const VERSION = 'v1.21';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -118,6 +118,19 @@ let endTimer, canRestart;
 /* リーチ演出 */
 let isReach, reachTimer, isReachJackpot;
 let reachFlash = 0; // 白フラッシュ用タイマー
+
+/* ── ギヨウザコイン ── */
+const BET_OPTIONS = [1, 5, 10, 25, 50];
+const BET_KEY_MAP = { 'Digit1':0, 'Digit2':1, 'Digit3':2, 'Digit4':3, 'Digit5':4 };
+/* 配当倍率（没収型: 掛け金は戻らない） */
+const PAYOUT_RATE = {
+  reachJackpot: 50,
+  jackpot:      20,
+  hitMed4:       4,  // GIZAGIZA/UYOUYO/GIUGIU/GYOGYO
+  hitMed3:       3,  // GIGIGIGI/YOYOYOYO/UUUU/ZAZAZAZA
+};
+let coins, bet, betLocked, isGameOver;
+let payoutAmt, payoutTimer; // 獲得ポップアップ用
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
 const REACH_MIN_SPEED    = 0.030; // 最低回転速度（リーチ減速後の速さ）
 let worms, uzaTexts, gyozas, giugiuCells;
@@ -138,6 +151,14 @@ const CLOUDS = [
 ];
 
 /* ════════════════ Init ════════════════ */
+/* ゲーム全体リセット（コイン初期化込み） */
+function initGame() {
+  coins      = 100;
+  bet        = 10;  // デフォルトベット
+  isGameOver = false;
+  init();
+}
+
 function init() {
   wheels     = WXS.map(x => createWheel(x, WY));
   curIdx     = 0;
@@ -161,7 +182,12 @@ function init() {
   reachTimer    = 0;
   isReachJackpot = false;
   reachFlash    = 0;
-  canRestart = false;
+  canRestart  = false;
+  betLocked   = false;
+  payoutAmt   = 0;
+  payoutTimer = 0;
+  /* ベットが所持コインを超えていたら最大払える額に下げる */
+  if (coins !== undefined) clampBet();
   worms      = [];
   uzaTexts   = [];
   gyozas     = [];
@@ -171,6 +197,34 @@ function init() {
   ghosts      = [];
   rainDrops   = [];
   gyogyoFish  = [];
+}
+
+/* ── コイン操作ユーティリティ ── */
+function clampBet() {
+  /* 払えない額のベットを、払える最大の選択肢に下げる */
+  while (bet > coins && BET_OPTIONS.indexOf(bet) > 0) {
+    bet = BET_OPTIONS[BET_OPTIONS.indexOf(bet) - 1];
+  }
+  if (bet > coins) bet = BET_OPTIONS[0]; // 1ギヨウザ以上あれば必ず賭けられる
+}
+
+function changeBet(dir) {
+  /* dir: +1=上げる, -1=下げる */
+  const idx = BET_OPTIONS.indexOf(bet);
+  let next = idx + dir;
+  /* 範囲クランプ */
+  next = Math.max(0, Math.min(BET_OPTIONS.length - 1, next));
+  /* 払えない選択肢はスキップ */
+  while (next < BET_OPTIONS.length && BET_OPTIONS[next] > coins) next++;
+  if (next < BET_OPTIONS.length) bet = BET_OPTIONS[next];
+}
+
+function calcPayout() {
+  if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot;
+  if (isJackpot)      return bet * PAYOUT_RATE.jackpot;
+  if (isGizagiza || isUyouyo || isGiugiu || isGyogyo) return bet * PAYOUT_RATE.hitMed4;
+  if (isGigigigi || isYoyoyoyo || isUuuu || isZazazaza) return bet * PAYOUT_RATE.hitMed3;
+  return 0;
 }
 
 function createWheel(x, y) {
@@ -251,6 +305,15 @@ function update() {
         if (isUuuu)     initUuuu();
         if (isZazazaza) initZazazaza();
         if (isGyogyo)   initGyogyo();
+        /* 配当計算 */
+        const payout = calcPayout();
+        if (payout > 0) {
+          coins += payout;
+          payoutAmt   = payout;
+          payoutTimer = 150;
+        }
+        /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
+        if (coins <= 0) isGameOver = true;
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
            ギ・ヨ・ウが揃ったらリーチ発動。
@@ -311,6 +374,7 @@ function update() {
     const restartWait = (isJackpot||isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo) ? 130 : 55;
     if (endTimer > restartWait) canRestart = true;
     if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
+    if (payoutTimer > 0) payoutTimer--;
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks(); // リーチ大当たりは頻繁に派手な花火
     else if (isJackpot && endTimer % 85 === 40) launchFireworks();
     if (isJackpot)  updateGyozas();
@@ -1668,6 +1732,7 @@ function drawBottomBar() {
   ctx.strokeStyle='rgba(200,168,0,0.22)'; ctx.lineWidth=0.8;
   roundRect(36,barY+4,W-72,barH-8,4); ctx.stroke();
 
+  /* ── 結果表示（中央） ── */
   const sp=46, sx=W/2-sp*1.5;
   for (let i=0;i<4;i++){
     const w=wheels[i], cx=sx+i*sp, cy=barY+42;
@@ -1684,14 +1749,96 @@ function drawBottomBar() {
       ctx.fillText('・',cx,cy);
     }
   }
-  /* バージョン表示: 右下に小さく薄く */
-  ctx.font = '11px monospace';
-  ctx.textAlign = 'right';
+
+  /* ── ベット選択（左エリア） ── */
+  const betAreaX = 44, betAreaY = barY + 10;
+  if (!betLocked && (phase==='idle'||phase==='reach')) {
+    if (IS_TOUCH) {
+      /* スマホ: ◀ BET ▶ ボタン */
+      ctx.font = `bold 13px 'Hiragino Mincho ProN',serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      /* ◀ */
+      ctx.fillStyle = 'rgba(245,208,32,0.7)';
+      ctx.fillText('◀', betAreaX + 16, barY + 30);
+      /* ▶ */
+      ctx.fillText('▶', betAreaX + 96, barY + 30);
+      /* 現在ベット額 */
+      ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = Y;
+      ctx.fillText(`${bet}`, betAreaX + 56, barY + 30);
+      ctx.font = `11px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = 'rgba(245,208,32,0.6)';
+      ctx.fillText('BET', betAreaX + 56, barY + 48);
+    } else {
+      /* デスクトップ: キー一覧 */
+      ctx.font = `11px monospace`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      let bx = betAreaX;
+      BET_OPTIONS.forEach((amt, idx) => {
+        const canAfford = amt <= coins;
+        const isCurrent = amt === bet;
+        const label = `[${idx+1}]${amt}`;
+        if (isCurrent) {
+          /* 選択中: ハイライト背景 */
+          const tw = ctx.measureText(label).width;
+          roundRect(bx - 3, barY + 8, tw + 6, 20, 3);
+          ctx.fillStyle = 'rgba(245,208,32,0.2)';
+          ctx.fill();
+          ctx.fillStyle = Y;
+        } else {
+          ctx.fillStyle = canAfford ? 'rgba(245,208,32,0.5)' : 'rgba(245,208,32,0.18)';
+        }
+        ctx.fillText(label, bx, barY + 10);
+        bx += ctx.measureText(label).width + 8;
+      });
+      ctx.font = `10px monospace`;
+      ctx.fillStyle = 'rgba(245,208,32,0.35)';
+      ctx.fillText(`BET: ${bet}ギヨウザ`, betAreaX, barY + 34);
+    }
+  } else {
+    /* ベット確定後: 表示のみ */
+    ctx.font = `bold 13px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(245,208,32,0.55)';
+    ctx.fillText(`BET: ${bet}ギヨウザ`, betAreaX, barY + 42);
+  }
+
+  /* ── 所持コイン（右エリア） ── */
+  const coinX = W - 44;
+  const lowCoins = coins <= 10;
+  const coinBlink = lowCoins ? (Math.floor(Date.now()/400)%2===0 ? 1 : 0.4) : 1;
+  ctx.save();
+  ctx.globalAlpha = coinBlink;
+  ctx.font = `bold 14px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+  ctx.fillStyle = lowCoins ? '#ff6644' : 'rgba(245,208,32,0.7)';
+  ctx.fillText('所持', coinX, barY + 10);
+  ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = lowCoins ? '#ff8866' : Y;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${coins}`, coinX, barY + 42);
+  ctx.font = `bold 12px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = lowCoins ? '#ff6644' : 'rgba(245,208,32,0.6)';
   ctx.textBaseline = 'bottom';
+  ctx.fillText('ギヨウザ', coinX, barY + 68);
+  ctx.restore();
+
+  /* バージョン表示 */
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
   ctx.fillStyle = 'rgba(245,208,32,0.22)';
   ctx.fillText(VERSION, W - 38, H - 8);
 
   ctx.restore();
+}
+
+/* タッチ座標をキャンバス座標に変換 */
+function touchToCanvas(touch) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (touch.clientX - rect.left) * (W / rect.width),
+    y: (touch.clientY - rect.top)  * (H / rect.height),
+  };
 }
 
 /* ── エンド画面: オーバーレイのみ ── */
@@ -1977,7 +2124,43 @@ function drawEndScreen() {
     ctx.fillStyle='rgba(245,208,32,0.38)'; ctx.fillText('またチャレンジ！',W/2,cy+66);
   }
 
-  if (canRestart){
+  /* 獲得ポップアップ */
+  if (payoutTimer > 0 && payoutAmt > 0) {
+    const pt = payoutTimer / 150;
+    const popAlpha = pt < 0.2 ? pt / 0.2 : pt > 0.7 ? (pt - 0.7) / 0.3 * -1 + 1 : 1;
+    const popY = cy - 60 - (1 - pt) * 30;
+    ctx.save();
+    ctx.globalAlpha = popAlpha * 0.95;
+    ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = Y; ctx.shadowBlur = 30;
+    outText(`＋${payoutAmt}ギヨウザ！`, W/2, popY, Y, 'rgba(0,0,0,0.9)', 8);
+    ctx.restore();
+  }
+
+  /* ゲームオーバー */
+  if (isGameOver) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    /* 暗幕強化 */
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = `bold 62px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#ff4422'; ctx.shadowBlur = 40;
+    outText('ギヨウザがなくなりました', W/2, H/2 - 30, '#ff8866', 'rgba(0,0,0,0.92)', 9);
+    ctx.shadowBlur = 0;
+    if (canRestart) {
+      const blink = 0.45 + 0.45 * Math.sin(endTimer * 0.1);
+      ctx.globalAlpha = blink;
+      ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+      outText(
+        IS_TOUCH ? '[ タップ ] で100ギヨウザに戻す' : '[ スペース ] で100ギヨウザに戻す',
+        W/2, H/2 + 50, '#ffe0d0', 'rgba(0,0,0,0.85)', 5
+      );
+    }
+    ctx.restore();
+  } else if (canRestart) {
     const blink=0.45+0.45*Math.sin(endTimer*0.1);
     ctx.globalAlpha=blink;
     ctx.font=`18px 'Hiragino Mincho ProN',serif`;
@@ -1999,13 +2182,19 @@ function drawInstruction(){
 }
 
 /* ════════════════ Loop / Input ════════════════ */
-init();
+initGame();
 (function loop(){ update(); draw(); requestAnimationFrame(loop); })();
 
 function onShoot(){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
   if (curIdx>=4) return;
+  /* 最初の矢: ベット確定 & コイン消費 */
+  if (curIdx === 0) {
+    if (coins < bet) return; // 念のため
+    betLocked = true;
+    coins -= bet;
+  }
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
@@ -2028,7 +2217,18 @@ function cheatShoot(char) {
 document.addEventListener('keydown', e=>{
   if (e.code==='Space') {
     e.preventDefault();
-    if (phase==='done'&&canRestart) init(); else onShoot();
+    if (phase==='done'&&canRestart) {
+      if (isGameOver) initGame(); else init();
+    } else {
+      onShoot();
+    }
+    return;
+  }
+  /* 1〜5キーでベット選択 */
+  if (BET_KEY_MAP[e.code] !== undefined && !betLocked && (phase==='idle'||phase==='reach')) {
+    e.preventDefault();
+    const amt = BET_OPTIONS[BET_KEY_MAP[e.code]];
+    if (amt <= coins) bet = amt;
     return;
   }
   if (CHEAT_MAP[e.code] && phase==='idle' && curIdx<4) {
@@ -2039,15 +2239,33 @@ document.addEventListener('keydown', e=>{
 
 canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
-  if (phase==='done'&&canRestart) init(); else onShoot();
+  if (phase==='done'&&canRestart) {
+    if (isGameOver) initGame(); else init();
+  } else {
+    onShoot();
+  }
 });
 
 /* タッチ操作対応（ページ内どこでもタップで反応） */
 document.addEventListener('touchstart', e=>{
-  /* フルスクリーンボタンは除外 */
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
-  if (phase==='done'&&canRestart) init(); else onShoot();
+
+  /* スマホ: ボトムバーのベット◀▶ボタン判定 */
+  if (IS_TOUCH && !betLocked && (phase==='idle'||phase==='reach')) {
+    const pt = touchToCanvas(e.touches[0]);
+    const barY = H - 106;
+    if (pt.y > barY && pt.y < H - 26 && pt.x > 32 && pt.x < 180) {
+      if (pt.x < 80)  { changeBet(-1); return; }  // ◀
+      if (pt.x > 100) { changeBet(+1); return; }  // ▶
+    }
+  }
+
+  if (phase==='done'&&canRestart) {
+    if (isGameOver) initGame(); else init();
+  } else {
+    onShoot();
+  }
 }, { passive: false });
 
 /* ── キャンバスをビューポートに合わせてスケール ── */
