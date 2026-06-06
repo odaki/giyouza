@@ -853,7 +853,7 @@ function changeBet(dir) {
 function calcPayout() {
   if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot;
   if (isJackpot)      return bet * PAYOUT_RATE.jackpot;
-  if (isGizagiza || isUyouyo || isGiugiu || isGyogyo) return bet * PAYOUT_RATE.hitMed4;
+  if (isGizagiza || isUyouyo || isUzauza || isGiugiu || isGyogyo) return bet * PAYOUT_RATE.hitMed4;
   if (isGigigigi || isYoyoyoyo || isUuuu || isZazazaza) return bet * PAYOUT_RATE.hitMed3;
   return 0;
 }
