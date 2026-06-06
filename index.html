@@ -2691,38 +2691,48 @@ function drawPortraitBottomBar() {
 
 /* ── 縦画面専用: 弓の描画 ── */
 function drawBow() {
-  const bx = 38, by = WYS[curIdx];
+  /* 弦が左(射手側)、弓本体が右(的方向)に膨らむ正しい向き
+     弦の両端 = (bx, by±38)、弓の腹 = bx + bulge の位置 */
+  const bx = 30, by = WYS[curIdx];
+  const bulge = 28; // 的方向への膨らみ量
   ctx.save();
-  /* 弓本体(曲線) */
+
+  /* 弦 (射手側・直線) */
   ctx.beginPath();
-  ctx.moveTo(bx, by - 36);
-  ctx.quadraticCurveTo(bx - 18, by, bx, by + 36);
-  ctx.strokeStyle = '#92400e'; ctx.lineWidth = 3.5; ctx.lineCap = 'round'; ctx.stroke();
-  /* 上弦 */
-  const sx = bx - 2;
+  ctx.moveTo(bx, by - 38);
+  ctx.lineTo(bx, by + 38);
+  ctx.strokeStyle = 'rgba(200,168,0,0.88)'; ctx.lineWidth = 1.8; ctx.lineCap = 'round'; ctx.stroke();
+
+  /* 弓本体 (的方向=右に膨らむ ")" 形) */
   ctx.beginPath();
-  ctx.moveTo(bx, by - 36);
-  ctx.quadraticCurveTo(sx + 10, by, bx, by + 36);
-  ctx.strokeStyle = 'rgba(200,168,0,0.80)'; ctx.lineWidth = 1.6; ctx.stroke();
-  /* 矢 (弦に矢を番えた状態) */
+  ctx.moveTo(bx, by - 38);
+  ctx.quadraticCurveTo(bx + bulge, by, bx, by + 38);
+  ctx.strokeStyle = '#7a3a0a'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.stroke();
+  /* ハイライト */
+  ctx.beginPath();
+  ctx.moveTo(bx + 1, by - 34);
+  ctx.quadraticCurveTo(bx + bulge - 4, by, bx + 1, by + 34);
+  ctx.strokeStyle = 'rgba(180,100,30,0.45)'; ctx.lineWidth = 2; ctx.stroke();
+
+  /* 矢 (弦の中央から的方向へ番えた状態) */
   if (phase === 'idle' || phase === 'reach') {
     /* 矢柄 */
     ctx.beginPath();
-    ctx.moveTo(bx + 4, by);
-    ctx.lineTo(bx + 58, by);
-    ctx.strokeStyle = '#92400e'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.stroke();
-    /* 矢先 */
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + 62, by);
+    ctx.strokeStyle = '#a06020'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.stroke();
+    /* 矢先 (三角) */
     ctx.beginPath();
-    ctx.moveTo(bx + 58, by);
-    ctx.lineTo(bx + 48, by - 5);
-    ctx.lineTo(bx + 48, by + 5);
+    ctx.moveTo(bx + 62, by);
+    ctx.lineTo(bx + 51, by - 5);
+    ctx.lineTo(bx + 51, by + 5);
     ctx.closePath();
     ctx.fillStyle = '#1f2937'; ctx.fill();
-    /* 矢羽 */
+    /* 矢羽 (筈側=弦側) */
     ctx.strokeStyle = GN2; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(bx + 12, by); ctx.lineTo(bx + 4, by - 10);
-    ctx.moveTo(bx + 12, by); ctx.lineTo(bx + 4, by + 10);
+    ctx.moveTo(bx + 9, by); ctx.lineTo(bx, by - 9);
+    ctx.moveTo(bx + 9, by); ctx.lineTo(bx, by + 9);
     ctx.stroke();
   }
   ctx.restore();
