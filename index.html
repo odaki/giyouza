@@ -3283,18 +3283,27 @@ function drawStartup() {
   if (IS_PORTRAIT) {
     const cy = H / 2;
     /* タイトル（2行） */
-    ctx.font = `900 42px 'Hiragino Mincho ProN',serif`;
+    /* ルーレットの幅を計測し、ギヨウザが同じ幅になるフォントサイズを算出 */
+    /* ギヨウザ: ルーレット(42px)と同幅になるサイズで描画 */
+    const rouletteFs = 42;
+    const giyouzaCalcFs = 42;
+    ctx.font = `900 ${giyouzaCalcFs}px 'Hiragino Mincho ProN',serif`;
+    const wRoulette = ctx.measureText('ルーレット').width;
+    const wGiyouza  = ctx.measureText('ギヨウザ').width;
+    const giyouzaFs = Math.round(giyouzaCalcFs * (wRoulette / wGiyouza));
     ctx.fillStyle = Y;
     ctx.shadowColor = 'rgba(245,208,32,0.7)';
     ctx.shadowBlur = 18 + pulse * 10;
-    ctx.fillText('ギヨウザ', W / 2, cy - 84);
-    ctx.fillText('ルーレット', W / 2, cy - 36);
+    ctx.font = `900 ${giyouzaFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.fillText('ギヨウザ', W / 2, cy - 91);
+    ctx.font = `900 36px 'Hiragino Mincho ProN',serif`;
+    ctx.fillText('ルーレット', W / 2, cy - 29);
     ctx.shadowBlur = 0;
     /* サブタイトル（2行） */
     ctx.font = `13px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
-    ctx.fillText('崎陽軒シウマイ風パッケージを', W / 2, cy + 14);
-    ctx.fillText('モチーフにしたルーレットゲーム', W / 2, cy + 34);
+    ctx.fillText('崎陽軒ギヨウザの', W / 2, cy + 14);
+    ctx.fillText('パッケージをモチーフにしたルーレットゲーム', W / 2, cy + 34);
     /* スタートボタン */
     const bx = W/2 - 120, by = cy + 68, bw = 240, bh = 52;
     ctx.globalAlpha = 0.75 + 0.25 * pulse;
@@ -3311,12 +3320,12 @@ function drawStartup() {
     ctx.fillStyle = Y;
     ctx.shadowColor = 'rgba(245,208,32,0.7)';
     ctx.shadowBlur = 18 + pulse * 10;
-    ctx.fillText('ギヨウザルーレット', W / 2, H / 2 - 50);
+    ctx.fillText('ギヨウザ ルーレット', W / 2, H / 2 - 50);
     ctx.shadowBlur = 0;
     /* サブタイトル */
     ctx.font = `16px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
-    ctx.fillText('崎陽軒シウマイ風パッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
+    ctx.fillText('崎陽軒ギヨウザのパッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
     /* スタートボタン */
     const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
     ctx.globalAlpha = 0.75 + 0.25 * pulse;
