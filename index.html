@@ -207,8 +207,8 @@ const BTN_TOP   = 11 + BTN_M; // = 21
 const BTN_RIGHT = BTN_M;      // = 10 (旧32から変更)
 const BTN_GAP   = BTN_M;      // = 10 (旧8から変更)
 const BTN_X       = W - BTN_RIGHT - BTN_SIZE; // 右端を起点に縦並び
-const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE, h: BTN_SIZE };
-const MUTE_BTN    = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
+const MUTE_BTN    = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE, h: BTN_SIZE };
+const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
 const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE }; // 左上
 
 /* ベットボタン当たり判定（canvas座標）- barY = H-106, barH=80, 上下15px余白 */
@@ -757,7 +757,7 @@ function initGame() {
   lsLoad();      // 保存済みコイン・betを復元
   lsLoadAch();   // 実績をロード
   lsLoadStats(); // 統計カウンターをロード
-  if (!BET_OPTIONS.includes(bet)) bet = 10; // 未保存時のみデフォルト10
+  if (!BET_OPTIONS.includes(bet)) bet = 1; // 未保存時のみデフォルト1
   isGameOver = false;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -3266,7 +3266,7 @@ lsCheckSchema(); // スキーマ不一致なら全データクリア（lsLoad/ls
 lsLoad();        // bet もここで復元される
 lsLoadAch();
 lsLoadStats();
-if (!BET_OPTIONS.includes(bet)) bet = 10; // 未保存時のみデフォルト10
+if (!BET_OPTIONS.includes(bet)) bet = 1; // 未保存時のみデフォルト1
 isGameOver = false;
 phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
