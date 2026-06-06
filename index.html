@@ -17,13 +17,7 @@ html, body {
   font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
 }
 h1 {
-  font-size: clamp(1.1rem, 3.5vw, 2.8rem);
-  font-weight: 900;
-  letter-spacing: 0.25em;
-  color: #f5d020;
-  text-shadow: 2px 3px 6px rgba(0,0,0,0.6), 0 0 20px rgba(245,208,32,0.3);
-  margin-bottom: 6px;
-  white-space: nowrap;
+  display: none; /* スタートアップ画面はCanvasで描画するため常時非表示 */
 }
 canvas {
   display: block;
@@ -42,9 +36,7 @@ canvas {
   line-height: 0;
 }
 #fs-btn {
-  position: absolute; /* キャンバス内の右下に固定 */
-  bottom: 10px;
-  right: 10px;
+  position: absolute; /* 位置・サイズは fitCanvas() で JS から設定 */
   width: 36px;
   height: 36px;
   padding: 0;
@@ -79,7 +71,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.25';
+const VERSION = 'v1.40';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -135,25 +127,386 @@ let bestCoins; // ハイスコア
 
 /* ── 実績システム ── */
 const ACHIEVEMENTS = [
-  { id:'first_shot',    icon:'🎯', name:'はじめての一射',  desc:'矢を初めて放った'              },
-  { id:'first_jackpot', icon:'🎊', name:'初大当たり',       desc:'大当たりを初めて達成した'      },
-  { id:'first_medium',  icon:'⭐', name:'初中当たり',       desc:'中当たりを初めて達成した'      },
-  { id:'first_reach',   icon:'🎰', name:'リーチ経験者',     desc:'リーチを初めて体験した'        },
-  { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験', desc:'リーチ経由大当たりを達成した'  },
-  { id:'coins_200',     icon:'💰', name:'初めての倍増',     desc:'所持200ギヨウザを超えた'       },
-  { id:'coins_500',     icon:'🤑', name:'大富豪',           desc:'所持500ギヨウザを超えた'       },
-  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',       desc:'所持1000ギヨウザを超えた'      },
-  { id:'all_medium',    icon:'🏆', name:'全中当たり制覇',   desc:'全9種の中当たりを達成した'     },
+  /* 左列 */
+  { id:'first_shot',    icon:'🎯', name:'はじめての一射',    desc:'矢を初めて放った'                    },
+  { id:'first_jackpot', icon:'🎊', name:'初大当たり',         desc:'大当たりを初めて達成した'            },
+  { id:'first_medium',  icon:'⭐', name:'初中当たり',         desc:'中当たりを初めて達成した'            },
+  { id:'first_reach',   icon:'🎰', name:'リーチ経験者',       desc:'リーチを初めて体験した'              },
+  { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験',   desc:'リーチ経由大当たりを達成した'        },
+  { id:'coins_200',     icon:'💰', name:'初めての倍増',       desc:'所持200ギヨウザを超えた'             },
+  { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持500ギヨウザを超えた'             },
+  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持1000ギヨウザを超えた'            },
+  { id:'all_medium',    icon:'🏆', name:'全中当たり制覇',     desc:'全9種の中当たりを達成した'           },
+  /* 右列 */
+  { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'10回プレイした'                      },
+  { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'50回プレイした'                      },
+  { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計100本放った'                 },
+  { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット50でプレイした'                },
+  { id:'poor',          icon:'💸', name:'文無し',             desc:'所持コインが一桁になった'            },
+  { id:'comeback',      icon:'🔥', name:'不死鳥',             desc:'所持10以下から200以上に大逆転した'   },
+  { id:'jackpot_3',     icon:'🎆', name:'三冠王',             desc:'大当たりを累計3回達成した'           },
+  { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持2000ギヨウザを超えた'            },
+  { id:'big_bet_win',   icon:'🃏', name:'大博打',             desc:'ベット25以上で大当たりを達成した'    },
 ];
-const LS_ACH   = 'giyouza_ach';
-const LS_MED   = 'giyouza_med';
+const LS_ACH    = 'giyouza_ach';
+const LS_MED    = 'giyouza_med';
+const LS_STATS  = 'giyouza_stats';
+const LS_SCHEMA = 'giyouza_schema';
+/* スキーマハッシュ:
+   - フォーマットバージョン（保存構造を変えたら手動インクリメント）
+   - 実績IDリスト（実績追加/削除/ID変更で自動変化）
+   どちらか変わると旧データを全消去して初期状態に戻す */
+const SCHEMA_VER  = 1; // 保存フォーマット変更時にインクリメント
+const SCHEMA_HASH = `v${SCHEMA_VER}|${ACHIEVEMENTS.map(a => a.id).join(',')}`;
+
+function lsClearAll() {
+  [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS].forEach(k => {
+    try { localStorage.removeItem(k); } catch(e) {}
+  });
+}
+
+/* スキーマチェック: 不一致ならデータ全消去して新スキーマを保存。
+   true=データ有効, false=クリアして初期化済み */
+function lsCheckSchema() {
+  try {
+    const stored = localStorage.getItem(LS_SCHEMA);
+    if (stored === SCHEMA_HASH) return true;
+    lsClearAll();
+    localStorage.setItem(LS_SCHEMA, SCHEMA_HASH);
+    return false;
+  } catch(e) { return false; }
+}
 let unlockedAch = {}, medAchieved = {};
+/* 統計カウンター（永続保存） */
+let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
+let shotCount = 0;    // 矢を放った累計本数
+let jackpotCount = 0; // 大当たり累計回数
+let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
 /* 実績パネル・ボタンの当たり判定領域（canvas座標） */
 const ACH_PANEL  = { x:60,   y:30, w:W-120, h:H-60 };
 const ACH_CLOSE  = { x:60+W-120-50, y:40, w:40, h:40 };
-const ACH_TROPHY = { x:38,   y:H-106+6, w:30, h:30 };
+/* ── 右上ボタン群 共通レイアウト定数 ──
+   内枠内側上端: y=11、マージン: 10px → ボタン上端 y=21
+   右端マージン: 32px（ボトムバーと揃える）
+   ボタンサイズ: 36×36px、ボタン間隔: 8px
+   並び（右→左）: 全画面 / ミュート / トロフィー               */
+const BTN_SIZE  = 36;
+const BTN_M     = 10; // 統一マージン: 内枠上端(y=11)からの上マージン・右端マージン・ボタン間隔すべてこの値
+const BTN_TOP   = 11 + BTN_M; // = 21
+const BTN_RIGHT = BTN_M;      // = 10 (旧32から変更)
+const BTN_GAP   = BTN_M;      // = 10 (旧8から変更)
+const BTN_X       = W - BTN_RIGHT - BTN_SIZE; // 右端を起点に縦並び
+const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE, h: BTN_SIZE };
+const MUTE_BTN    = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
+const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE }; // 左上
+
+/* ベットボタン当たり判定（canvas座標）- barY = H-106 */
+const _BET_BAR_Y = H - 106;
+const BET_DEC_BTN = { x:76,  y:_BET_BAR_Y+8, w:46, h:64 }; // ◀
+const BET_INC_BTN = { x:170, y:_BET_BAR_Y+8, w:46, h:64 }; // ▶
+
+/* ════════════════ Audio System ════════════════ */
+let audioCtx = null;
+let bgmScheduler = null;
+let bgmStep = 0;
+let bgmNextTime = 0;
+let audioMuted = true; // デフォルトミュート
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+/* AudioContext を確実に running 状態にしてから callback を呼ぶ */
+function ensureAudioRunning(callback) {
+  const ctx = getAudioCtx();
+  if (ctx.state === 'running') {
+    callback();
+  } else {
+    ctx.resume().then(callback).catch(() => {});
+  }
+}
+
+/* 音程ヘルパー: note='C'~'B', octave=3~5 */
+function noteHz(note, octave) {
+  const semi = {'C':0,'D':2,'E':4,'F':5,'G':7,'A':9,'B':11}[note];
+  return 261.63 * Math.pow(2, (semi + (octave - 4) * 12) / 12);
+}
+
+/* 基本オシレーター再生 */
+function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startT);
+  /* ビブラート: LFO で周波数変調（薄くかけるため delay 後にフェードイン） */
+  if (vibrato) {
+    const lfo     = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(vibrato.rate  ?? 5.5, startT);
+    lfoGain.gain.setValueAtTime(0, startT);
+    lfoGain.gain.linearRampToValueAtTime(vibrato.depth ?? 5, startT + (vibrato.delay ?? 0.5));
+    lfo.start(startT);
+    lfo.stop(startT + dur + (decay ?? 0.08) + 0.1);
+  }
+  gain.gain.setValueAtTime(vol, startT);
+  if (slurTarget != null) {
+    gain.gain.exponentialRampToValueAtTime(Math.max(slurTarget, 0.001), startT + dur);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur + (decay ?? 0.02));
+    osc.start(startT);
+    osc.stop(startT + dur + (decay ?? 0.02) + 0.02);
+  } else {
+    gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur + (decay ?? 0.08));
+    osc.start(startT);
+    osc.stop(startT + dur + (decay ?? 0.08) + 0.02);
+  }
+}
+
+/* ノイズバースト（ハイハット・打撃音用） */
+function playNoise(ctx, startT, dur, vol, hpFreq) {
+  const len    = Math.ceil(ctx.sampleRate * (dur + 0.05));
+  const buf    = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data   = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  const src    = ctx.createBufferSource();
+  src.buffer   = buf;
+  const hp     = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = hpFreq ?? 4000;
+  const gain   = ctx.createGain();
+  gain.gain.setValueAtTime(vol, startT);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
+  src.connect(hp); hp.connect(gain); gain.connect(ctx.destination);
+  src.start(startT); src.stop(startT + dur + 0.05);
+}
+
+/* ── BGM: 中華風ペンタトニック・パチンコループ ── */
+/* ペンタトニック: C D E G A */
+const BGM_BPM   = 152;
+const BGM_BEAT  = 60 / BGM_BPM;
+/* 16ステップ（各0.5拍 = 16分音符） */
+/* [note, octave, vol] または null=休符 */
+const BGM_MEL = [
+  ['G',4,0.38], ['E',4,0.28], ['G',4,0.38], ['A',4,0.42],
+  ['G',4,0.35], ['E',4,0.28], ['D',4,0.28], ['C',4,0.32],
+  ['E',4,0.32], ['G',4,0.38], ['A',4,0.42], ['G',4,0.35],
+  ['E',4,0.30], ['D',4,0.28], ['C',5,0.42], null,
+];
+const BGM_BASS = [
+  ['C',3,0.28], null, ['G',3,0.22], null,
+  ['A',3,0.22], null, ['G',3,0.22], null,
+  ['C',3,0.28], null, ['E',3,0.22], null,
+  ['G',3,0.22], null, ['C',3,0.30], null,
+];
+/* ハイハット: 偶数ステップ=強, 奇数=弱 */
+const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
+                 0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
+/* バスドラム: ステップ0,4,8,12 */
+const BGM_KICK = new Set([0,4,8,12]);
+
+const SCHEDULE_AHEAD = 0.25; // 先読み秒数
+
+function scheduleBGM() {
+  if (!audioCtx || audioMuted) return;
+  const ctx = audioCtx;
+  /* bgmNextTime が過去になっていたら現在時刻にリセット。
+     過去への catch-up スケジューリングを防ぎ、再開時の早送り感をなくす。 */
+  if (bgmNextTime < ctx.currentTime) bgmNextTime = ctx.currentTime + 0.02;
+  while (bgmNextTime < ctx.currentTime + SCHEDULE_AHEAD) {
+    const s   = bgmStep % BGM_MEL.length;
+    const t   = bgmNextTime;
+    const dur = BGM_BEAT * 0.5; // 16分音符の長さ
+
+    /* メロディ */
+    const mel = BGM_MEL[s];
+    if (mel) playOsc(ctx, 'triangle', noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06);
+
+    /* ベース */
+    const bas = BGM_BASS[s];
+    if (bas) playOsc(ctx, 'sine', noteHz(bas[0], bas[1]), t, dur * 1.6, bas[2], 0.10);
+
+    /* ハイハット */
+    playNoise(ctx, t, 0.04, BGM_HAT[s], 8000);
+
+    /* バスドラム */
+    if (BGM_KICK.has(s)) {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(110, t);
+      osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+      gain.gain.setValueAtTime(0.45, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      osc.start(t); osc.stop(t + 0.20);
+    }
+
+    bgmNextTime += dur;
+    bgmStep++;
+  }
+}
+
+function startBGM() {
+  if (!audioCtx || audioMuted) return;
+  /* すでにスケジューラが動いていれば再起動しない（リプレイ時の途切れ防止） */
+  if (bgmScheduler) return;
+  bgmStep     = 0;
+  bgmNextTime = audioCtx.currentTime + 0.12; // setInterval初回発火(~80ms)より余裕を持たせる
+  bgmScheduler = setInterval(scheduleBGM, 80);
+}
+
+function stopBGM() {
+  if (bgmScheduler) { clearInterval(bgmScheduler); bgmScheduler = null; }
+}
+
+/* 最初のユーザー操作でAudioContextをresumeするだけ（BGM開始はgame flowで行う） */
+function _onFirstGesture() {
+  document.removeEventListener('keydown',    _onFirstGesture, true);
+  document.removeEventListener('mousedown',  _onFirstGesture, true);
+  document.removeEventListener('touchstart', _onFirstGesture, true);
+  if (audioCtx) audioCtx.resume().catch(() => {});
+}
+document.addEventListener('keydown',    _onFirstGesture, true);
+document.addEventListener('mousedown',  _onFirstGesture, true);
+document.addEventListener('touchstart', _onFirstGesture, true);
+
+function toggleMute() {
+  audioMuted = !audioMuted;
+  try { localStorage.setItem(LS_MUTE, audioMuted ? '1' : '0'); } catch(e) {}
+  if (audioMuted) {
+    stopBGM();
+  } else if (phase !== 'startup') {
+    /* startup フェーズ中はBGM開始しない（ジングル完了後に開始される） */
+    ensureAudioRunning(startBGM);
+  }
+}
+
+/* ── 効果音 ── */
+function playSE(name) {
+  if (audioMuted || !audioCtx || audioCtx.state !== 'running') return;
+  const ctx = audioCtx;
+  const t   = ctx.currentTime + 0.01;
+  switch (name) {
+    case 'shoot': {
+      /* シュッ + 弦の放つ音 */
+      playNoise(ctx, t, 0.06, 0.25, 3000);
+      playOsc(ctx, 'sawtooth', 600, t, 0.04, 0.12, 0.04);
+      playOsc(ctx, 'sawtooth', 400, t+0.03, 0.05, 0.10, 0.04);
+      break;
+    }
+    case 'lock': {
+      /* コツン */
+      playOsc(ctx, 'square', 320, t, 0.04, 0.22, 0.04);
+      playOsc(ctx, 'square', 200, t+0.025, 0.03, 0.15, 0.04);
+      break;
+    }
+    case 'bet': {
+      /* カチッ */
+      playNoise(ctx, t, 0.03, 0.18, 6000);
+      playOsc(ctx, 'square', 880, t, 0.02, 0.10, 0.02);
+      break;
+    }
+    case 'reach': {
+      /* ジャジャーン: 緊張感あるコード */
+      stopBGM(); // BGM一時停止してSEを際立たせる
+      const chord = [220, 277.18, 329.63, 415.30]; // Am7 風
+      chord.forEach((f, i) => {
+        playOsc(ctx, 'sawtooth', f, t + i*0.04, 1.2, 0.18, 0.6);
+      });
+      playNoise(ctx, t, 0.2, 0.3, 200);
+      /* 0.8秒後にBGM再開 */
+      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 900);
+      break;
+    }
+    case 'medium': {
+      /* 中当たり: 上昇フレーズ */
+      const mscale = [noteHz('C',5), noteHz('E',5), noteHz('G',5), noteHz('C',6)];
+      mscale.forEach((f, i) => playOsc(ctx, 'triangle', f, t + i*0.08, 0.25, 0.30, 0.12));
+      break;
+    }
+    case 'jackpot': {
+      /* 大当たりファンファーレ */
+      stopBGM();
+      const fanfare = [
+        [noteHz('C',5), 0.00, 0.15],
+        [noteHz('E',5), 0.12, 0.15],
+        [noteHz('G',5), 0.24, 0.15],
+        [noteHz('C',6), 0.36, 0.40],
+        [noteHz('G',5), 0.60, 0.12],
+        [noteHz('C',6), 0.72, 0.50],
+      ];
+      fanfare.forEach(([f, dt, d]) => playOsc(ctx, 'square', f, t+dt, d, 0.28, 0.08));
+      /* ベース */
+      [noteHz('C',3), noteHz('G',3)].forEach((f, i) =>
+        playOsc(ctx, 'sine', f, t + i*0.36, 0.6, 0.32, 0.2));
+      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 2000);
+      break;
+    }
+    case 'reach_jackpot': {
+      /* 超大当たり: より派手なファンファーレ */
+      stopBGM();
+      const big = [
+        [noteHz('C',5), 0.00, 0.12], [noteHz('E',5), 0.10, 0.12],
+        [noteHz('G',5), 0.20, 0.12], [noteHz('C',6), 0.30, 0.30],
+        [noteHz('E',6), 0.55, 0.12], [noteHz('G',6), 0.65, 0.12],
+        [noteHz('C',7), 0.75, 0.60],
+      ];
+      big.forEach(([f, dt, d]) => {
+        playOsc(ctx, 'square',    f,   t+dt, d, 0.24, 0.08);
+        playOsc(ctx, 'sawtooth',  f*2, t+dt, d, 0.10, 0.08);
+      });
+      /* 連続コイン音 */
+      for (let i = 0; i < 8; i++)
+        playOsc(ctx, 'sine', noteHz('C',6) * (1 + i*0.05), t + 0.9 + i*0.07, 0.08, 0.22, 0.05);
+      playNoise(ctx, t, 0.3, 0.35, 100);
+      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 2500);
+      break;
+    }
+    case 'miss': {
+      /* ズコー: 下降音 */
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, t);
+      osc.frequency.exponentialRampToValueAtTime(80, t + 0.45);
+      gain.gain.setValueAtTime(0.22, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.50);
+      osc.start(t); osc.stop(t + 0.52);
+      break;
+    }
+    case 'coin': {
+      /* コインじゃらじゃら */
+      for (let i = 0; i < 5; i++) {
+        const f = noteHz('C', 6) * (0.95 + Math.random() * 0.15);
+        playOsc(ctx, 'sine', f, t + i*0.055, 0.12, 0.20, 0.08);
+      }
+      break;
+    }
+    case 'gameover': {
+      /* ゲームオーバー: 悲しい下降 */
+      const goSeq = [
+        [noteHz('G',4), 0.00, 0.3],
+        [noteHz('E',4), 0.25, 0.3],
+        [noteHz('C',4), 0.50, 0.3],
+        [noteHz('A',3), 0.75, 0.6],
+      ];
+      goSeq.forEach(([f, dt, d]) => playOsc(ctx, 'triangle', f, t+dt, d, 0.28, 0.15));
+      break;
+    }
+    case 'ach': {
+      /* 実績解除: キラン */
+      const achSeq = [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)];
+      achSeq.forEach((f, i) => playOsc(ctx, 'sine', f, t + i*0.06, 0.15, 0.25, 0.10));
+      break;
+    }
+  }
+}
 
 /* ── 実績 localStorage ── */
 function lsLoadAch() {
@@ -176,16 +529,39 @@ function lsSaveAch() {
     localStorage.setItem(LS_MED, JSON.stringify(medAchieved));
   } catch(e) {}
 }
+function lsLoadStats() {
+  try {
+    const s = localStorage.getItem(LS_STATS);
+    if (!s) return;
+    const o = JSON.parse(s);
+    if (typeof o.playCount    === 'number') playCount    = o.playCount;
+    if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
+    if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
+    if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
+  } catch(e) {}
+}
+function lsSaveStats() {
+  try {
+    localStorage.setItem(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor }));
+  } catch(e) {}
+}
 function unlockAch(id) {
   if (unlockedAch[id]) return;
   unlockedAch[id] = true;
   achBannerQueue.push(id);
   lsSaveAch();
+  playSE('ach'); // 実績解除音
 }
 function checkCoinsAch() {
   if (coins >= 200)  unlockAch('coins_200');
   if (coins >= 500)  unlockAch('coins_500');
   if (coins >= 1000) unlockAch('coins_1000');
+  if (coins >= 2000) unlockAch('coins_2000');
+  if (coins <= 9 && coins >= 0) {
+    unlockAch('poor');
+    if (!wasPoor) { wasPoor = true; lsSaveStats(); }
+  }
+  if (wasPoor && coins >= 200) unlockAch('comeback');
 }
 const MED_IDS = ['gizagiza','uyouyo','uzauza','giugiu','gigigigi','yoyoyoyo','uuuu','zazazaza','gyogyo'];
 function checkMediumAch(type) {
@@ -200,6 +576,7 @@ function hitTest(rect, x, y) {
 /* ── localStorage ── */
 const LS_COINS = 'giyouza_coins';
 const LS_BEST  = 'giyouza_best';
+const LS_MUTE  = 'giyouza_mute';
 function lsSave() {
   try {
     localStorage.setItem(LS_COINS, coins);
@@ -213,8 +590,10 @@ function lsLoad() {
   try {
     const c = parseInt(localStorage.getItem(LS_COINS));
     const b = parseInt(localStorage.getItem(LS_BEST));
+    const m = localStorage.getItem(LS_MUTE);
     coins     = (c > 0) ? c : 100;
     bestCoins = (b > 0) ? b : coins;
+    if (m !== null) audioMuted = (m === '1');
   } catch(e) {
     coins = 100; bestCoins = 100;
   }
@@ -226,10 +605,10 @@ let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
 
 /* ── 吉祥雲配置 ── */
 const CLOUDS = [
-  { x:  42, y:  55, s:0.9,  a:0.75, r: 0.0  },
-  { x: 175, y:  28, s:0.6,  a:0.65, r: 0.25 },
+  { x: 140, y:  78, s:0.9,  a:0.75, r: 0.0  },
+  { x: 260, y:  48, s:0.6,  a:0.65, r: 0.25 },
   { x: 870, y:  40, s:0.75, a:0.70, r:-0.2  },
-  { x:1020, y:  65, s:0.8,  a:0.70, r: 0.15 },
+  { x: 940, y:  78, s:0.8,  a:0.70, r: 0.15 },
   { x:  30, y: 440, s:0.65, a:0.60, r:-0.3  },
   { x: 140, y: 510, s:0.55, a:0.55, r: 0.1  },
   { x: 950, y: 460, s:0.70, a:0.60, r: 0.2  },
@@ -238,14 +617,125 @@ const CLOUDS = [
   { x: 580, y: 530, s:0.48, a:0.45, r: 0.0  },
 ];
 
+/* ════════════════ Startup Jingle ════════════════ */
+/*
+  オリエンタルリフ (Oriental Riff / Asian Riff)
+  ─────────────────────────────────────────────
+  BPM=88, 4/4拍子, 16分音符グリッド
+  step:  0  1  2  3  |  4  5  |  6  7  |  8  9  | 10 11 | 12～
+  音符:  D  D  D  D  |  C  .  |  C  .  |  A  .  |  A  . |  C(長)
+        レレレレ       ドッ(休)   ドッ(休)   ラッ(休)  ラッ(休)  ドーーー
+  ─────────────────────────────────────────────
+  BGM と同じ setInterval + SCHEDULE_AHEAD 方式で完全グリッド再生
+*/
+let jingleScheduler = null;
+let jingleStep = 0;
+let jingleNextTime = 0;
+
+const JINGLE_BPM  = BGM_BPM;               // BGMと同じ152BPM
+const JINGLE_BEAT = 60 / JINGLE_BPM;       // ~0.395s
+const J16         = JINGLE_BEAT / 4;        // ~0.099s 16分音符
+
+/*
+  ジングルをステップ番号→ノート情報のフラット配列に展開済み。
+  各エントリ: { n, oct, vol, kick, dur(秒) } または null(休符)
+  レレレレ=8分(2step), ドッ(休)ラッ(休)=4分スロット(4step), ドーーー=1小節(16step)
+*/
+const _jingleDef = [
+  { at:0,  n:'D', o:5, vol:0.21, kick:0.24, dur: J16*1.95, slur:true },
+  { at:2,  n:'D', o:5, vol:0.21, kick:0.24, dur: J16*1.95, slur:true },
+  { at:4,  n:'D', o:5, vol:0.21, kick:0.24, dur: J16*1.95, slur:true },
+  { at:6,  n:'D', o:5, vol:0.23, kick:0.35, dur: J16*1.95, slur:true },
+  { at:8,  n:'C', o:5, vol:0.50, kick:0.00, dur: J16*3.5  },
+  { at:12, n:'C', o:5, vol:0.50, kick:0.00, dur: J16*3.5  },
+  { at:16, n:'A', o:4, vol:0.50, kick:0.00, dur: J16*3.5  },
+  { at:20, n:'A', o:4, vol:0.50, kick:0.00, dur: J16*3.5  },
+  { at:24, n:'C', o:5, vol:0.52, kick:0.35, dur: J16*15.0, long:true },
+];
+// ステップ番号→ノートのマップ
+const JINGLE_MAP = {};
+_jingleDef.forEach(e => { JINGLE_MAP[e.at] = e; });
+// 間1小節(step 40〜55)の4拍にカウントインハイハットを追加
+// step 40, 44, 48, 52 = 4分音符グリッド（4 step = 1拍）
+[40, 44, 48, 52].forEach(s => { JINGLE_MAP[s] = { countIn: true }; });
+// 合計: ドーーー終わり(40) + カウントイン(16) - 2(詰め) + 4(余白) = 58
+// 最終ハイハット(step52)の1.5拍後(step58)でBGMイン
+const JINGLE_TOTAL_STEPS = 40 + 17; // 最終ハイハット(52)から5step=1.25拍後にBGMイン
+
+function scheduleJingle(onEnd) {
+  if (!audioCtx || audioMuted) { stopJingle(); onEnd && onEnd(); return; }
+  const ctx = audioCtx;
+  if (jingleNextTime < ctx.currentTime) jingleNextTime = ctx.currentTime + 0.01;
+
+  while (jingleNextTime < ctx.currentTime + SCHEDULE_AHEAD) {
+    if (jingleStep >= JINGLE_TOTAL_STEPS) {
+      stopJingle(); onEnd && onEnd(); return;
+    }
+
+    const t     = jingleNextTime;
+    const entry = JINGLE_MAP[jingleStep] ?? null;
+
+    if (entry && entry.countIn) {
+      /* カウントインハイハット: 小さめノイズバースト */
+      playNoise(ctx, t, 0.035, 0.10, 9000);
+    } else if (entry) {
+      const { n, o: oct, vol, kick, dur, long: isLong, slur: isSlur } = entry;
+      /* 通常発音 */
+      /* isSlur: 2段階エンベロープ（vol→vol*0.35でゆっくり減衰→20msリリース）でスラー */
+      const melDur    = isSlur ? dur        : dur * 0.85;
+      const melDec    = isSlur ? 0.020      : 0.06;
+      const bassDur   = isSlur ? dur * 1.05 : dur * 1.6;
+      const basDec    = isSlur ? 0.025      : 0.10;
+      const slurTgt   = isSlur ? vol * 0.35 : null;
+      /* 長音ビブラート: 0.5s 後にフェードイン、速さ5.5Hz、深さ±6cent相当 */
+      const vib = isLong ? { rate: 5.5, depth: 6, delay: 0.5 } : null;
+      playOsc(ctx, 'triangle', noteHz(n, oct),     t, melDur,  vol,        melDec, slurTgt, vib);
+      playOsc(ctx, 'sine',     noteHz(n, oct - 1), t, bassDur, vol * 0.65, basDec, isSlur ? vol * 0.65 * 0.35 : null, vib);
+
+      /* ハイハット: BGM と同じ周波数帯 */
+      playNoise(ctx, t, 0.04, 0.10, 8000);
+
+      /* バスドラム: BGMと同じパラメータ */
+      if (kick > 0) {
+        const oo = ctx.createOscillator(), gg = ctx.createGain();
+        oo.connect(gg); gg.connect(ctx.destination);
+        oo.type = 'sine';
+        oo.frequency.setValueAtTime(110, t);
+        oo.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+        gg.gain.setValueAtTime(kick, t);
+        gg.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+        oo.start(t); oo.stop(t + 0.20);
+      }
+    }
+
+    jingleNextTime += J16;
+    jingleStep++;
+  }
+}
+
+function stopJingle() {
+  if (jingleScheduler) { clearInterval(jingleScheduler); jingleScheduler = null; }
+}
+
+function playStartJingle(onEnd) {
+  if (audioMuted || !audioCtx || audioCtx.state !== 'running') {
+    onEnd && onEnd(); return;
+  }
+  stopJingle();
+  jingleStep    = 0;
+  jingleNextTime = audioCtx.currentTime + 0.10;
+  jingleScheduler = setInterval(() => scheduleJingle(onEnd), 80);
+}
+
 /* ════════════════ Init ════════════════ */
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
-  lsLoad();    // 保存済みコインを復元
-  lsLoadAch(); // 実績をロード
+  lsLoad();      // 保存済みコインを復元
+  lsLoadAch();   // 実績をロード
+  lsLoadStats(); // 統計カウンターをロード
   bet        = 10;
   isGameOver = false;
-  init();
+  init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
 function gameOverReset() {
@@ -256,7 +746,14 @@ function gameOverReset() {
   init();
 }
 
-function init() {
+function init(fromStartup) {
+  if (fromStartup) {
+    /* スタート時: ジングル再生 → 完了後に BGM 開始 */
+    ensureAudioRunning(() => playStartJingle(() => { if (!audioMuted) startBGM(); }));
+  } else {
+    /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続） */
+    if (audioCtx && !bgmScheduler && !audioMuted) startBGM();
+  }
   wheels     = WXS.map(x => createWheel(x, WY));
   curIdx     = 0;
   phase      = 'idle';
@@ -307,13 +804,15 @@ function clampBet() {
 
 function changeBet(dir) {
   /* dir: +1=上げる, -1=下げる */
-  const idx = BET_OPTIONS.indexOf(bet);
+  const idx  = BET_OPTIONS.indexOf(bet);
+  const prev = bet;
   let next = idx + dir;
   /* 範囲クランプ */
   next = Math.max(0, Math.min(BET_OPTIONS.length - 1, next));
   /* 払えない選択肢はスキップ */
   while (next < BET_OPTIONS.length && BET_OPTIONS[next] > coins) next++;
   if (next < BET_OPTIONS.length) bet = BET_OPTIONS[next];
+  if (bet !== prev) playSE('bet'); // 変化したときだけ音
 }
 
 function calcPayout() {
@@ -357,6 +856,10 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
+  if (phase === 'startup') {
+    for (const w of wheels) w.rot += w.speed; // ホイールだけ背景で回す
+    return;
+  }
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
@@ -367,6 +870,7 @@ function update() {
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
+      playSE('lock'); // 着弾・ロック音
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
@@ -388,12 +892,20 @@ function update() {
             launchReachFireworks();
             initGyozas(100);
             unlockAch('reach_jackpot');
+            playSE('reach_jackpot');
           } else {
             launchFireworks();
             initGyozas(70);
+            playSE('jackpot');
           }
           unlockAch('first_jackpot');
+          jackpotCount++;
+          if (jackpotCount >= 3) unlockAch('jackpot_3');
+          if (bet >= 25) unlockAch('big_bet_win');
+          lsSaveStats();
         }
+        const isMedium = isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo;
+        if (isMedium) playSE('medium');
         if (isGizagiza) { launchGizaFireworks(); checkMediumAch('gizagiza'); unlockAch('first_medium'); }
         if (isUyouyo)   { initWorms();            checkMediumAch('uyouyo');   unlockAch('first_medium'); }
         if (isUzauza)   { initUzaTexts();         checkMediumAch('uzauza');   unlockAch('first_medium'); }
@@ -409,9 +921,12 @@ function update() {
           coins += payout;
           payoutAmt   = payout;
           payoutTimer = 150;
+          if (!isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
-        if (coins <= 0) isGameOver = true;
+        if (coins <= 0) { isGameOver = true; playSE('gameover'); }
+        /* ハズレ判定 */
+        if (!isJackpot && !isMedium) playSE('miss');
         lsSave();         // コイン状態を保存
         checkCoinsAch();  // コイン実績チェック
       } else if (curIdx === 3) {
@@ -426,6 +941,7 @@ function update() {
           isReach = true;
           reachTimer = 0;
           unlockAch('first_reach');
+          playSE('reach'); // リーチSE（BGM一時停止 + ジャジャーン）
           /* 第4ホイールの初期スピードを記録（減衰に使う） */
           wheels[3]._reachSpeed0 = wheels[3].speed;
         } else {
@@ -1681,9 +2197,102 @@ function draw() {
   if (phase==='reach')              drawReachText();
   if (phase==='idle'&&curIdx<4)    drawInstruction();
 
+  /* スタートアップ画面 */
+  drawStartup();
+
   /* 実績バナー・オーバーレイ（最前面） */
   drawAchBanner();
   drawAchOverlay();
+
+  /* ── 右上ボタン群（トロフィー・ミュート）常時最前面 ── */
+  /* トロフィーボタン */
+  ctx.save();
+  roundRect(ACH_TROPHY.x, ACH_TROPHY.y, ACH_TROPHY.w, ACH_TROPHY.h, 6);
+  ctx.fillStyle = showAchievements ? 'rgba(180,140,0,0.75)' : 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  /* トロフィーアイコン: 完全再設計 - カップ→ネック→台座の正しいシルエット */
+  ctx.translate(ACH_TROPHY.x + ACH_TROPHY.w / 2, ACH_TROPHY.y + ACH_TROPHY.h / 2);
+  ctx.strokeStyle = '#f5d020';
+  ctx.fillStyle   = '#f5d020';
+  ctx.lineWidth   = 1.4;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  /* カップ本体 + ネック + 台座（一体の塗りつぶしパス）
+     🏆絵文字シルエットをトレース:
+     上辺 ±5.5, カップ壁がy=-5付近で最大幅x≈8, y=-2付近でx≈6, ネックy=0.5でx≈2.5
+     台座 ±7, y=3〜7.5 */
+  ctx.beginPath();
+  ctx.moveTo(-5.5, -8.5);                                      // 上辺 左
+  ctx.lineTo( 5.5, -8.5);                                      // 上辺 右
+  ctx.bezierCurveTo( 8.25, -4.75,  7.25, -1.75,  2.5,  0.5); // 右壁（膨らみ→絞り込み）
+  ctx.lineTo( 2,  0.5);  ctx.lineTo( 2,  3);                  // ネック右
+  ctx.lineTo( 6,  3);    ctx.lineTo( 6,  7.5);                // 台座右
+  ctx.lineTo(-6,  7.5);  ctx.lineTo(-6,  3);                  // 台座底・左
+  ctx.lineTo(-2,  3);    ctx.lineTo(-2,  0.5);                // ネック左
+  ctx.lineTo(-2.5, 0.5);                                       // カップ底 左
+  ctx.bezierCurveTo(-7.25, -1.75, -8.25, -4.75, -5.5, -8.5); // 左壁（右の鏡）
+  ctx.closePath();
+  ctx.fill();
+
+  /* 持ち手：カップ中段外側に付くD字アーク
+     右壁: y=-5でx≈8, y=-2でx≈7 に合わせた外側カーブ */
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo( 7, -6.5);
+  ctx.quadraticCurveTo(12.5, -5,  6, -3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-7, -6.5);
+  ctx.quadraticCurveTo(-12.5, -5, -6, -3);
+  ctx.stroke();
+  ctx.restore();
+
+  /* ── ミュートボタン（右上・常時最前面） ── */
+  ctx.save();
+  /* 背景ボックス（全画面ボタンと同スタイル） */
+  roundRect(MUTE_BTN.x, MUTE_BTN.y, MUTE_BTN.w, MUTE_BTN.h, 6);
+  ctx.fillStyle = audioMuted ? 'rgba(100,20,20,0.75)' : 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  /* アイコンを中心座標基準で描く */
+  ctx.translate(MUTE_BTN.x + MUTE_BTN.w / 2, MUTE_BTN.y + MUTE_BTN.h / 2);
+  const ic = '#f5d020'; // 全画面ボタンと同じ金色
+  ctx.strokeStyle = ic; ctx.fillStyle = ic;
+  ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  /* スピーカー本体（台形＋四角） */
+  /* 四角いボディ */
+  ctx.fillRect(-9, -4, 5, 8);
+  /* 台形コーン */
+  ctx.beginPath();
+  ctx.moveTo(-4, -4);
+  ctx.lineTo( 3, -8);
+  ctx.lineTo( 3,  8);
+  ctx.lineTo(-4,  4);
+  ctx.closePath();
+  ctx.fill();
+  if (!audioMuted) {
+    /* 音波 小 */
+    ctx.beginPath();
+    ctx.arc(3, 0, 5, -Math.PI * 0.45, Math.PI * 0.45);
+    ctx.stroke();
+    /* 音波 大 */
+    ctx.beginPath();
+    ctx.arc(3, 0, 9, -Math.PI * 0.45, Math.PI * 0.45);
+    ctx.stroke();
+  } else {
+    /* ミュート: ✕ を赤で描く */
+    ctx.strokeStyle = '#e05050';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(5, -7); ctx.lineTo(11, -1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(11, -7); ctx.lineTo(5, -1); ctx.stroke();
+  }
+  ctx.restore();
 
   ctx.restore(); // end shake
 }
@@ -1864,29 +2473,41 @@ function drawBottomBar() {
   }
 
   /* ── ベット選択（左エリア） ── */
-  /* 🏆 トロフィーボタン */
-  ctx.font = '20px serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('🏆', ACH_TROPHY.x + ACH_TROPHY.w/2, ACH_TROPHY.y + ACH_TROPHY.h/2);
-
-  const betAreaX = 76, betAreaY = barY + 10; // トロフィー分だけ右へずらす
+  const betAreaX = 38, betAreaY = barY + 10; // トロフィーが右上に移動したので左端に寄せる
   if (!betLocked && (phase==='idle'||phase==='reach')) {
     if (IS_TOUCH) {
-      /* スマホ: ◀ BET ▶ ボタン */
-      ctx.font = `bold 13px 'Hiragino Mincho ProN',serif`;
+      /* スマホ: ◀ BET ▶ ボタン（大きめ・背景付き） */
+      const drawBetBtn = (rect, label, canChange) => {
+        /* 背景丸角ボタン */
+        roundRect(rect.x, rect.y, rect.w, rect.h, 8);
+        ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.12)';
+        ctx.fill();
+        ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.5)' : 'rgba(120,120,120,0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        /* ラベル */
+        ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.4)';
+        ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+      };
+      const canDec = BET_OPTIONS.indexOf(bet) > 0;
+      const canInc = (() => {
+        const idx = BET_OPTIONS.indexOf(bet);
+        return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx + 1] <= coins;
+      })();
+      drawBetBtn(BET_DEC_BTN, '◀', canDec);
+      drawBetBtn(BET_INC_BTN, '▶', canInc);
+      /* 中央: 現在ベット額 */
+      const midX = BET_DEC_BTN.x + BET_DEC_BTN.w + (BET_INC_BTN.x - BET_DEC_BTN.x - BET_DEC_BTN.w) / 2;
+      const midY = barY + 40;
+      ctx.font = `bold 18px 'Hiragino Mincho ProN',serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      /* ◀ */
-      ctx.fillStyle = 'rgba(245,208,32,0.7)';
-      ctx.fillText('◀', betAreaX + 16, barY + 30);
-      /* ▶ */
-      ctx.fillText('▶', betAreaX + 96, barY + 30);
-      /* 現在ベット額 */
-      ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
       ctx.fillStyle = Y;
-      ctx.fillText(`${bet}`, betAreaX + 56, barY + 30);
-      ctx.font = `11px 'Hiragino Mincho ProN',serif`;
-      ctx.fillStyle = 'rgba(245,208,32,0.6)';
-      ctx.fillText('BET', betAreaX + 56, barY + 48);
+      ctx.fillText(`${bet}`, midX, midY - 8);
+      ctx.font = `10px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = 'rgba(245,208,32,0.55)';
+      ctx.fillText('BET', midX, midY + 12);
     } else {
       /* デスクトップ: キー一覧 */
       ctx.font = `11px monospace`;
@@ -2323,7 +2944,7 @@ function drawAchBanner() {
   ctx.restore();
 }
 
-/* ── 実績一覧オーバーレイ ── */
+/* ── 実績一覧オーバーレイ（2カラム） ── */
 function drawAchOverlay() {
   if (!showAchievements) return;
   const { x:px, y:py, w:pw, h:ph } = ACH_PANEL;
@@ -2336,81 +2957,86 @@ function drawAchOverlay() {
   ctx.fillStyle = 'rgba(8,40,15,0.97)'; ctx.fill();
   ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
   /* タイトル */
-  ctx.font = `bold 26px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = Y;
-  ctx.fillText('🏆 実績一覧', px+pw/2, py+28);
+  ctx.fillText('🏆 実績一覧', px+pw/2, py+27);
   /* 区切り線 */
   ctx.beginPath();
-  ctx.moveTo(px+20, py+50); ctx.lineTo(px+pw-20, py+50);
+  ctx.moveTo(px+20, py+48); ctx.lineTo(px+pw-20, py+48);
   ctx.strokeStyle = 'rgba(245,208,32,0.3)'; ctx.lineWidth=1; ctx.stroke();
+  /* 2カラム設定 */
+  const COL = 2;
+  const ROWS = Math.ceil(ACHIEVEMENTS.length / COL); // 9
+  const listH  = ph - 60 - 24; // ヘッダー60px・フッター24px
+  const rowH   = Math.floor(listH / ROWS);
+  const colW   = Math.floor((pw - 16) / COL);
+  const listY  = py + 54;
+  /* 中央縦区切り線 */
+  ctx.beginPath();
+  ctx.moveTo(px + 8 + colW, listY); ctx.lineTo(px + 8 + colW, listY + rowH * ROWS);
+  ctx.strokeStyle = 'rgba(245,208,32,0.15)'; ctx.lineWidth=1; ctx.stroke();
   /* リスト */
-  const rowH = Math.floor((ph - 66) / ACHIEVEMENTS.length);
   ACHIEVEMENTS.forEach((ach, i) => {
+    const col     = Math.floor(i / ROWS);
+    const row     = i % ROWS;
+    const cx      = px + 8 + col * colW;     // 列左端
+    const ry      = listY + row * rowH;
+    const mid     = ry + rowH / 2;
     const unlocked = !!unlockedAch[ach.id];
-    const ry = py + 55 + i * rowH;
-    const mid = ry + rowH / 2;
-    if (i%2===0) {
-      roundRect(px+8, ry+2, pw-16, rowH-4, 4);
-      ctx.fillStyle='rgba(255,255,255,0.035)'; ctx.fill();
+    /* 交互背景 */
+    if (row % 2 === 0) {
+      roundRect(cx+2, ry+1, colW-4, rowH-2, 3);
+      ctx.fillStyle='rgba(255,255,255,0.03)'; ctx.fill();
     }
     ctx.globalAlpha = unlocked ? 1 : 0.38;
-    /* ステータスアイコン: 絵文字に頼らず canvas で描画 */
-    const iconX = px + 24, iconY = mid;
+    /* ステータス丸 */
+    const circX = cx + 18, circY = mid;
     ctx.beginPath();
-    ctx.arc(iconX, iconY, 10, 0, Math.PI * 2);
+    ctx.arc(circX, circY, 9, 0, Math.PI * 2);
     ctx.fillStyle   = unlocked ? '#2ecc40' : 'rgba(120,120,120,0.5)';
     ctx.fill();
     ctx.strokeStyle = unlocked ? '#27ae35' : 'rgba(160,160,160,0.4)';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.4;
     ctx.stroke();
     if (unlocked) {
-      /* チェックマーク */
       ctx.beginPath();
-      ctx.moveTo(iconX - 5, iconY);
-      ctx.lineTo(iconX - 1, iconY + 5);
-      ctx.lineTo(iconX + 6, iconY - 5);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth   = 2.2;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      ctx.moveTo(circX-5, circY);
+      ctx.lineTo(circX-1, circY+5);
+      ctx.lineTo(circX+6, circY-5);
+      ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.lineCap='round'; ctx.lineJoin='round';
       ctx.stroke();
     } else {
-      /* 鍵の縦棒 */
       ctx.beginPath();
-      ctx.moveTo(iconX, iconY - 3);
-      ctx.lineTo(iconX, iconY + 4);
-      ctx.strokeStyle = 'rgba(200,200,200,0.7)';
-      ctx.lineWidth = 2;
+      ctx.moveTo(circX, circY-3); ctx.lineTo(circX, circY+4);
+      ctx.strokeStyle='rgba(200,200,200,0.7)'; ctx.lineWidth=1.8;
       ctx.stroke();
     }
-    /* 実績アイコン絵文字: fillStyleを明示してから描画 */
-    ctx.fillStyle = '#ffffff'; // 明示的にセット（背景矩形のfillの影響を排除）
-    ctx.font = '18px serif';
+    /* 絵文字アイコン */
+    ctx.fillStyle='#ffffff';
+    ctx.font='16px serif';
     ctx.textAlign='left'; ctx.textBaseline='middle';
-    ctx.fillText(ach.icon, px+44, mid);
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    ctx.fillText(ach.icon, cx+32, mid);
+    /* 実績名 */
+    ctx.font=`bold 13px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = unlocked ? Y : 'rgba(245,208,32,0.5)';
-    ctx.fillText(ach.name, px+78, mid - 7);
-    ctx.font = `12px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)';
-    ctx.fillText(ach.desc, px+78, mid + 9);
+    ctx.fillText(ach.name, cx+56, mid - 7);
+    /* 説明文 */
+    ctx.font=`11px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.28)';
+    ctx.fillText(ach.desc, cx+56, mid + 8);
     ctx.globalAlpha = 1;
   });
   /* 解除数 */
   const cnt = ACHIEVEMENTS.filter(a => !!unlockedAch[a.id]).length;
-  ctx.font = `12px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `11px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign='right'; ctx.textBaseline='bottom';
   ctx.fillStyle='rgba(245,208,32,0.45)';
-  ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-14, py+ph-10);
-  /* 閉じるボタン */
-  const { x:cx, y:cy, w:cw, h:ch } = ACH_CLOSE;
-  roundRect(cx, cy, cw, ch, 6);
-  ctx.fillStyle='rgba(160,40,20,0.85)'; ctx.fill();
-  ctx.font='bold 18px sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillStyle='#fff';
-  ctx.fillText('✕', cx+cw/2, cy+ch/2);
+  ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-14, py+ph-8);
+  /* 閉じる案内 */
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,255,255,0.28)';
+  ctx.fillText('タップまたはキー押下で閉じる', px+pw/2, py+ph-8);
   ctx.restore();
 }
 
@@ -2424,8 +3050,71 @@ function drawInstruction(){
   ctx.restore();
 }
 
+/* ════════════════ Startup Screen ════════════════ */
+let startupTimer = 0;
+const STARTUP_BTN = { x: W/2 - 120, y: H/2 + 40, w: 240, h: 52 };
+
+function drawStartup() {
+  if (phase !== 'startup') return;
+  startupTimer++;
+  const pulse = 0.5 + 0.5 * Math.sin(startupTimer * 0.05);
+
+  /* 暗幕オーバーレイ */
+  ctx.save();
+  ctx.fillStyle = 'rgba(5,30,12,0.82)';
+  ctx.fillRect(0, 0, W, H);
+
+  /* タイトル */
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 54px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = Y;
+  ctx.shadowColor = 'rgba(245,208,32,0.7)';
+  ctx.shadowBlur = 18 + pulse * 10;
+  ctx.fillText('ギヨウザルーレット', W / 2, H / 2 - 50);
+  ctx.shadowBlur = 0;
+
+  /* サブタイトル */
+  ctx.font = `16px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = 'rgba(245,208,32,0.6)';
+  ctx.fillText('崎陽軒シウマイ風パッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
+
+  /* スタートボタン */
+  const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
+  ctx.globalAlpha = 0.75 + 0.25 * pulse;
+  roundRect(bx, by, bw, bh, 10);
+  ctx.fillStyle = 'rgba(180,130,0,0.9)';
+  ctx.fill();
+  ctx.strokeStyle = Y;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
+
+  /* キーヒント */
+  ctx.font = `12px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText('または スペースキー', W / 2, by + bh + 18);
+
+  ctx.restore();
+}
+
 /* ════════════════ Loop / Input ════════════════ */
-initGame();
+/* startup フェーズ: lsLoad/lsLoadAch だけ行い、画面は startup のままにする */
+lsCheckSchema(); // スキーマ不一致なら全データクリア（lsLoad/lsLoadAch の前に必ず実行）
+lsLoad();
+lsLoadAch();
+lsLoadStats();
+bet = 10;
+isGameOver = false;
+phase = 'startup';
+wheels = WXS.map(x => createWheel(x, WY)); // ホイールだけ初期化（背景描画用）
+particles = [];
+
 (function loop(){ update(); draw(); requestAnimationFrame(loop); })();
 
 function onShoot(){
@@ -2438,10 +3127,21 @@ function onShoot(){
     betLocked = true;
     coins -= bet;
     unlockAch('first_shot');
+    if (bet === 50) unlockAch('bet_max');
+    /* プレイ回数カウント */
+    playCount++;
+    if (playCount >= 10) unlockAch('play_10');
+    if (playCount >= 50) unlockAch('play_50');
+    lsSaveStats();
   }
+  /* 矢数カウント */
+  shotCount++;
+  if (shotCount >= 100) unlockAch('shot_100');
+  lsSaveStats();
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
+  playSE('shoot');
   arrowProgress=0;
   arrowSX=W/2; arrowSY=H+30;
   arrowTX=w.x; arrowTY=WY-WR-5;
@@ -2459,10 +3159,13 @@ function cheatShoot(char) {
 }
 
 document.addEventListener('keydown', e=>{
-  if (e.code==='Escape' && showAchievements) {
+  if (phase === 'startup') {
+    if (e.code === 'Space') { e.preventDefault(); initGame(); }
+    return;
+  }
+  if (showAchievements) {
     e.preventDefault(); showAchievements = false; return;
   }
-  if (showAchievements) return; // オーバーレイ中はゲーム入力ブロック
   if (e.code==='Space') {
     e.preventDefault();
     if (phase==='done'&&canRestart) {
@@ -2490,11 +3193,18 @@ canvas.addEventListener('mousedown', e=>{
   const rect = canvas.getBoundingClientRect();
   const cx = (e.clientX - rect.left) * (W / rect.width);
   const cy = (e.clientY - rect.top)  * (H / rect.height);
-  if (showAchievements) {
-    if (hitTest(ACH_CLOSE, cx, cy)) showAchievements = false;
+  if (phase === 'startup') {
+    if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+    if (hitTest(STARTUP_BTN, cx, cy)) { initGame(); return; }
     return;
   }
+  if (showAchievements) { showAchievements = false; return; }
   if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
+  if (hitTest(MUTE_BTN, cx, cy)) {
+    /* AudioContextがなければ初期化してからミュート切り替え */
+    if (!audioCtx) getAudioCtx();
+    toggleMute(); return;
+  }
   if (phase==='done'&&canRestart) {
     if (isGameOver) gameOverReset(); else init();
   } else {
@@ -2508,21 +3218,26 @@ document.addEventListener('touchstart', e=>{
   e.preventDefault();
   const pt = touchToCanvas(e.touches[0]);
 
-  /* 実績オーバーレイ中 */
-  if (showAchievements) {
-    if (hitTest(ACH_CLOSE, pt.x, pt.y)) showAchievements = false;
+  if (phase === 'startup') {
+    if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+    if (hitTest(STARTUP_BTN, pt.x, pt.y)) { initGame(); return; }
     return;
   }
+  /* 実績オーバーレイ中 */
+  if (showAchievements) { showAchievements = false; return; }
   /* トロフィーボタン */
   if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
 
+  /* ミュートボタン */
+  if (hitTest(MUTE_BTN, pt.x, pt.y)) {
+    if (!audioCtx) getAudioCtx();
+    toggleMute(); return;
+  }
+
   /* スマホ: ボトムバーのベット◀▶ボタン */
   if (!betLocked && (phase==='idle'||phase==='reach')) {
-    const barY = H - 106;
-    if (pt.y > barY && pt.y < H - 26 && pt.x > 76 && pt.x < 220) {
-      if (pt.x < 130) { changeBet(-1); return; }
-      if (pt.x > 150) { changeBet(+1); return; }
-    }
+    if (hitTest(BET_DEC_BTN, pt.x, pt.y)) { changeBet(-1); return; }
+    if (hitTest(BET_INC_BTN, pt.x, pt.y)) { changeBet(+1); return; }
   }
 
   if (phase==='done'&&canRestart) {
@@ -2547,6 +3262,17 @@ function fitCanvas() {
   const scale  = Math.min((vpW - MARGIN * 2) / W, (vpH - MARGIN * 2 - titleH) / H);
   canvas.style.width  = Math.floor(W * scale) + 'px';
   canvas.style.height = Math.floor(H * scale) + 'px';
+
+  /* 全画面ボタンの位置・サイズを canvas 座標に同期
+     display チェックなしで常に計算し、表示時に正しい位置になるようにする */
+  const fsEl = document.getElementById('fs-btn');
+  if (fsEl) {
+    fsEl.style.left   = Math.round(FS_BTN_RECT.x * scale) + 'px';
+    fsEl.style.top    = Math.round(FS_BTN_RECT.y * scale) + 'px';
+    fsEl.style.width  = Math.round(FS_BTN_RECT.w * scale) + 'px';
+    fsEl.style.height = Math.round(FS_BTN_RECT.h * scale) + 'px';
+    fsEl.style.right  = '';
+  }
 }
 window.addEventListener('resize', fitCanvas);
 window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 200));
@@ -2571,6 +3297,7 @@ const FS_SVG_EXIT  = `<svg viewBox="0 0 24 24" width="20" height="20" fill="#f5d
 if (FS_SUPPORTED) {
   fsBtn.style.display = 'flex';
   fsBtn.innerHTML = FS_SVG_ENTER;
+  fitCanvas(); // 表示ON後に位置を再計算
 
   function toggleFullscreen() {
     const el = document.documentElement;
