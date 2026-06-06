@@ -3418,6 +3418,12 @@ document.addEventListener('keydown', e=>{
     e.preventDefault();
     cheatShoot(CHEAT_MAP[e.code]);
   }
+  /* 隠しコマンド: Ctrl+C → localStorage全消去してリロード */
+  if (e.code === 'KeyC' && e.ctrlKey) {
+    e.preventDefault();
+    try { localStorage.clear(); } catch(err) {}
+    location.reload();
+  }
 });
 
 canvas.addEventListener('mousedown', e=>{
