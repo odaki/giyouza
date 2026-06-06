@@ -131,6 +131,7 @@ const PAYOUT_RATE = {
 let coins, bet, betLocked, isGameOver;
 let payoutAmt, payoutTimer; // 獲得ポップアップ用
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
+let isSlowSpin   = false;   // 低確率: 回転速度半減イベント
 let missPopupAmt = 0, missPopupTimer = 0; // ハズレポップアップ用
 let bestCoins; // ハイスコア
 
@@ -778,6 +779,7 @@ function init(fromStartup) {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続） */
     if (audioCtx && !bgmScheduler && !audioMuted) startBGM();
   }
+  isSlowSpin = Math.random() < 0.01; // 1%の確率で回転速度半減
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i]));
   curIdx     = 0;
   phase      = 'idle';
@@ -870,7 +872,7 @@ function createWheel(x, y) {
   return {
     x, y, segs,
     rot:       Math.random() * Math.PI * 2,
-    speed:     Math.random() * 0.08 + 0.18,
+    speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? 0.5 : 1),
     locked:    false,
     result:    null,
     resultPop: 0,
@@ -1275,6 +1277,10 @@ function updateGyozas() {
         /* 地面摩擦で回転を減衰 */
         g.rotSpd *= 0.78;
         if (Math.abs(g.rotSpd) < 0.003) g.rotSpd = 0;
+        /* 着地後: 近い方の壁へ僅かに流れる */
+        if (g.vy === 0) {
+          g.vx += (g.x < W / 2 ? -1 : 1) * 0.012;
+        }
       }
       /* 左右壁: 崩落開始前のみ有効 */
       if (endTimer < WALL_RELEASE) {
