@@ -3426,7 +3426,9 @@ canvas.addEventListener('mousedown', e=>{
   const cx = (e.clientX - rect.left) * (W / rect.width);
   const cy = (e.clientY - rect.top)  * (H / rect.height);
   if (phase === 'startup') {
+    if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+    if (showAchievements) { showAchievements = false; return; }
     if (hitTest(STARTUP_BTN, cx, cy)) { initGame(); return; }
     return;
   }
@@ -3458,7 +3460,9 @@ document.addEventListener('touchstart', e=>{
   const pt = touchToCanvas(e.touches[0]);
 
   if (phase === 'startup') {
+    if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+    if (showAchievements) { showAchievements = false; return; }
     if (hitTest(STARTUP_BTN, pt.x, pt.y)) { initGame(); return; }
     return;
   }
