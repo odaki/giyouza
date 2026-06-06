@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.22';
+const VERSION = 'v1.23';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -133,6 +133,64 @@ let coins, bet, betLocked, isGameOver;
 let payoutAmt, payoutTimer; // 獲得ポップアップ用
 let bestCoins; // ハイスコア
 
+/* ── 実績システム ── */
+const ACHIEVEMENTS = [
+  { id:'first_shot',    icon:'🎯', name:'はじめての一射',  desc:'矢を初めて放った'              },
+  { id:'first_jackpot', icon:'🎊', name:'初大当たり',       desc:'大当たりを初めて達成した'      },
+  { id:'first_medium',  icon:'⭐', name:'初中当たり',       desc:'中当たりを初めて達成した'      },
+  { id:'first_reach',   icon:'🎰', name:'リーチ経験者',     desc:'リーチを初めて体験した'        },
+  { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験', desc:'リーチ経由大当たりを達成した'  },
+  { id:'coins_200',     icon:'💰', name:'初めての倍増',     desc:'所持200ギヨウザを超えた'       },
+  { id:'coins_500',     icon:'🤑', name:'大富豪',           desc:'所持500ギヨウザを超えた'       },
+  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',       desc:'所持1000ギヨウザを超えた'      },
+  { id:'all_medium',    icon:'🏆', name:'全中当たり制覇',   desc:'全9種の中当たりを達成した'     },
+];
+const LS_ACH   = 'giyouza_ach';
+const LS_MED   = 'giyouza_med';
+let unlockedAch = {}, medAchieved = {};
+let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
+let showAchievements = false;
+/* 実績パネル・ボタンの当たり判定領域（canvas座標） */
+const ACH_PANEL  = { x:60,   y:30, w:W-120, h:H-60 };
+const ACH_CLOSE  = { x:60+W-120-50, y:40, w:40, h:40 };
+const ACH_TROPHY = { x:38,   y:H-106+6, w:30, h:30 };
+
+/* ── 実績 localStorage ── */
+function lsLoadAch() {
+  try {
+    const a = localStorage.getItem(LS_ACH);
+    const m = localStorage.getItem(LS_MED);
+    unlockedAch = a ? JSON.parse(a) : {};
+    medAchieved = m ? JSON.parse(m) : {};
+  } catch(e) { unlockedAch = {}; medAchieved = {}; }
+}
+function lsSaveAch() {
+  try {
+    localStorage.setItem(LS_ACH, JSON.stringify(unlockedAch));
+    localStorage.setItem(LS_MED, JSON.stringify(medAchieved));
+  } catch(e) {}
+}
+function unlockAch(id) {
+  if (unlockedAch[id]) return;
+  unlockedAch[id] = true;
+  achBannerQueue.push(id);
+  lsSaveAch();
+}
+function checkCoinsAch() {
+  if (coins >= 200)  unlockAch('coins_200');
+  if (coins >= 500)  unlockAch('coins_500');
+  if (coins >= 1000) unlockAch('coins_1000');
+}
+const MED_IDS = ['gizagiza','uyouyo','uzauza','giugiu','gigigigi','yoyoyoyo','uuuu','zazazaza','gyogyo'];
+function checkMediumAch(type) {
+  medAchieved[type] = true;
+  lsSaveAch();
+  if (MED_IDS.every(t => medAchieved[t])) unlockAch('all_medium');
+}
+function hitTest(rect, x, y) {
+  return x >= rect.x && x <= rect.x+rect.w && y >= rect.y && y <= rect.y+rect.h;
+}
+
 /* ── localStorage ── */
 const LS_COINS = 'giyouza_coins';
 const LS_BEST  = 'giyouza_best';
@@ -177,7 +235,8 @@ const CLOUDS = [
 /* ════════════════ Init ════════════════ */
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
-  lsLoad();           // 保存済みコインを復元
+  lsLoad();    // 保存済みコインを復元
+  lsLoadAch(); // 実績をロード
   bet        = 10;
   isGameOver = false;
   init();
@@ -318,25 +377,25 @@ function update() {
         isGyogyo   = !isJackpot && !isGizagiza && !isUyouyo && !isUzauza && !isGiugiu && !isGigigigi && !isYoyoyoyo && !isUuuu && !isZazazaza && res.every((r, i) => r === GYOGYO[i]);
         if (isJackpot) {
           if (isReach) {
-            /* リーチ経由大当たり: 白フラッシュ + 一斉花火10発 + ギヨウザ100個 */
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
             initGyozas(100);
+            unlockAch('reach_jackpot');
           } else {
-            /* 通常大当たり: ギヨウザ70個、追加スポーンなし */
             launchFireworks();
             initGyozas(70);
           }
+          unlockAch('first_jackpot');
         }
-        if (isGizagiza) launchGizaFireworks();
-        if (isUyouyo)   initWorms();
-        if (isUzauza)   initUzaTexts();
-        if (isGiugiu)   initGiugiu();
-        if (isYoyoyoyo) initYoyoyoyo();
-        if (isUuuu)     initUuuu();
-        if (isZazazaza) initZazazaza();
-        if (isGyogyo)   initGyogyo();
+        if (isGizagiza) { launchGizaFireworks(); checkMediumAch('gizagiza'); unlockAch('first_medium'); }
+        if (isUyouyo)   { initWorms();            checkMediumAch('uyouyo');   unlockAch('first_medium'); }
+        if (isUzauza)   { initUzaTexts();         checkMediumAch('uzauza');   unlockAch('first_medium'); }
+        if (isGiugiu)   { initGiugiu();           checkMediumAch('giugiu');   unlockAch('first_medium'); }
+        if (isYoyoyoyo) { initYoyoyoyo();         checkMediumAch('yoyoyoyo'); unlockAch('first_medium'); }
+        if (isUuuu)     { initUuuu();             checkMediumAch('uuuu');     unlockAch('first_medium'); }
+        if (isZazazaza) { initZazazaza();         checkMediumAch('zazazaza'); unlockAch('first_medium'); }
+        if (isGyogyo)   { initGyogyo();           checkMediumAch('gyogyo');   unlockAch('first_medium'); }
         /* 配当計算 */
         const payout = calcPayout();
         if (payout > 0) {
@@ -346,7 +405,8 @@ function update() {
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
         if (coins <= 0) isGameOver = true;
-        lsSave(); // コイン状態を保存
+        lsSave();         // コイン状態を保存
+        checkCoinsAch();  // コイン実績チェック
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
            ギ・ヨ・ウが揃ったらリーチ発動。
@@ -358,6 +418,7 @@ function update() {
           phase = 'reach';
           isReach = true;
           reachTimer = 0;
+          unlockAch('first_reach');
           /* 第4ホイールの初期スピードを記録（減衰に使う） */
           wheels[3]._reachSpeed0 = wheels[3].speed;
         } else {
@@ -408,7 +469,7 @@ function update() {
     if (endTimer > restartWait) canRestart = true;
     if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
     if (payoutTimer > 0) payoutTimer--;
-    if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks(); // リーチ大当たりは頻繁に派手な花火
+    if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (isJackpot && endTimer % 85 === 40) launchFireworks();
     if (isJackpot)  updateGyozas();
     if (isGizagiza && endTimer % 120 === 60) launchGizaFireworks();
@@ -419,6 +480,14 @@ function update() {
     if (isYoyoyoyo) updateYoyoyoyo();
     if (isUuuu)     updateUuuu();
     if (isZazazaza) updateZazazaza();
+  }
+  /* 実績バナータイマー（phaseに関係なく常時更新） */
+  if (achBannerTimer > 0) {
+    achBannerTimer--;
+    if (achBannerTimer === 0) achBannerCurrent = null;
+  } else if (achBannerQueue.length > 0) {
+    achBannerCurrent = achBannerQueue.shift();
+    achBannerTimer   = 200;
   }
 }
 
@@ -1605,6 +1674,10 @@ function draw() {
   if (phase==='reach')              drawReachText();
   if (phase==='idle'&&curIdx<4)    drawInstruction();
 
+  /* 実績バナー・オーバーレイ（最前面） */
+  drawAchBanner();
+  drawAchOverlay();
+
   ctx.restore(); // end shake
 }
 
@@ -1784,7 +1857,12 @@ function drawBottomBar() {
   }
 
   /* ── ベット選択（左エリア） ── */
-  const betAreaX = 44, betAreaY = barY + 10;
+  /* 🏆 トロフィーボタン */
+  ctx.font = '20px serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('🏆', ACH_TROPHY.x + ACH_TROPHY.w/2, ACH_TROPHY.y + ACH_TROPHY.h/2);
+
+  const betAreaX = 76, betAreaY = barY + 10; // トロフィー分だけ右へずらす
   if (!betLocked && (phase==='idle'||phase==='reach')) {
     if (IS_TOUCH) {
       /* スマホ: ◀ BET ▶ ボタン */
@@ -2212,6 +2290,93 @@ function drawEndScreen() {
   ctx.restore();
 }
 
+/* ── 実績バナー（右下にフェードイン/アウト） ── */
+function drawAchBanner() {
+  if (!achBannerCurrent || achBannerTimer <= 0) return;
+  const ach = ACHIEVEMENTS.find(a => a.id === achBannerCurrent);
+  if (!ach) return;
+  const t = achBannerTimer / 200; // 1→0
+  const alpha = t < 0.12 ? t/0.12 : t > 0.85 ? (1-t)/0.15 : 1;
+  const bw = 340, bh = 58, bx = W - bw - 22, by = H - 106 - bh - 12;
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.96;
+  roundRect(bx, by, bw, bh, 8);
+  ctx.fillStyle = 'rgba(12,50,18,0.95)';
+  ctx.fill();
+  ctx.strokeStyle = Y; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.font = '22px serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(ach.icon, bx+10, by+bh/2);
+  ctx.font = `bold 11px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = 'rgba(245,208,32,0.7)';
+  ctx.fillText('実績解除！', bx+42, by+16);
+  ctx.font = `bold 16px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText(ach.name, bx+42, by+36);
+  ctx.restore();
+}
+
+/* ── 実績一覧オーバーレイ ── */
+function drawAchOverlay() {
+  if (!showAchievements) return;
+  const { x:px, y:py, w:pw, h:ph } = ACH_PANEL;
+  ctx.save();
+  /* 暗幕 */
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, W, H);
+  /* パネル */
+  roundRect(px, py, pw, ph, 12);
+  ctx.fillStyle = 'rgba(8,40,15,0.97)'; ctx.fill();
+  ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
+  /* タイトル */
+  ctx.font = `bold 26px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = Y;
+  ctx.fillText('🏆 実績一覧', px+pw/2, py+28);
+  /* 区切り線 */
+  ctx.beginPath();
+  ctx.moveTo(px+20, py+50); ctx.lineTo(px+pw-20, py+50);
+  ctx.strokeStyle = 'rgba(245,208,32,0.3)'; ctx.lineWidth=1; ctx.stroke();
+  /* リスト */
+  const rowH = Math.floor((ph - 66) / ACHIEVEMENTS.length);
+  ACHIEVEMENTS.forEach((ach, i) => {
+    const unlocked = !!unlockedAch[ach.id];
+    const ry = py + 55 + i * rowH;
+    const mid = ry + rowH / 2;
+    if (i%2===0) {
+      roundRect(px+8, ry+2, pw-16, rowH-4, 4);
+      ctx.fillStyle='rgba(255,255,255,0.035)'; ctx.fill();
+    }
+    ctx.globalAlpha = unlocked ? 1 : 0.38;
+    ctx.font = '18px serif';
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(unlocked ? '✅' : '🔒', px+16, mid);
+    ctx.fillText(ach.icon, px+48, mid);
+    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = unlocked ? Y : 'rgba(245,208,32,0.5)';
+    ctx.fillText(ach.name, px+82, mid - 7);
+    ctx.font = `12px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)';
+    ctx.fillText(ach.desc, px+82, mid + 9);
+    ctx.globalAlpha = 1;
+  });
+  /* 解除数 */
+  const cnt = Object.values(unlockedAch).filter(Boolean).length;
+  ctx.font = `12px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign='right'; ctx.textBaseline='bottom';
+  ctx.fillStyle='rgba(245,208,32,0.45)';
+  ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-14, py+ph-10);
+  /* 閉じるボタン */
+  const { x:cx, y:cy, w:cw, h:ch } = ACH_CLOSE;
+  roundRect(cx, cy, cw, ch, 6);
+  ctx.fillStyle='rgba(160,40,20,0.85)'; ctx.fill();
+  ctx.font='bold 18px sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#fff';
+  ctx.fillText('✕', cx+cw/2, cy+ch/2);
+  ctx.restore();
+}
+
 function drawInstruction(){
   const blink=0.45+0.45*Math.sin(Date.now()/550);
   const msg = IS_TOUCH ? '[ タップ ] で矢を放つ！' : '[ スペースキー ] で矢を放つ！';
@@ -2230,11 +2395,12 @@ function onShoot(){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
   if (curIdx>=4) return;
-  /* 最初の矢: ベット確定 & コイン消費 */
+  /* 最初の矢: ベット確定 & コイン消費 & 実績 */
   if (curIdx === 0) {
     if (coins < bet) return; // 念のため
     betLocked = true;
     coins -= bet;
+    unlockAch('first_shot');
   }
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
@@ -2256,6 +2422,10 @@ function cheatShoot(char) {
 }
 
 document.addEventListener('keydown', e=>{
+  if (e.code==='Escape' && showAchievements) {
+    e.preventDefault(); showAchievements = false; return;
+  }
+  if (showAchievements) return; // オーバーレイ中はゲーム入力ブロック
   if (e.code==='Space') {
     e.preventDefault();
     if (phase==='done'&&canRestart) {
@@ -2280,6 +2450,14 @@ document.addEventListener('keydown', e=>{
 
 canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.clientX - rect.left) * (W / rect.width);
+  const cy = (e.clientY - rect.top)  * (H / rect.height);
+  if (showAchievements) {
+    if (hitTest(ACH_CLOSE, cx, cy)) showAchievements = false;
+    return;
+  }
+  if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (phase==='done'&&canRestart) {
     if (isGameOver) gameOverReset(); else init();
   } else {
@@ -2291,14 +2469,22 @@ canvas.addEventListener('mousedown', e=>{
 document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
+  const pt = touchToCanvas(e.touches[0]);
 
-  /* スマホ: ボトムバーのベット◀▶ボタン判定 */
-  if (IS_TOUCH && !betLocked && (phase==='idle'||phase==='reach')) {
-    const pt = touchToCanvas(e.touches[0]);
+  /* 実績オーバーレイ中 */
+  if (showAchievements) {
+    if (hitTest(ACH_CLOSE, pt.x, pt.y)) showAchievements = false;
+    return;
+  }
+  /* トロフィーボタン */
+  if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
+
+  /* スマホ: ボトムバーのベット◀▶ボタン */
+  if (!betLocked && (phase==='idle'||phase==='reach')) {
     const barY = H - 106;
-    if (pt.y > barY && pt.y < H - 26 && pt.x > 32 && pt.x < 180) {
-      if (pt.x < 80)  { changeBet(-1); return; }  // ◀
-      if (pt.x > 100) { changeBet(+1); return; }  // ▶
+    if (pt.y > barY && pt.y < H - 26 && pt.x > 76 && pt.x < 220) {
+      if (pt.x < 130) { changeBet(-1); return; }
+      if (pt.x > 150) { changeBet(+1); return; }
     }
   }
 
