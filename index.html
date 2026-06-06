@@ -79,7 +79,7 @@ const W = 1060, H = 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.23';
+const VERSION = 'v1.24';
 
 /* タッチデバイス判定 */
 const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -160,7 +160,13 @@ function lsLoadAch() {
   try {
     const a = localStorage.getItem(LS_ACH);
     const m = localStorage.getItem(LS_MED);
-    unlockedAch = a ? JSON.parse(a) : {};
+    const raw = a ? JSON.parse(a) : {};
+    /* 既知のIDだけを受け入れ（古いセッションの汚染キーを除去） */
+    const knownIds = new Set(ACHIEVEMENTS.map(a => a.id));
+    unlockedAch = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (knownIds.has(k) && v === true) unlockedAch[k] = true;
+    }
     medAchieved = m ? JSON.parse(m) : {};
   } catch(e) { unlockedAch = {}; medAchieved = {}; }
 }
@@ -392,6 +398,7 @@ function update() {
         if (isUyouyo)   { initWorms();            checkMediumAch('uyouyo');   unlockAch('first_medium'); }
         if (isUzauza)   { initUzaTexts();         checkMediumAch('uzauza');   unlockAch('first_medium'); }
         if (isGiugiu)   { initGiugiu();           checkMediumAch('giugiu');   unlockAch('first_medium'); }
+        if (isGigigigi) {                          checkMediumAch('gigigigi'); unlockAch('first_medium'); }
         if (isYoyoyoyo) { initYoyoyoyo();         checkMediumAch('yoyoyoyo'); unlockAch('first_medium'); }
         if (isUuuu)     { initUuuu();             checkMediumAch('uuuu');     unlockAch('first_medium'); }
         if (isZazazaza) { initZazazaza();         checkMediumAch('zazazaza'); unlockAch('first_medium'); }
@@ -2348,20 +2355,48 @@ function drawAchOverlay() {
       ctx.fillStyle='rgba(255,255,255,0.035)'; ctx.fill();
     }
     ctx.globalAlpha = unlocked ? 1 : 0.38;
+    /* ステータスアイコン: 絵文字に頼らず canvas で描画 */
+    const iconX = px + 24, iconY = mid;
+    ctx.beginPath();
+    ctx.arc(iconX, iconY, 10, 0, Math.PI * 2);
+    ctx.fillStyle   = unlocked ? '#2ecc40' : 'rgba(120,120,120,0.5)';
+    ctx.fill();
+    ctx.strokeStyle = unlocked ? '#27ae35' : 'rgba(160,160,160,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (unlocked) {
+      /* チェックマーク */
+      ctx.beginPath();
+      ctx.moveTo(iconX - 5, iconY);
+      ctx.lineTo(iconX - 1, iconY + 5);
+      ctx.lineTo(iconX + 6, iconY - 5);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth   = 2.2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    } else {
+      /* 鍵の縦棒 */
+      ctx.beginPath();
+      ctx.moveTo(iconX, iconY - 3);
+      ctx.lineTo(iconX, iconY + 4);
+      ctx.strokeStyle = 'rgba(200,200,200,0.7)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     ctx.font = '18px serif';
     ctx.textAlign='left'; ctx.textBaseline='middle';
-    ctx.fillText(unlocked ? '✅' : '🔒', px+16, mid);
-    ctx.fillText(ach.icon, px+48, mid);
+    ctx.fillText(ach.icon, px+44, mid);
     ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = unlocked ? Y : 'rgba(245,208,32,0.5)';
-    ctx.fillText(ach.name, px+82, mid - 7);
+    ctx.fillText(ach.name, px+78, mid - 7);
     ctx.font = `12px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.3)';
-    ctx.fillText(ach.desc, px+82, mid + 9);
+    ctx.fillText(ach.desc, px+78, mid + 9);
     ctx.globalAlpha = 1;
   });
   /* 解除数 */
-  const cnt = Object.values(unlockedAch).filter(Boolean).length;
+  const cnt = ACHIEVEMENTS.filter(a => !!unlockedAch[a.id]).length;
   ctx.font = `12px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign='right'; ctx.textBaseline='bottom';
   ctx.fillStyle='rgba(245,208,32,0.45)';
