@@ -779,7 +779,7 @@ function init(fromStartup) {
   phase      = 'idle';
   arrowProgress = 0;
   if (IS_PORTRAIT) {
-    arrowSX = -40;  arrowSY = WYS[0]; arrowTX = WXS[0] - WR - 5; arrowTY = WYS[0];
+    arrowSX = -40;  arrowSY = WYS[0]; arrowTX = WXS[0] + WR + 5; arrowTY = WYS[0];
   } else {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
@@ -872,7 +872,7 @@ function createWheel(x, y) {
 }
 
 function hitResult(w) {
-  const pointer = -Math.PI / 2;
+  const pointer = IS_PORTRAIT ? 0 : -Math.PI / 2; // 縦画面は右(0)、PC は上(-π/2)
   let local = ((pointer - w.rot) % (Math.PI*2) + Math.PI*2) % (Math.PI*2);
   for (const s of w.segs) {
     if (local >= s.start && local < s.start + s.span) return s.char;
@@ -2380,16 +2380,16 @@ function drawWheel(i) {
   ctx.fillStyle=hg; ctx.fill();
 
   if(active||w.locked){ctx.shadowColor=w.locked?'#ff4422':Y;ctx.shadowBlur=18;}
-  /* ポインタ三角形: PC=▼(上から), 縦=▶(左から) */
+  /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き) */
   if (IS_PORTRAIT) {
-    ctx.beginPath(); ctx.moveTo(-WR-5,0); ctx.lineTo(-WR-26,-12); ctx.lineTo(-WR-26,12); ctx.closePath();
+    ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
   } else {
     ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
   }
   ctx.fillStyle=w.locked?'#cc2200':(active?Y:YD); ctx.fill(); ctx.shadowBlur=0;
 
   if (w.hasArrow) {
-    if (IS_PORTRAIT) drawArrow(-WR-5, 0, true, Math.PI/2);
+    if (IS_PORTRAIT) drawArrow(WR+5, 0, true, Math.PI/2); // 右端・矢柄が右に伸びる(貫通表現)
     else             drawArrow(0, -WR-5, true, 0);
   }
 
@@ -2838,7 +2838,7 @@ function drawReachText() {
   ctx.textAlign = 'center';
   ctx.shadowColor = Y; ctx.shadowBlur = 15;
   ctx.fillStyle = Y;
-  if (IS_PORTRAIT) ctx.fillText('◀', WXS[3] - WR - 52, WYS[3]);
+  if (IS_PORTRAIT) ctx.fillText('◀', WXS[3] + WR + 52, WYS[3]); // 右側に◀
   else             ctx.fillText('▼', WXS[3], WYS[3] - WR - 52);
 
   ctx.restore();
@@ -3334,7 +3334,7 @@ function onShoot(){
   playSE('shoot');
   arrowProgress=0;
   if (IS_PORTRAIT) {
-    arrowSX=-40; arrowSY=w.y; arrowTX=w.x-WR-5; arrowTY=w.y;
+    arrowSX=-40; arrowSY=w.y; arrowTX=w.x+WR+5; arrowTY=w.y;
   } else {
     arrowSX=W/2; arrowSY=H+30; arrowTX=w.x; arrowTY=w.y-WR-5;
   }
@@ -3346,8 +3346,8 @@ function cheatShoot(char) {
   const w = wheels[curIdx];
   const s = w.segs.find(seg => seg.char === char);
   if (!s) return;
-  /* ポインタ(-π/2)にセグメント中央が来るよう回転を強制 */
-  w.rot = -Math.PI/2 - s.start - s.span/2;
+  /* ポインタ位置にセグメント中央が来るよう回転を強制 */
+  w.rot = (IS_PORTRAIT ? 0 : -Math.PI/2) - s.start - s.span/2;
   onShoot();
 }
 
