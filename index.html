@@ -69,7 +69,9 @@ const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 /* タッチデバイス判定 & 向き */
 const IS_TOUCH    = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-const IS_PORTRAIT = IS_TOUCH && window.innerWidth < window.innerHeight;
+/* ?portrait URL パラメータでデスクトップからでも縦画面テスト可能 */
+const _forcePortrait = new URLSearchParams(location.search).has('portrait');
+const IS_PORTRAIT = _forcePortrait || (IS_TOUCH && window.innerWidth < window.innerHeight);
 
 const W = IS_PORTRAIT ? 420  : 1060;
 const H = IS_PORTRAIT ? 820  : 560;
