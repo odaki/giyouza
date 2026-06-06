@@ -3372,6 +3372,13 @@ canvas.addEventListener('mousedown', e=>{
     if (!audioCtx) getAudioCtx();
     toggleMute(); return;
   }
+  /* ベット◀▶ボタン（縦画面 or PCボトムバー） */
+  if (!betLocked && (phase==='idle'||phase==='reach')) {
+    const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
+    const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
+    if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
+    if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
+  }
   if (phase==='done'&&canRestart) {
     if (isGameOver) gameOverReset(); else init();
   } else {
