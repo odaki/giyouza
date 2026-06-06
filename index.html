@@ -101,16 +101,17 @@ const UUUU     = ['ウ', 'ウ', 'ウ', 'ウ'];  // 中当たり⑦
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 中当たり⑧
 const GYOGYO   = ['ギ', 'ヨ', 'ギ', 'ヨ'];  // 中当たり⑨
 
-const WR  = IS_PORTRAIT ? 58  : 95;
+const WR  = IS_PORTRAIT ? 66  : 95;
 const WXS = IS_PORTRAIT ? [185, 185, 185, 185] : [230, 430, 630, 830];
-/* 縦画面: 全要素間隔を G=34px 均等に
-   コインヘッダ下端(y=99) +34 → W1中心(191) +116 +34 → W2(341) → W3(491) → W4(641) +116 +34 → BETバー上端(733) */
-const WYS = IS_PORTRAIT ? [191, 341, 491, 641] : [255, 255, 255, 255];
+/* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
+   コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
+const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [255, 255, 255, 255];
 const WY  = WYS[0]; // 後方互換 (PC=255, portrait=169)
 
 /* ── game state ── */
 let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
+let shootGuard = 0; // init直後の誤射防止フレームカウンタ
 let isJackpot, isGizagiza, isUyouyo, isUzauza, isGiugiu;
 let isGigigigi, isYoyoyoyo, isUuuu, isZazazaza, isGyogyo;
 let endTimer, canRestart;
@@ -119,8 +120,7 @@ let isReach, reachTimer, isReachJackpot;
 let reachFlash = 0; // 白フラッシュ用タイマー
 
 /* ── ギヨウザコイン ── */
-const BET_OPTIONS = [1, 5, 10, 25, 50];
-const BET_KEY_MAP = { 'Digit1':0, 'Digit2':1, 'Digit3':2, 'Digit4':3, 'Digit5':4 };
+const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
 /* 配当倍率（没収型: 掛け金は戻らない） */
 const PAYOUT_RATE = {
   reachJackpot: 50,
@@ -143,19 +143,19 @@ const ACHIEVEMENTS = [
   { id:'first_reach',   icon:'🎰', name:'リーチ経験者',       desc:'リーチを初めて体験した'              },
   { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験',   desc:'リーチ経由大当たりを達成した'        },
   { id:'coins_200',     icon:'💰', name:'初めての倍増',       desc:'所持200ギヨウザを超えた'             },
-  { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持500ギヨウザを超えた'             },
-  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持1000ギヨウザを超えた'            },
+  { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
+  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
   { id:'all_medium',    icon:'🏆', name:'全中当たり制覇',     desc:'全9種の中当たりを達成した'           },
   /* 右列 */
-  { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'10回プレイした'                      },
-  { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'50回プレイした'                      },
-  { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計100本放った'                 },
-  { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット50でプレイした'                },
+  { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'100回プレイした'                     },
+  { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'500回プレイした'                     },
+  { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計1000本放った'                },
+  { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット100でプレイした'               },
   { id:'poor',          icon:'💸', name:'文無し',             desc:'所持コインが一桁になった'            },
   { id:'comeback',      icon:'🔥', name:'不死鳥',             desc:'所持10以下から200以上に大逆転した'   },
   { id:'jackpot_3',     icon:'🎆', name:'三冠王',             desc:'大当たりを累計3回達成した'           },
-  { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持2000ギヨウザを超えた'            },
-  { id:'big_bet_win',   icon:'🃏', name:'大博打',             desc:'ベット25以上で大当たりを達成した'    },
+  { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持10000ギヨウザを超えた'           },
+  { id:'big_bet_win',   icon:'🃏', name:'大博打',             desc:'ベット1000以上で大当たりを達成した'  },
 ];
 const LS_ACH    = 'giyouza_ach';
 const LS_MED    = 'giyouza_med';
@@ -211,14 +211,14 @@ const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE
 const MUTE_BTN    = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
 const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE }; // 左上
 
-/* ベットボタン当たり判定（canvas座標）- barY = H-106 */
+/* ベットボタン当たり判定（canvas座標）- barY = H-106, barH=80, 上下15px余白 */
 const _BET_BAR_Y = H - 106;
-const BET_DEC_BTN = { x:76,  y:_BET_BAR_Y+8, w:46, h:64 }; // ◀
-const BET_INC_BTN = { x:170, y:_BET_BAR_Y+8, w:46, h:64 }; // ▶
+const BET_DEC_BTN = { x:150, y:_BET_BAR_Y+15, w:120, h:50 }; // ◀ (barX=135+15)
+const BET_INC_BTN = { x:790, y:_BET_BAR_Y+15, w:120, h:50 }; // ▶ (barX+barW-15-120=790)
 
-/* 縦画面専用 BET ボタン (barY=733, ボタン中央揃えy=748) */
-const P_BET_DEC_BTN = IS_PORTRAIT ? { x:20,  y:748, w:84, h:36 } : null;
-const P_BET_INC_BTN = IS_PORTRAIT ? { x:316, y:748, w:84, h:36 } : null;
+/* 縦画面専用 BET ボタン (barY=732, ボタン中央揃えy=747) */
+const P_BET_DEC_BTN = IS_PORTRAIT ? { x:27,  y:747, w:84, h:36 } : null;
+const P_BET_INC_BTN = IS_PORTRAIT ? { x:309, y:747, w:84, h:36 } : null;
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
@@ -567,9 +567,9 @@ function unlockAch(id) {
 }
 function checkCoinsAch() {
   if (coins >= 200)  unlockAch('coins_200');
-  if (coins >= 500)  unlockAch('coins_500');
-  if (coins >= 1000) unlockAch('coins_1000');
-  if (coins >= 2000) unlockAch('coins_2000');
+  if (coins >= 1000)  unlockAch('coins_500');
+  if (coins >= 5000)  unlockAch('coins_1000');
+  if (coins >= 10000) unlockAch('coins_2000');
   if (coins <= 9 && coins >= 0) {
     unlockAch('poor');
     if (!wasPoor) { wasPoor = true; lsSaveStats(); }
@@ -590,9 +590,11 @@ function hitTest(rect, x, y) {
 const LS_COINS = 'giyouza_coins';
 const LS_BEST  = 'giyouza_best';
 const LS_MUTE  = 'giyouza_mute';
+const LS_BET   = 'giyouza_bet';
 function lsSave() {
   try {
     localStorage.setItem(LS_COINS, coins);
+    localStorage.setItem(LS_BET, bet);
     if (coins > bestCoins) {
       bestCoins = coins;
       localStorage.setItem(LS_BEST, bestCoins);
@@ -604,9 +606,11 @@ function lsLoad() {
     const c = parseInt(localStorage.getItem(LS_COINS));
     const b = parseInt(localStorage.getItem(LS_BEST));
     const m = localStorage.getItem(LS_MUTE);
+    const bv = parseInt(localStorage.getItem(LS_BET));
     coins     = (c > 0) ? c : 100;
     bestCoins = (b > 0) ? b : coins;
     if (m !== null) audioMuted = (m === '1');
+    if (BET_OPTIONS.includes(bv)) bet = bv;
   } catch(e) {
     coins = 100; bestCoins = 100;
   }
@@ -622,8 +626,8 @@ const CLOUDS = IS_PORTRAIT ? [
   { x: 355, y:  55, s:0.60, a:0.60, r:-0.15 },
   { x:  28, y: 290, s:0.55, a:0.52, r:-0.20 },
   { x: 390, y: 280, s:0.58, a:0.52, r: 0.15 },
-  { x:  40, y: 760, s:0.55, a:0.50, r:-0.10 },
-  { x: 370, y: 755, s:0.52, a:0.50, r: 0.10 },
+  { x:  40, y: 700, s:0.55, a:0.50, r:-0.10 },
+  { x: 370, y: 700, s:0.52, a:0.50, r: 0.10 },
 ] : [
   { x: 140, y:  78, s:0.9,  a:0.75, r: 0.0  },
   { x: 260, y:  48, s:0.6,  a:0.65, r: 0.25 },
@@ -750,10 +754,10 @@ function playStartJingle(onEnd) {
 /* ════════════════ Init ════════════════ */
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
-  lsLoad();      // 保存済みコインを復元
+  lsLoad();      // 保存済みコイン・betを復元
   lsLoadAch();   // 実績をロード
   lsLoadStats(); // 統計カウンターをロード
-  bet        = 10;
+  if (!BET_OPTIONS.includes(bet)) bet = 10; // 未保存時のみデフォルト10
   isGameOver = false;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -801,6 +805,7 @@ function init(fromStartup) {
   reachFlash    = 0;
   canRestart  = false;
   betLocked   = false;
+  shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
   payoutAmt      = 0;
   payoutTimer    = 0;
   isMissResult   = false;
@@ -828,6 +833,8 @@ function clampBet() {
   if (bet > coins) bet = BET_OPTIONS[0]; // 1ギヨウザ以上あれば必ず賭けられる
 }
 
+function fmt(n) { return n.toLocaleString('ja-JP'); }
+
 function changeBet(dir) {
   /* dir: +1=上げる, -1=下げる */
   const idx  = BET_OPTIONS.indexOf(bet);
@@ -838,7 +845,7 @@ function changeBet(dir) {
   /* 払えない選択肢はスキップ */
   while (next < BET_OPTIONS.length && BET_OPTIONS[next] > coins) next++;
   if (next < BET_OPTIONS.length) bet = BET_OPTIONS[next];
-  if (bet !== prev) playSE('bet'); // 変化したときだけ音
+  if (bet !== prev) { playSE('bet'); lsSave(); } // 変化したときだけ音・保存
 }
 
 function calcPayout() {
@@ -882,6 +889,7 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
+  if (shootGuard > 0) shootGuard--;
   if (phase === 'startup') {
     for (const w of wheels) w.rot += w.speed; // ホイールだけ背景で回す
     return;
@@ -927,7 +935,7 @@ function update() {
           unlockAch('first_jackpot');
           jackpotCount++;
           if (jackpotCount >= 3) unlockAch('jackpot_3');
-          if (bet >= 25) unlockAch('big_bet_win');
+          if (bet >= 1000) unlockAch('big_bet_win');
           lsSaveStats();
         }
         const isMedium = isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo;
@@ -1614,8 +1622,8 @@ function initYoyoyoyo() {
       x:      (i + 0.5) * (W / count) + (Math.random()-0.5)*18,
       phase:  Math.random() * Math.PI * 2,
       freq:   0.055 + Math.random()*0.04,
-      amp:    55 + Math.random()*90,
-      topY:   25 + Math.random()*40,
+      amp:    H * 0.30 + Math.random() * H * 0.25,
+      topY:   10 + Math.random()*20,
       r:      16 + Math.random()*12,
       colorL: `hsl(${hue},75%,60%)`,
       colorD: `hsl(${hue},75%,35%)`,
@@ -2245,7 +2253,6 @@ function draw() {
   /* ハズレポップアップ: 暗幕なし・endTimer制限なし */
   if (phase==='done'&&isMissResult) drawMissPopup();
   if (phase==='reach')              drawReachText();
-  if (phase==='idle'&&curIdx<4&&!IS_PORTRAIT) drawInstruction(); // 縦画面は底部バー内に表示
 
   /* スタートアップ画面 */
   drawStartup();
@@ -2388,11 +2395,6 @@ function drawWheel(i) {
   }
   ctx.fillStyle=w.locked?'#cc2200':(active?Y:YD); ctx.fill(); ctx.shadowBlur=0;
 
-  if (w.hasArrow) {
-    if (IS_PORTRAIT) drawArrow(WR+5, 0, true, Math.PI/2); // 右端・矢柄が右に伸びる(貫通表現)
-    else             drawArrow(0, -WR-5, true, 0);
-  }
-
   if (w.result) {
     const pop=Math.max(0.01,easeOutBack(Math.min(1,w.resultPop)));
     const hitJ=w.result===TARGET[i];
@@ -2507,7 +2509,6 @@ function drawArrow3D() {
 
 /* ── 上部コイン表示（常時・大きく） ── */
 function drawCoinHeader() {
-  if (phase === 'startup') return;
   const cx   = W / 2;
   const lowCoins = coins <= 10;
   const blink    = lowCoins ? (Math.floor(Date.now() / 380) % 2 === 0 ? 1 : 0.35) : 1;
@@ -2518,7 +2519,7 @@ function drawCoinHeader() {
   ctx.globalAlpha = blink;
 
   /* 背景パネル */
-  const pw = 260, ph = 78, px = cx - pw / 2, py = BTN_TOP;
+  const pw = 308, ph = 78, px = cx - pw / 2, py = BTN_TOP;
   roundRect(px, py, pw, ph, 10);
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
   ctx.fill();
@@ -2526,127 +2527,96 @@ function drawCoinHeader() {
   ctx.lineWidth = 1.2;
   ctx.stroke();
 
-  /* ラベル「所持ギヨウザ」 */
+  /* ラベル「所持ギヨウザ」- 左上（BESTスコアの対角） */
   ctx.globalAlpha = blink * 0.7;
   ctx.font = `11px 'Hiragino Mincho ProN',serif`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillStyle = mainColor;
-  ctx.fillText('所持ギヨウザ', cx, py + 9);
+  ctx.fillText('所持ギヨウザ', px + 8, py + 6);
 
   /* コイン数（大） */
   ctx.globalAlpha = blink;
-  ctx.font = `bold 46px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 60px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.shadowColor = glowColor; ctx.shadowBlur = lowCoins ? 22 : 14;
   ctx.fillStyle = mainColor;
-  ctx.fillText(`${coins}`, cx, py + 49);
+  ctx.fillText(fmt(coins), cx, py + ph / 2 - 1);
   ctx.shadowBlur = 0;
 
-  /* ベストスコア（小・右寄せ） */
+  /* ベストスコア（小・右下） */
   if (bestCoins > coins) {
     ctx.globalAlpha = blink * 0.45;
     ctx.font = `10px monospace`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
     ctx.fillStyle = Y;
-    ctx.fillText(`BEST ${bestCoins}`, px + pw - 8, py + ph - 6);
+    ctx.fillText(`BEST ${fmt(bestCoins)}`, px + pw - 8, py + ph - 6);
   }
 
   ctx.restore();
 }
 
 function drawBottomBar() {
-  const barY=H-106, barH=80;
+  const barY=H-106, barH=80, barX=135, barW=790;
   ctx.save();
-  roundRect(32,barY,W-64,barH,6);
+  roundRect(barX,barY,barW,barH,6);
   ctx.fillStyle='rgba(8,40,15,0.75)'; ctx.fill();
   ctx.strokeStyle=YD; ctx.lineWidth=1.5; ctx.stroke();
   ctx.strokeStyle='rgba(200,168,0,0.22)'; ctx.lineWidth=0.8;
-  roundRect(36,barY+4,W-72,barH-8,4); ctx.stroke();
+  roundRect(barX+4,barY+4,barW-8,barH-8,4); ctx.stroke();
 
-  /* ── ベット選択（左エリア） ── */
-  const betAreaX = 38, betAreaY = barY + 10; // トロフィーが右上に移動したので左端に寄せる
-  if (!betLocked && (phase==='idle'||phase==='reach')) {
-    if (IS_TOUCH) {
-      /* スマホ: ◀ BET ▶ ボタン（大きめ・背景付き） */
-      const drawBetBtn = (rect, label, canChange) => {
-        /* 背景丸角ボタン */
-        roundRect(rect.x, rect.y, rect.w, rect.h, 8);
-        ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.12)';
-        ctx.fill();
-        ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.5)' : 'rgba(120,120,120,0.3)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        /* ラベル */
-        ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.4)';
-        ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
-      };
-      const canDec = BET_OPTIONS.indexOf(bet) > 0;
-      const canInc = (() => {
-        const idx = BET_OPTIONS.indexOf(bet);
-        return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx + 1] <= coins;
-      })();
-      drawBetBtn(BET_DEC_BTN, '◀', canDec);
-      drawBetBtn(BET_INC_BTN, '▶', canInc);
-      /* 中央: 現在ベット額 */
-      const midX = BET_DEC_BTN.x + BET_DEC_BTN.w + (BET_INC_BTN.x - BET_DEC_BTN.x - BET_DEC_BTN.w) / 2;
-      const midY = barY + 40;
-      ctx.font = `bold 18px 'Hiragino Mincho ProN',serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = Y;
-      ctx.fillText(`${bet}`, midX, midY - 8);
-      ctx.font = `10px 'Hiragino Mincho ProN',serif`;
-      ctx.fillStyle = 'rgba(245,208,32,0.55)';
-      ctx.fillText('BET', midX, midY + 12);
-    } else {
-      /* デスクトップ: キー一覧 */
-      ctx.font = `11px monospace`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      let bx = betAreaX;
-      BET_OPTIONS.forEach((amt, idx) => {
-        const canAfford = amt <= coins;
-        const isCurrent = amt === bet;
-        const label = `[${idx+1}]${amt}`;
-        if (isCurrent) {
-          /* 選択中: ハイライト背景 */
-          const tw = ctx.measureText(label).width;
-          roundRect(bx - 3, barY + 8, tw + 6, 20, 3);
-          ctx.fillStyle = 'rgba(245,208,32,0.2)';
-          ctx.fill();
-          ctx.fillStyle = Y;
-        } else {
-          ctx.fillStyle = canAfford ? 'rgba(245,208,32,0.5)' : 'rgba(245,208,32,0.18)';
-        }
-        ctx.fillText(label, bx, barY + 10);
-        bx += ctx.measureText(label).width + 8;
-      });
-      ctx.font = `10px monospace`;
-      ctx.fillStyle = 'rgba(245,208,32,0.35)';
-      ctx.fillText(`BET: ${bet}ギヨウザ`, betAreaX, barY + 34);
-    }
-  } else {
-    /* ベット確定後: 表示のみ */
-    ctx.font = `bold 13px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(245,208,32,0.55)';
-    ctx.fillText(`BET: ${bet}ギヨウザ`, betAreaX, barY + 42);
-  }
+  /* ── ベット ◀ BET [数字] ▶ （縦画面版と同仕様） ── */
+  const btnH = 50, btnY = barY + (barH - btnH) / 2;
+  const cx = W / 2, cy = btnY + btnH / 2;
+
+  const drawBetBtn = (rect, label, canChange) => {
+    roundRect(rect.x, rect.y, rect.w, rect.h, 8);
+    ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
+    ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
+    ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.font = `bold 26px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  };
+
+  const canDec = !betLocked && (phase==='idle'||phase==='reach') && BET_OPTIONS.indexOf(bet) > 0;
+  const canInc = !betLocked && (phase==='idle'||phase==='reach') && (() => {
+    const idx = BET_OPTIONS.indexOf(bet);
+    return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx+1] <= coins;
+  })();
+  drawBetBtn(BET_DEC_BTN, '◀', canDec);
+  drawBetBtn(BET_INC_BTN, '▶', canInc);
+
+  /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
+  ctx.textBaseline = 'middle';
+  const gap = 10;
+  ctx.font = `bold 28px 'Hiragino Mincho ProN',serif`;
+  const wBet = ctx.measureText('BET').width;
+  ctx.font = `bold 46px 'Hiragino Mincho ProN',serif`;
+  const wNum = ctx.measureText(fmt(bet)).width;
+  const totalW = wBet + gap + wNum;
+  const startX = cx - totalW / 2;
+  ctx.fillStyle = Y;
+  ctx.textAlign = 'left';
+  ctx.font = `bold 28px 'Hiragino Mincho ProN',serif`;
+  ctx.fillText('BET', startX, cy);
+  ctx.font = `bold 46px 'Hiragino Mincho ProN',serif`;
+  ctx.fillText(fmt(bet), startX + wBet + gap, cy);
 
   /* バージョン表示 */
   ctx.font = '11px monospace';
   ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
   ctx.fillStyle = 'rgba(245,208,32,0.22)';
-  ctx.fillText(VERSION, W - 38, H - 8);
+  ctx.fillText(VERSION, 135 + 790 - 8, H - 8); // barX+barW-8=917
 
   ctx.restore();
 }
 
 /* ── 縦画面専用: 底部 BET コントロール ──
-   等間隔 G=34px: W4下端(699) + 34 = barY=733
+   等間隔 G=21px: W4下端(711) + 21 = barY=732
    barH=66 → 下端(799) = H-21 (コインヘッダと対称マージン)    ── */
 function drawPortraitBottomBar() {
-  const barX = 12, barY = 733, barW = W - 24, barH = 66;
+  const barX = 12, barY = 732, barW = W - 24, barH = 66;
   ctx.save();
 
   /* パネル背景 ── コインヘッダと同スタイル */
@@ -2654,11 +2624,11 @@ function drawPortraitBottomBar() {
   ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.28)'; ctx.lineWidth = 1.2; ctx.stroke();
 
-  /* ボタン: パネル内で垂直中央揃え */
+  /* ボタン: 上下左右とも 15px マージン */
   const btnH = 36;
-  const btnY = barY + (barH - btnH) / 2; // = 733 + 15 = 748
-  const decRect = P_BET_DEC_BTN;  // { x:20, y:748, w:84, h:36 }
-  const incRect = P_BET_INC_BTN;  // { x:316, y:748, w:84, h:36 }
+  const btnY = barY + (barH - btnH) / 2; // = 747
+  const decRect = P_BET_DEC_BTN;  // { x:27, y:747, w:84, h:36 }
+  const incRect = P_BET_INC_BTN;  // { x:309, y:747, w:84, h:36 }
 
   const drawBetBtn = (rect, label, canChange) => {
     roundRect(rect.x, rect.y, rect.w, rect.h, 8);
@@ -2671,32 +2641,31 @@ function drawPortraitBottomBar() {
     ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
   };
 
-  if (!betLocked && (phase==='idle'||phase==='reach')) {
-    const canDec = BET_OPTIONS.indexOf(bet) > 0;
-    const canInc = (() => {
-      const idx = BET_OPTIONS.indexOf(bet);
-      return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx+1] <= coins;
-    })();
-    drawBetBtn(decRect, '◀', canDec);
-    drawBetBtn(incRect, '▶', canInc);
+  /* ボタン: 確定中は両方とも非活性 */
+  const canDec = !betLocked && (phase==='idle'||phase==='reach') && BET_OPTIONS.indexOf(bet) > 0;
+  const canInc = !betLocked && (phase==='idle'||phase==='reach') && (() => {
+    const idx = BET_OPTIONS.indexOf(bet);
+    return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx+1] <= coins;
+  })();
+  drawBetBtn(decRect, '◀', canDec);
+  drawBetBtn(incRect, '▶', canInc);
 
-    /* 中央: BET 額 + ラベル (ボタン中心と同じ y に揃える) */
-    const cx = W / 2, cy = btnY + btnH / 2;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = Y;
-    ctx.fillText(`${bet}`, cx, cy - 7);
-    ctx.font = `10px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = 'rgba(245,208,32,0.55)';
-    ctx.fillText('ギヨウザ BET', cx, cy + 10);
-
-  } else {
-    /* BET 確定中 */
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = 'rgba(245,208,32,0.50)';
-    ctx.fillText(`BET: ${bet} ギヨウザ（確定）`, W / 2, barY + barH / 2);
-  }
+  /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
+  const cx = W / 2, cy = btnY + btnH / 2;
+  ctx.textBaseline = 'middle';
+  const gap = 8;
+  ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
+  const wBet = ctx.measureText('BET').width;
+  ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
+  const wNum = ctx.measureText(fmt(bet)).width;
+  const totalW = wBet + gap + wNum;
+  const startX = cx - totalW / 2;
+  ctx.fillStyle = Y;
+  ctx.textAlign = 'left';
+  ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
+  ctx.fillText('BET', startX, cy);
+  ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
+  ctx.fillText(fmt(bet), startX + wBet + gap, cy);
 
   /* バージョン */
   ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
@@ -2860,7 +2829,7 @@ function drawMissPopup() {
   ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.shadowColor = '#cc2200'; ctx.shadowBlur = 20;
-  outText(`－${missPopupAmt} ギヨウザ`, W / 2, popY, '#ff7755', 'rgba(0,0,0,0.85)', 6);
+  outText(`－${fmt(missPopupAmt)} ギヨウザ`, W / 2, popY, '#ff7755', 'rgba(0,0,0,0.85)', 6);
   ctx.restore();
 }
 
@@ -3071,7 +3040,7 @@ function drawEndScreen() {
     ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.shadowColor = Y; ctx.shadowBlur = 30;
-    outText(`＋${payoutAmt}ギヨウザ！`, W/2, popY, Y, 'rgba(0,0,0,0.9)', 8);
+    outText(`＋${fmt(payoutAmt)}ギヨウザ！`, W/2, popY, Y, 'rgba(0,0,0,0.9)', 8);
     ctx.restore();
   }
 
@@ -3097,13 +3066,6 @@ function drawEndScreen() {
       );
     }
     ctx.restore();
-  } else if (canRestart) {
-    const blink=0.45+0.45*Math.sin(endTimer*0.1);
-    ctx.globalAlpha=blink;
-    ctx.font=`18px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign='center'; ctx.fillStyle=YD; ctx.shadowBlur=0;
-    ctx.fillText(IS_TOUCH ? '[ タップ ] でもう一度' : '[ スペースキー ] でもう一度',W/2,cy+134);
-    ctx.globalAlpha=1;
   }
   ctx.restore();
 }
@@ -3223,26 +3185,15 @@ function drawAchOverlay() {
   ctx.textAlign='right'; ctx.textBaseline='bottom';
   ctx.fillStyle='rgba(245,208,32,0.45)';
   ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-14, py+ph-8);
-  /* 閉じる案内 */
-  ctx.textAlign='center';
-  ctx.fillStyle='rgba(255,255,255,0.28)';
-  ctx.fillText('タップまたはキー押下で閉じる', px+pw/2, py+ph-8);
   ctx.restore();
 }
 
-function drawInstruction(){
-  const blink=0.45+0.45*Math.sin(Date.now()/550);
-  const msg = IS_TOUCH ? '[ タップ ] で矢を放つ！' : '[ スペースキー ] で矢を放つ！';
-  ctx.save(); ctx.globalAlpha=blink;
-  ctx.font=`16px 'Hiragino Mincho ProN',serif`;
-  ctx.textAlign='center'; ctx.textBaseline='bottom';
-  ctx.fillStyle=YD; ctx.fillText(msg,W/2,H-8);
-  ctx.restore();
-}
 
 /* ════════════════ Startup Screen ════════════════ */
 let startupTimer = 0;
-const STARTUP_BTN = { x: W/2 - 120, y: H/2 + 40, w: 240, h: 52 };
+const STARTUP_BTN = IS_PORTRAIT
+  ? { x: W/2 - 120, y: H/2 + 68, w: 240, h: 52 }
+  : { x: W/2 - 120, y: H/2 + 40, w: 240, h: 52 };
 
 function drawStartup() {
   if (phase !== 'startup') return;
@@ -3254,41 +3205,57 @@ function drawStartup() {
   ctx.fillStyle = 'rgba(5,30,12,0.82)';
   ctx.fillRect(0, 0, W, H);
 
-  /* タイトル */
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 54px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = Y;
-  ctx.shadowColor = 'rgba(245,208,32,0.7)';
-  ctx.shadowBlur = 18 + pulse * 10;
-  ctx.fillText('ギヨウザルーレット', W / 2, H / 2 - 50);
-  ctx.shadowBlur = 0;
 
-  /* サブタイトル */
-  ctx.font = `16px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = 'rgba(245,208,32,0.6)';
-  ctx.fillText('崎陽軒シウマイ風パッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
-
-  /* スタートボタン */
-  const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
-  ctx.globalAlpha = 0.75 + 0.25 * pulse;
-  roundRect(bx, by, bw, bh, 10);
-  ctx.fillStyle = 'rgba(180,130,0,0.9)';
-  ctx.fill();
-  ctx.strokeStyle = Y;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = '#fff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
-
-  /* キーヒント */
-  ctx.font = `12px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.fillText('または スペースキー', W / 2, by + bh + 18);
+  if (IS_PORTRAIT) {
+    const cy = H / 2;
+    /* タイトル（2行） */
+    ctx.font = `900 42px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = Y;
+    ctx.shadowColor = 'rgba(245,208,32,0.7)';
+    ctx.shadowBlur = 18 + pulse * 10;
+    ctx.fillText('ギヨウザ', W / 2, cy - 84);
+    ctx.fillText('ルーレット', W / 2, cy - 36);
+    ctx.shadowBlur = 0;
+    /* サブタイトル（2行） */
+    ctx.font = `13px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = 'rgba(245,208,32,0.6)';
+    ctx.fillText('崎陽軒シウマイ風パッケージを', W / 2, cy + 14);
+    ctx.fillText('モチーフにしたルーレットゲーム', W / 2, cy + 34);
+    /* スタートボタン */
+    const bx = W/2 - 120, by = cy + 68, bw = 240, bh = 52;
+    ctx.globalAlpha = 0.75 + 0.25 * pulse;
+    roundRect(bx, by, bw, bh, 10);
+    ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
+    ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
+  } else {
+    /* タイトル */
+    ctx.font = `900 54px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = Y;
+    ctx.shadowColor = 'rgba(245,208,32,0.7)';
+    ctx.shadowBlur = 18 + pulse * 10;
+    ctx.fillText('ギヨウザルーレット', W / 2, H / 2 - 50);
+    ctx.shadowBlur = 0;
+    /* サブタイトル */
+    ctx.font = `16px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = 'rgba(245,208,32,0.6)';
+    ctx.fillText('崎陽軒シウマイ風パッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
+    /* スタートボタン */
+    const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
+    ctx.globalAlpha = 0.75 + 0.25 * pulse;
+    roundRect(bx, by, bw, bh, 10);
+    ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
+    ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
+  }
 
   ctx.restore();
 }
@@ -3296,10 +3263,10 @@ function drawStartup() {
 /* ════════════════ Loop / Input ════════════════ */
 /* startup フェーズ: lsLoad/lsLoadAch だけ行い、画面は startup のままにする */
 lsCheckSchema(); // スキーマ不一致なら全データクリア（lsLoad/lsLoadAch の前に必ず実行）
-lsLoad();
+lsLoad();        // bet もここで復元される
 lsLoadAch();
 lsLoadStats();
-bet = 10;
+if (!BET_OPTIONS.includes(bet)) bet = 10; // 未保存時のみデフォルト10
 isGameOver = false;
 phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
@@ -3311,22 +3278,23 @@ function onShoot(){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
   if (curIdx>=4) return;
+  if (shootGuard > 0) return; // init直後の誤射ブロック
   /* 最初の矢: ベット確定 & コイン消費 & 実績 */
   if (curIdx === 0) {
     if (coins < bet) return; // 念のため
     betLocked = true;
     coins -= bet;
     unlockAch('first_shot');
-    if (bet === 50) unlockAch('bet_max');
+    if (bet >= 100) unlockAch('bet_max');
     /* プレイ回数カウント */
     playCount++;
-    if (playCount >= 10) unlockAch('play_10');
-    if (playCount >= 50) unlockAch('play_50');
+    if (playCount >= 100) unlockAch('play_10');
+    if (playCount >= 500) unlockAch('play_50');
     lsSaveStats();
   }
   /* 矢数カウント */
   shotCount++;
-  if (shotCount >= 100) unlockAch('shot_100');
+  if (shotCount >= 1000) unlockAch('shot_100');
   lsSaveStats();
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
@@ -3368,11 +3336,10 @@ document.addEventListener('keydown', e=>{
     }
     return;
   }
-  /* 1〜5キーでベット選択 */
-  if (BET_KEY_MAP[e.code] !== undefined && !betLocked && (phase==='idle'||phase==='reach')) {
+  /* カーソル左右でBET変更 */
+  if ((e.code==='ArrowLeft'||e.code==='ArrowRight') && !betLocked && (phase==='idle'||phase==='reach')) {
     e.preventDefault();
-    const amt = BET_OPTIONS[BET_KEY_MAP[e.code]];
-    if (amt <= coins) bet = amt;
+    changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
   if (CHEAT_MAP[e.code] && phase==='idle' && curIdx<4) {
