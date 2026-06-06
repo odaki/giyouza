@@ -123,6 +123,8 @@ const PAYOUT_RATE = {
 };
 let coins, bet, betLocked, isGameOver;
 let payoutAmt, payoutTimer; // 獲得ポップアップ用
+let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
+let missPopupAmt = 0, missPopupTimer = 0; // ハズレポップアップ用
 let bestCoins; // ハイスコア
 
 /* ── 実績システム ── */
@@ -778,8 +780,11 @@ function init(fromStartup) {
   reachFlash    = 0;
   canRestart  = false;
   betLocked   = false;
-  payoutAmt   = 0;
-  payoutTimer = 0;
+  payoutAmt      = 0;
+  payoutTimer    = 0;
+  isMissResult   = false;
+  missPopupAmt   = 0;
+  missPopupTimer = 0;
   /* ベットが所持コインを超えていたら最大払える額に下げる */
   if (coins !== undefined) clampBet();
   worms      = [];
@@ -926,7 +931,12 @@ function update() {
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
         if (coins <= 0) { isGameOver = true; playSE('gameover'); }
         /* ハズレ判定 */
-        if (!isJackpot && !isMedium) playSE('miss');
+        if (!isJackpot && !isMedium) {
+          playSE('miss');
+          isMissResult   = true;
+          missPopupAmt   = bet;
+          missPopupTimer = 120; // 約2秒表示
+        }
         lsSave();         // コイン状態を保存
         checkCoinsAch();  // コイン実績チェック
       } else if (curIdx === 3) {
@@ -988,7 +998,10 @@ function update() {
 
   if (phase === 'done') {
     endTimer++;
+    if (missPopupTimer > 0) missPopupTimer--;
     const restartWait = (isJackpot||isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo) ? 130 : 55;
+    /* ハズレ: ゲームオーバーでなければ自動リセット */
+    if (isMissResult && !isGameOver && endTimer > 118) { init(); return; }
     if (endTimer > restartWait) canRestart = true;
     if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
     if (payoutTimer > 0) payoutTimer--;
@@ -2166,8 +2179,8 @@ function draw() {
      3. テキスト最前面
      ─────────────────────────────────────────────── */
 
-  /* 1. オーバーレイ */
-  if (phase==='done'&&endTimer>45) drawEndOverlay();
+  /* 1. オーバーレイ（ハズレは暗幕なし） */
+  if (phase==='done'&&endTimer>45&&!isMissResult) drawEndOverlay();
   if (phase==='reach')              drawReachOverlay();
 
   /* 2. エフェクト面 */
@@ -2193,7 +2206,9 @@ function draw() {
   }
 
   /* 3. テキスト最前面 */
-  if (phase==='done'&&endTimer>45) drawEndScreen();
+  if (phase==='done'&&endTimer>45&&!isMissResult) drawEndScreen();
+  /* ハズレポップアップ: 暗幕なし・endTimer制限なし */
+  if (phase==='done'&&isMissResult) drawMissPopup();
   if (phase==='reach')              drawReachText();
   if (phase==='idle'&&curIdx<4)    drawInstruction();
 
@@ -2668,6 +2683,26 @@ function drawReachText() {
   ctx.restore();
 }
 
+/* ── ハズレポップアップ（暗幕なし・即表示） ── */
+function drawMissPopup() {
+  if (missPopupAmt <= 0) return;
+  const TOTAL = 120;
+  const elapsed = TOTAL - missPopupTimer;           // 0→TOTAL
+  /* フェードイン 15f、その後フェードアウト 30f */
+  const fadeIn  = Math.min(1, elapsed / 15);
+  const fadeOut = missPopupTimer < 30 ? missPopupTimer / 30 : 1;
+  const alpha   = fadeIn * fadeOut;
+  /* 上へゆっくり浮き上がる */
+  const popY = H / 2 - 10 - (elapsed / TOTAL) * 40;
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.92;
+  ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#cc2200'; ctx.shadowBlur = 20;
+  outText(`－${missPopupAmt} ギヨウザ`, W / 2, popY, '#ff7755', 'rgba(0,0,0,0.85)', 6);
+  ctx.restore();
+}
+
 function drawEndOverlay() {
   const alpha = Math.min(1,(endTimer-45)/35);
   /* 大当たりはギヨウザを見せるため薄め、ウザウザも半透明 */
@@ -2862,14 +2897,8 @@ function drawEndScreen() {
     outText('ギョ ギョ ！',0,78, '#ffe066', 'rgba(40,20,0,0.88)', 7);
     ctx.restore();
 
-  /* ━━ 残念 ━━ */
-  } else {
-    ctx.font=`bold 74px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillStyle='rgba(245,208,32,0.55)'; ctx.fillText('残念...',W/2,cy);
-    ctx.font=`26px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle='rgba(245,208,32,0.38)'; ctx.fillText('またチャレンジ！',W/2,cy+66);
-  }
+  /* ━━ ハズレ: drawMissPopup() で描画 ━━ */
+  } else { /* miss */ }
 
   /* 獲得ポップアップ */
   if (payoutTimer > 0 && payoutAmt > 0) {
