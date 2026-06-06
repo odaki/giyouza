@@ -101,11 +101,11 @@ const UUUU     = ['ウ', 'ウ', 'ウ', 'ウ'];  // 中当たり⑦
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 中当たり⑧
 const GYOGYO   = ['ギ', 'ヨ', 'ギ', 'ヨ'];  // 中当たり⑨
 
-const WR  = IS_PORTRAIT ? 60  : 95;
+const WR  = IS_PORTRAIT ? 58  : 95;
 const WXS = IS_PORTRAIT ? [185, 185, 185, 185] : [230, 430, 630, 830];
-/* 縦画面: コインヘッダ(〜y99)と底部バー(y730〜)の間に4ホイールを均等配置
-   WR=60, diameter=120, gap=44 → top=109+60=169, spacing=164 */
-const WYS = IS_PORTRAIT ? [169, 333, 497, 661] : [255, 255, 255, 255];
+/* 縦画面: 全要素間隔を G=34px 均等に
+   コインヘッダ下端(y=99) +34 → W1中心(191) +116 +34 → W2(341) → W3(491) → W4(641) +116 +34 → BETバー上端(733) */
+const WYS = IS_PORTRAIT ? [191, 341, 491, 641] : [255, 255, 255, 255];
 const WY  = WYS[0]; // 後方互換 (PC=255, portrait=169)
 
 /* ── game state ── */
@@ -216,9 +216,9 @@ const _BET_BAR_Y = H - 106;
 const BET_DEC_BTN = { x:76,  y:_BET_BAR_Y+8, w:46, h:64 }; // ◀
 const BET_INC_BTN = { x:170, y:_BET_BAR_Y+8, w:46, h:64 }; // ▶
 
-/* 縦画面専用 BET ボタン (barY=730, ボタンy=740) */
-const P_BET_DEC_BTN = IS_PORTRAIT ? { x:16,      y:740, w:80, h:36 } : null;
-const P_BET_INC_BTN = IS_PORTRAIT ? { x:W-16-80, y:740, w:80, h:36 } : null;
+/* 縦画面専用 BET ボタン (barY=733, ボタン中央揃えy=748) */
+const P_BET_DEC_BTN = IS_PORTRAIT ? { x:20,  y:748, w:84, h:36 } : null;
+const P_BET_INC_BTN = IS_PORTRAIT ? { x:316, y:748, w:84, h:36 } : null;
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
@@ -2180,9 +2180,9 @@ function draw() {
     ctx.font=`bold 11px serif`;
     ctx.fillStyle=active?Y:'rgba(245,208,32,0.38)';
     if (IS_PORTRAIT) {
-      /* 縦画面: 的の左斜め上(ホイール左上外側) */
+      /* 縦画面: 的の左斜め上(ホイール左上外側、上端のわずか上) */
       ctx.textAlign='right'; ctx.textBaseline='bottom';
-      ctx.fillText(`第${i+1}的`, WXS[i]-WR-4, WYS[i]-WR+4);
+      ctx.fillText(`第${i+1}的`, WXS[i]-WR-4, WYS[i]-WR-2);
     } else {
       ctx.textAlign='center'; ctx.textBaseline='alphabetic';
       ctx.fillText(`第${i+1}的`, WXS[i], WYS[i]-WR-44);
@@ -2643,73 +2643,65 @@ function drawBottomBar() {
 }
 
 /* ── 縦画面専用: 底部 BET コントロール ──
-   コインヘッダ (y=21, h=78) と対称: 底部バー (y=730, h=70)
-   下帯(y=814) から 11+10=21px のマージンを確保                ── */
+   等間隔 G=34px: W4下端(699) + 34 = barY=733
+   barH=66 → 下端(799) = H-21 (コインヘッダと対称マージン)    ── */
 function drawPortraitBottomBar() {
-  const barX = 12, barY = 730, barW = W - 24, barH = 70;
-  const M = 10; // 内側マージン
+  const barX = 12, barY = 733, barW = W - 24, barH = 66;
   ctx.save();
 
-  /* パネル背景 (コインヘッダと同スタイル) */
+  /* パネル背景 ── コインヘッダと同スタイル */
   roundRect(barX, barY, barW, barH, 10);
   ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.28)'; ctx.lineWidth = 1.2; ctx.stroke();
 
-  const rowY  = barY + M;        // ベットコントロール行の上端
-  const rowH  = 36;              // ボタン高さ
-  const hintY = rowY + rowH + M; // ヒントテキストのY
+  /* ボタン: パネル内で垂直中央揃え */
+  const btnH = 36;
+  const btnY = barY + (barH - btnH) / 2; // = 733 + 15 = 748
+  const decRect = P_BET_DEC_BTN;  // { x:20, y:748, w:84, h:36 }
+  const incRect = P_BET_INC_BTN;  // { x:316, y:748, w:84, h:36 }
+
+  const drawBetBtn = (rect, label, canChange) => {
+    roundRect(rect.x, rect.y, rect.w, rect.h, 8);
+    ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
+    ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
+    ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  };
 
   if (!betLocked && (phase==='idle'||phase==='reach')) {
-    /* ◀ / ▶ ボタン描画 */
-    const drawBetBtn = (rect, label, canChange) => {
-      roundRect(rect.x, rect.y, rect.w, rect.h, 8);
-      ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
-      ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
-      ctx.lineWidth = 1.4; ctx.stroke();
-      ctx.font = `bold 20px 'Hiragino Mincho ProN',serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
-      ctx.fillText(label, rect.x + rect.w/2, rect.y + rect.h/2);
-    };
     const canDec = BET_OPTIONS.indexOf(bet) > 0;
     const canInc = (() => {
       const idx = BET_OPTIONS.indexOf(bet);
       return idx < BET_OPTIONS.length - 1 && BET_OPTIONS[idx+1] <= coins;
     })();
-    drawBetBtn(P_BET_DEC_BTN, '◀', canDec);
-    drawBetBtn(P_BET_INC_BTN, '▶', canInc);
+    drawBetBtn(decRect, '◀', canDec);
+    drawBetBtn(incRect, '▶', canInc);
 
-    /* 中央: BET 額 + ラベル */
-    const cx = W / 2, cy = rowY + rowH / 2;
+    /* 中央: BET 額 + ラベル (ボタン中心と同じ y に揃える) */
+    const cx = W / 2, cy = btnY + btnH / 2;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `bold 20px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = Y;
-    ctx.fillText(`${bet}`, cx, cy - 6);
+    ctx.fillText(`${bet}`, cx, cy - 7);
     ctx.font = `10px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = 'rgba(245,208,32,0.55)';
     ctx.fillText('ギヨウザ BET', cx, cy + 10);
 
   } else {
     /* BET 確定中 */
-    const cy = rowY + rowH / 2;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = 'rgba(245,208,32,0.50)';
-    ctx.fillText(`BET: ${bet} ギヨウザ（確定）`, W/2, cy);
-  }
-
-  /* ヒントテキスト */
-  if (phase==='idle'||phase==='reach') {
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `11px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = 'rgba(245,208,32,0.48)';
-    ctx.fillText('[ タップ ] で矢を放て！', W/2, hintY + 7);
+    ctx.fillText(`BET: ${bet} ギヨウザ（確定）`, W / 2, barY + barH / 2);
   }
 
   /* バージョン */
-  ctx.font = '9px monospace'; ctx.textAlign='right'; ctx.textBaseline='bottom';
-  ctx.fillStyle='rgba(245,208,32,0.18)';
-  ctx.fillText(VERSION, W - barX - M, H - 4);
+  ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  ctx.fillStyle = 'rgba(245,208,32,0.18)';
+  ctx.fillText(VERSION, barX + barW - 4, barY + barH - 4);
   ctx.restore();
 }
 
