@@ -531,7 +531,10 @@ function startBGMTape(durationMs = 1400) {
 
 /* BGMのplaybackRateを現在値から targetRate へテープカーブでなめらかに変化させる
    スローイベント開始・終了時のテンポ演出に使用 */
-function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut') {
+/* blockInput=true のときだけランプ中のクリックを無視する
+   自動ランプ（init切替・当たり復帰・tapestart）は false、
+   Ctrl+T のインタラクティブ切り替えは true */
+function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockInput = false) {
   if (!bgmSource || !audioCtx) return;
   const t       = audioCtx.currentTime;
   const curRate = bgmSource.playbackRate.value || 1;
@@ -539,8 +542,8 @@ function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut') {
   bgmSource.playbackRate.cancelScheduledValues(t);
   bgmSource.playbackRate.setValueCurveAtTime(
     _tapeRateCurve(curRate, targetRate, easeType), t, durationMs / 1000);
-  /* ランプ区間を記録: この間のクリックは無視する */
-  slowRampEndTime = t + durationMs / 1000;
+  /* 入力ブロックが必要な場合のみランプ終了時刻を記録 */
+  if (blockInput) slowRampEndTime = t + durationMs / 1000;
 }
 
 function resumeAudio() { /* 互換のため残す */ }
@@ -1274,7 +1277,8 @@ function update() {
     const allShown = wheels.every(w => !w.result || w.resultPop >= 1);
     if (!isGameOver && endTimer > minWait && allShown && onBeatGrid()) {
       const fire = pendingShoot; init();
-      if (fire) { pendingShoot = false; shootGuard = 0; onShoot(); }
+      shootGuard = 0; // 自動リセットはユーザー操作起点でないため誤射リスクなし、即入力可能
+      if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
     /* 非ゲームオーバー: 結果表示完了後はクリック早送りも可 */
@@ -3832,9 +3836,9 @@ document.addEventListener('keydown', e=>{
     const prev = isSlowSpin;
     isSlowSpin = !isSlowSpin;
     if (isSlowSpin && !prev) {
-      rampBGMRate(0.5, 1200, 'easeOut');
+      rampBGMRate(0.5, 1200, 'easeOut', true); // Ctrl+T: ランプ中は入力ブロック
     } else if (!isSlowSpin && prev) {
-      rampBGMRate(1.0, 1200, 'easeIn');
+      rampBGMRate(1.0, 1200, 'easeIn',  true); // Ctrl+T: ランプ中は入力ブロック
     }
     /* ホイール速度も即時反映（現在スピンしているホイールを再生成） */
     wheels.forEach(w => { w.speed *= isSlowSpin ? 0.5 : 2; });
