@@ -791,6 +791,7 @@ function lsLoad() {
 }
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
 const REACH_MIN_SPEED    = 0.030; // 最低回転速度（リーチ減速後の速さ）
+const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
 let worms, uzaTexts, gyozas, giugiuCells;
 let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
 
@@ -1153,6 +1154,8 @@ function update() {
           lsSaveStats();
         }
         const isMedium = isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo;
+        /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む） */
+        if (isJackpot || isMedium) pendingShoot = false;
         /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
         if (isSlowSpin && (isJackpot || isMedium)) {
           rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
@@ -1275,13 +1278,15 @@ function update() {
     const minWait  = isMissResult ? 2 : isBigWin ? 96 : 24;
     /* 4文字目の結果が完全に表示されてからリセット */
     const allShown = wheels.every(w => !w.result || w.resultPop >= 1);
-    if (!isGameOver && endTimer > minWait && allShown && onBeatGrid()) {
+    /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
+    if (!isGameOver && isMissResult && endTimer > minWait && allShown && onBeatGrid()) {
       const fire = pendingShoot; init();
-      shootGuard = 0; // 自動リセットはユーザー操作起点でないため誤射リスクなし、即入力可能
+      shootGuard = 0;
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
-    /* 非ゲームオーバー: 結果表示完了後はクリック早送りも可 */
+    /* エフェクト終了後: canRestartをセット
+       ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
     if (!isGameOver && endTimer > minWait && allShown) canRestart = true;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
@@ -3732,6 +3737,8 @@ particles = [];
 function onShoot(){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
+  /* リーチ発動直後はエフェクト・SEを見せるため入力ロック */
+  if (phase === 'reach' && reachTimer < REACH_LOCK_FRAMES) return;
   if (curIdx>=4) return;
   if (shootGuard > 0) return; // init直後の誤射ブロック
   /* 最初の矢: ベット確定 & コイン消費 & 実績 */
@@ -3764,20 +3771,27 @@ function onShoot(){
 }
 /* クリック/タップの共通処理
    - idle/reach       : 即時発射
-   - done(非GO)       : 先打ちバッファ登録。canRestartなら即時リセット＋発射
+   - done(ハズレ)     : 先打ちバッファ登録。canRestartなら即時リセット＋発射
+   - done(当たり)     : エフェクト中は無視。canRestart後はリセットのみ（発射しない）
    - done(GO)         : canRestartなら gameOverReset
    - tapestart        : 先打ちバッファ登録（解放時に自動発射）
-   - shooting(4本目)  : 先打ちバッファ登録（着弾→done→idle移行時に自動発射）
+   - shooting(4本目)  : 先打ちバッファ登録（当たりなら即破棄、ハズレなら着弾後に発射）
    その他フェーズ     : 無視 */
 function handleGameClick() {
   if (phase === 'done') {
     if (isGameOver) { if (canRestart) gameOverReset(); return; }
-    /* 非ゲームオーバー: 結果文字を即座に完全表示してからバッファ登録 */
-    wheels.forEach(w => { if (w.result) w.resultPop = 1; });
-    pendingShoot = true;
+    if (isMissResult) {
+      /* ハズレ: 結果文字を即座に完全表示してバッファ登録。canRestartなら即時リセット＋発射 */
+      wheels.forEach(w => { if (w.result) w.resultPop = 1; });
+      pendingShoot = true;
+      if (canRestart) {
+        init(); shootGuard = 0; pendingShoot = false; onShoot();
+      }
+      return;
+    }
+    /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
-      /* 待機時間を即時スキップしてそのまま発射 */
-      init(); pendingShoot = false; shootGuard = 0; onShoot();
+      init(); shootGuard = 0;
     }
     return;
   }
