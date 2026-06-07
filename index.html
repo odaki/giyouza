@@ -111,7 +111,9 @@ const WY  = WYS[0]; // 後方互換 (PC=255, portrait=169)
 /* ── game state ── */
 let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
-let shootGuard = 0; // init直後の誤射防止フレームカウンタ
+let shootGuard = 0;    // init直後の誤射防止フレームカウンタ
+let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
+let slowRampEndTime = 0;   // スローランプ終了のaudioCtx時刻（0=ランプなし）
 let isJackpot, isGizagiza, isUyouyo, isUzauza, isGiugiu;
 let isGigigigi, isYoyoyoyo, isUuuu, isZazazaza, isGyogyo;
 let endTimer, canRestart;
@@ -129,10 +131,11 @@ const PAYOUT_RATE = {
   hitMed3:       3,  // GIGIGIGI/YOYOYOYO/UUUU/ZAZAZAZA
 };
 let coins, bet, betLocked, isGameOver;
-let payoutAmt, payoutTimer; // 獲得ポップアップ用
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
 let isSlowSpin   = false;   // 低確率: 回転速度半減イベント
-let missPopups = []; // ハズレポップアップ配列（複数同時表示対応）
+let missPopups   = []; // ハズレポップアップ（複数同時・トライ横断フェードアウト）
+let payoutPopups = []; // 獲得ポップアップ（複数同時・トライ横断フェードアウト）
+let goParticles  = []; // ゲームオーバー演出パーティクル
 let bestCoins; // ハイスコア
 
 /* ── 実績システム ── */
@@ -223,24 +226,62 @@ const P_BET_INC_BTN = IS_PORTRAIT ? { x:357, y:747, w:36, h:36 } : null;
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
-let bgmScheduler = null;
-let bgmStep = 0;
-let bgmNextTime = 0;
+let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
+let bgmBuffer = null;       // レンダリング済みBGMループバッファ
+let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
+let bgmPendingStart = false;// バッファ未完時にstartBGMが呼ばれた場合のフラグ
+let bgmRestartTimer = null; // SE後のBGM再開pending timer（stopBGMでキャンセル）
+let masterGain = null;      // 全音声の親gainノード（ミュート制御）
 let audioMuted = true; // デフォルトミュート
+let bgmPhaseRef = null;     // BGM開始時のaudioCtx.currentTime（拍グリッド基準点）
+
+function onBeatGrid() {
+  if (!audioCtx || bgmPhaseRef === null) return true; // 音声未初期化時はフレーム基準に委ねる
+  /* 1/4拍グリッドを優先。その境界点から前後25%（≈1.5f）の窓で true */
+  const ph4 = ((audioCtx.currentTime - bgmPhaseRef) % BEAT_DIV4) / BEAT_DIV4;
+  if (ph4 < 0.25 || ph4 > 0.75) return true;
+  /* 1/3拍グリッドも許容（三連符でクリックする人向け）*/
+  const ph3 = ((audioCtx.currentTime - bgmPhaseRef) % BEAT_DIV3) / BEAT_DIV3;
+  return ph3 < 0.25 || ph3 > 0.75;
+}
+
+/* 次の1/4拍グリッド境界点のaudioCtx時刻を返す（SE先読みスケジュール用） */
+function nextBeatDivTime(divsPerBeat = 4) {
+  if (!audioCtx || bgmPhaseRef === null) return audioCtx ? audioCtx.currentTime + 0.01 : 0;
+  const divDur  = BGM_BEAT / divsPerBeat;
+  const elapsed = audioCtx.currentTime - bgmPhaseRef;
+  const nextDiv = Math.ceil(elapsed / divDur + 0.02); // 0.02=ほぼ同時でも次グリッドへ
+  return bgmPhaseRef + nextDiv * divDur;
+}
 
 function getAudioCtx() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx) {
+    audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 1; // lsLoad()前なのでaudioMutedは未確定。applyMuteGain()で後から設定する
+    masterGain.connect(audioCtx.destination);
+    bgmGain  = audioCtx.createGain();
+    bgmGain.gain.value = 1;
+    bgmGain.connect(masterGain); // BGM: bgmGain → masterGain → destination
+    /* BGMループを非同期でオフラインレンダリング（完了後 bgmBuffer にセット）
+       startBGM() がバッファ未完状態で呼ばれていた場合は完了後に起動する */
+    renderBGMBuffer(audioCtx.sampleRate).then(buf => {
+      bgmBuffer = buf;
+      /* startBGM() がバッファ未完状態で呼ばれていた場合、ここで改めて起動 */
+      if (bgmPendingStart && !bgmSource) {
+        bgmPendingStart = false;
+        startBGM();
+      }
+    }).catch(e => { console.warn('BGM render failed:', e); });
+  }
   return audioCtx;
 }
 
-/* AudioContext を確実に running 状態にしてから callback を呼ぶ */
+/* AudioContext を確実に running 状態にしてから callback を呼ぶ
+   resume() は already-running でも即解決する Promise を返すので常に経由する */
 function ensureAudioRunning(callback) {
   const ctx = getAudioCtx();
-  if (ctx.state === 'running') {
-    callback();
-  } else {
-    ctx.resume().then(callback).catch(() => {});
-  }
+  ctx.resume().then(callback).catch(() => { callback(); });
 }
 
 /* 音程ヘルパー: note='C'~'B', octave=3~5 */
@@ -250,10 +291,12 @@ function noteHz(note, octave) {
 }
 
 /* 基本オシレーター再生 */
-function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato) {
+function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, dest) {
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
-  osc.connect(gain); gain.connect(ctx.destination);
+  /* dest未指定時: ライブコンテキストならmasterGain経由（ミュート制御）、
+     OfflineAudioContextならdestination直結（レンダリング用）              */
+  osc.connect(gain); gain.connect(dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination);
   osc.type = type;
   osc.frequency.setValueAtTime(freq, startT);
   /* ビブラート: LFO で周波数変調（薄くかけるため delay 後にフェードイン） */
@@ -283,7 +326,7 @@ function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato) 
 }
 
 /* ノイズバースト（ハイハット・打撃音用） */
-function playNoise(ctx, startT, dur, vol, hpFreq) {
+function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
   const len    = Math.ceil(ctx.sampleRate * (dur + 0.05));
   const buf    = ctx.createBuffer(1, len, ctx.sampleRate);
   const data   = buf.getChannelData(0);
@@ -295,7 +338,8 @@ function playNoise(ctx, startT, dur, vol, hpFreq) {
   const gain   = ctx.createGain();
   gain.gain.setValueAtTime(vol, startT);
   gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
-  src.connect(hp); hp.connect(gain); gain.connect(ctx.destination);
+  src.connect(hp); hp.connect(gain);
+  gain.connect(dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination);
   src.start(startT); src.stop(startT + dur + 0.05);
 }
 
@@ -322,68 +366,198 @@ const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
                  0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
 /* バスドラム: ステップ0,4,8,12 */
 const BGM_KICK = new Set([0,4,8,12]);
+/* 1ループの長さ（秒）*/
+const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
+const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
+const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
-const SCHEDULE_AHEAD = 0.25; // 先読み秒数
-
-function scheduleBGM() {
-  if (!audioCtx || audioMuted) return;
-  const ctx = audioCtx;
-  /* bgmNextTime が過去になっていたら現在時刻にリセット。
-     過去への catch-up スケジューリングを防ぎ、再開時の早送り感をなくす。 */
-  if (bgmNextTime < ctx.currentTime) bgmNextTime = ctx.currentTime + 0.02;
-  while (bgmNextTime < ctx.currentTime + SCHEDULE_AHEAD) {
-    const s   = bgmStep % BGM_MEL.length;
-    const t   = bgmNextTime;
-    const dur = BGM_BEAT * 0.5; // 16分音符の長さ
-
-    /* メロディ */
+/* ─── BGMループをオフラインレンダリングしてAudioBufferを返す ─── */
+async function renderBGMBuffer(sampleRate) {
+  const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
+  const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
+  const dest      = offCtx.destination;
+  for (let s = 0; s < BGM_MEL.length; s++) {
+    const t   = s * BGM_BEAT * 0.5;
+    const dur = BGM_BEAT * 0.5;
     const mel = BGM_MEL[s];
-    if (mel) playOsc(ctx, 'triangle', noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06);
-
-    /* ベース */
+    if (mel) playOsc(offCtx, 'triangle', noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06, null, null, dest);
     const bas = BGM_BASS[s];
-    if (bas) playOsc(ctx, 'sine', noteHz(bas[0], bas[1]), t, dur * 1.6, bas[2], 0.10);
-
-    /* ハイハット */
-    playNoise(ctx, t, 0.04, BGM_HAT[s], 8000);
-
-    /* バスドラム */
+    if (bas) playOsc(offCtx, 'sine',     noteHz(bas[0], bas[1]), t, dur * 1.6,  bas[2], 0.10, null, null, dest);
+    playNoise(offCtx, t, 0.04, BGM_HAT[s], 8000, dest);
     if (BGM_KICK.has(s)) {
-      const osc  = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      const osc  = offCtx.createOscillator();
+      const gain = offCtx.createGain();
+      osc.connect(gain); gain.connect(dest);
       osc.type = 'sine';
       osc.frequency.setValueAtTime(110, t);
       osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
       gain.gain.setValueAtTime(0.45, t);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-      osc.start(t); osc.stop(t + 0.20);
+      osc.start(t); osc.stop(t + 0.21);
     }
+  }
+  return offCtx.startRendering();
+}
 
-    bgmNextTime += dur;
-    bgmStep++;
+/* ─── BGMソース管理ユーティリティ ─── */
+function _destroyBGMSource() {
+  if (bgmSource) {
+    bgmSource.onended = null;
+    try { bgmSource.stop(); } catch(e) {}
+    bgmSource.disconnect();
+    bgmSource = null;
   }
 }
 
+function _createBGMSource(startRate = 1.0) {
+  if (!audioCtx || !bgmBuffer) return null;
+  _destroyBGMSource();
+  const src      = audioCtx.createBufferSource();
+  src.buffer     = bgmBuffer;
+  src.loop       = true;
+  src.loopEnd    = BGM_LOOP_DUR;
+  src.playbackRate.value = startRate;
+  src.connect(bgmGain);
+  bgmSource = src;
+  return src;
+}
+
+/* ─── BGM制御API ─── */
+
+/* ── ミュート制御（masterGain のみ制御。bgmGain/ソースは触らない） ── */
+function applyMuteGain() {
+  if (!masterGain || !audioCtx) return;
+  masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+  masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
+}
+
+/* BGMソース起動（ミュート状態を問わず起動。gain が音量を制御する） */
 function startBGM() {
-  if (!audioCtx || audioMuted) return;
-  /* すでにスケジューラが動いていれば再起動しない（リプレイ時の途切れ防止） */
-  if (bgmScheduler) return;
-  bgmStep     = 0;
-  bgmNextTime = audioCtx.currentTime + 0.12; // setInterval初回発火(~80ms)より余裕を持たせる
-  bgmScheduler = setInterval(scheduleBGM, 80);
+  if (!audioCtx) return;
+  if (!bgmBuffer) {
+    /* バッファがまだレンダリング中 → 完了後に自動起動するフラグを立てる */
+    bgmPendingStart = true;
+    return;
+  }
+  bgmPendingStart = false;
+  if (bgmSource) return; // すでに再生中
+  /* bgmGain は常に1（ミュートは masterGain が担う） */
+  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  const src = _createBGMSource(1.0);
+  if (src) { src.start(); bgmPhaseRef = audioCtx.currentTime; }
 }
 
+/* reach/jackpot SE中のBGM一時消音（ソースは動かし続ける） */
 function stopBGM() {
-  if (bgmScheduler) { clearInterval(bgmScheduler); bgmScheduler = null; }
+  if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
+  stopJingle();
+  /* ソースは停止せず gain だけ 0 にする（SE中もBGMはループし続ける） */
+  if (bgmGain && audioCtx) {
+    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
+  }
 }
 
-/* 最初のユーザー操作でAudioContextをresumeするだけ（BGM開始はgame flowで行う） */
+/* SE終了後に bgmGain を 1 に戻す（ミュート制御は masterGain が担うので無条件で 1） */
+function scheduleBGMRestart(delayMs) {
+  if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
+  bgmRestartTimer = setTimeout(() => {
+    bgmRestartTimer = null;
+    if (bgmGain && audioCtx) {
+      bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+    }
+  }, delayMs);
+}
+
+/* テープ速度カーブ生成
+   easeOut: 最初に素早く落ちてじわり停止（テープが止まる感じ）
+            sin(p*π/2) → p=0で傾き大、p=1で傾き0
+   easeIn:  じわりと動き出して加速（世界が動き始める感じ）
+            1-cos(p*π/2) → p=0で傾き0、p=1で傾き大 */
+function _tapeRateCurve(from, to, easeType, N = 64) {
+  const curve = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const p = i / (N - 1);
+    const f = easeType === 'easeOut' ? Math.sin(p * Math.PI / 2)
+            : easeType === 'easeIn'  ? 1 - Math.cos(p * Math.PI / 2)
+            : p;
+    curve[i] = from + (to - from) * f;
+  }
+  return curve;
+}
+
+/* テープが止まるように減速停止（ゲームオーバー専用） */
+function stopBGMTape(durationMs = 1300) {
+  if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
+  stopJingle();
+  if (!bgmSource || !audioCtx) { _destroyBGMSource(); return; }
+  /* ソースを止めずに極低速（0.001x）まで落とす。
+     再生位置がほぼ止まったまま保持されるので、リセット時に同じ場所から加速できる。 */
+  const t       = audioCtx.currentTime;
+  const curRate = bgmSource.playbackRate.value || 1;
+  bgmSource.playbackRate.cancelScheduledValues(t);
+  /* easeOut: 最初に素早くテンポが落ち、最後にじわり停止 */
+  bgmSource.playbackRate.setValueCurveAtTime(
+    _tapeRateCurve(curRate, 0.001, 'easeOut'), t, durationMs / 1000);
+}
+
+/* テープが回り始めるように加速（ゲームオーバーリセット専用）
+   既存ソースがあればその位置から加速、なければ新規作成 */
+function startBGMTape(durationMs = 1400) {
+  if (!audioCtx) return;
+  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  const t = audioCtx.currentTime;
+  if (bgmSource) {
+    /* 極低速で回り続けているソースを現在位置からeaseInで加速 */
+    const curRate = bgmSource.playbackRate.value || 0.001;
+    bgmSource.playbackRate.cancelScheduledValues(t);
+    /* easeIn: じわりと動き出し、後半で加速して通常速度へ */
+    bgmSource.playbackRate.setValueCurveAtTime(
+      _tapeRateCurve(curRate, 1.0, 'easeIn'), t, durationMs / 1000);
+  } else {
+    /* フォールバック: ソースが消えていた場合は新規作成してeaseIn加速 */
+    if (!bgmBuffer) return;
+    const src = _createBGMSource(0.001);
+    if (!src) return;
+    src.playbackRate.setValueCurveAtTime(
+      _tapeRateCurve(0.001, 1.0, 'easeIn'), t, durationMs / 1000);
+    src.start();
+    bgmPhaseRef = t + durationMs / 1000; // 加速完了時点を拍グリッド基準にする
+  }
+}
+
+/* BGMのplaybackRateを現在値から targetRate へテープカーブでなめらかに変化させる
+   スローイベント開始・終了時のテンポ演出に使用 */
+function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut') {
+  if (!bgmSource || !audioCtx) return;
+  const t       = audioCtx.currentTime;
+  const curRate = bgmSource.playbackRate.value || 1;
+  if (Math.abs(curRate - targetRate) < 0.005) return; // すでに目標値
+  bgmSource.playbackRate.cancelScheduledValues(t);
+  bgmSource.playbackRate.setValueCurveAtTime(
+    _tapeRateCurve(curRate, targetRate, easeType), t, durationMs / 1000);
+  /* ランプ区間を記録: この間のクリックは無視する */
+  slowRampEndTime = t + durationMs / 1000;
+}
+
+function resumeAudio() { /* 互換のため残す */ }
+
+/* 最初のユーザー操作で AudioContext を作成・resume・unlock する
+   ジェスチャー内で行わないと iOS Safari 等で suspended のまま音が出ない */
 function _onFirstGesture() {
   document.removeEventListener('keydown',    _onFirstGesture, true);
   document.removeEventListener('mousedown',  _onFirstGesture, true);
   document.removeEventListener('touchstart', _onFirstGesture, true);
-  if (audioCtx) audioCtx.resume().catch(() => {});
+  const ctx = getAudioCtx();
+  ctx.resume().then(() => {
+    /* iOS Safari unlock: 無音バッファを1サンプル再生して audio system を活性化 */
+    const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination); src.start(0);
+  }).catch(() => {});
 }
 document.addEventListener('keydown',    _onFirstGesture, true);
 document.addEventListener('mousedown',  _onFirstGesture, true);
@@ -392,19 +566,15 @@ document.addEventListener('touchstart', _onFirstGesture, true);
 function toggleMute() {
   audioMuted = !audioMuted;
   try { localStorage.setItem(LS_MUTE, audioMuted ? '1' : '0'); } catch(e) {}
-  if (audioMuted) {
-    stopBGM();
-  } else if (phase !== 'startup') {
-    /* startup フェーズ中はBGM開始しない（ジングル完了後に開始される） */
-    ensureAudioRunning(startBGM);
-  }
+  /* ミュートは gain だけを制御する。BGMソースの起動・停止はしない。 */
+  applyMuteGain();
 }
 
 /* ── 効果音 ── */
-function playSE(name) {
+function playSE(name, atTime) {
   if (audioMuted || !audioCtx || audioCtx.state !== 'running') return;
   const ctx = audioCtx;
-  const t   = ctx.currentTime + 0.01;
+  const t   = atTime ?? (ctx.currentTime + 0.01);
   switch (name) {
     case 'shoot': {
       /* シュッ + 弦の放つ音 */
@@ -434,7 +604,7 @@ function playSE(name) {
       });
       playNoise(ctx, t, 0.2, 0.3, 200);
       /* 0.8秒後にBGM再開 */
-      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 900);
+      scheduleBGMRestart(900);
       break;
     }
     case 'medium': {
@@ -458,7 +628,7 @@ function playSE(name) {
       /* ベース */
       [noteHz('C',3), noteHz('G',3)].forEach((f, i) =>
         playOsc(ctx, 'sine', f, t + i*0.36, 0.6, 0.32, 0.2));
-      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 2000);
+      scheduleBGMRestart(2000);
       break;
     }
     case 'reach_jackpot': {
@@ -478,14 +648,14 @@ function playSE(name) {
       for (let i = 0; i < 8; i++)
         playOsc(ctx, 'sine', noteHz('C',6) * (1 + i*0.05), t + 0.9 + i*0.07, 0.08, 0.22, 0.05);
       playNoise(ctx, t, 0.3, 0.35, 100);
-      setTimeout(() => { if (!audioMuted && audioCtx) startBGM(); }, 2500);
+      scheduleBGMRestart(2500);
       break;
     }
     case 'miss': {
       /* ズコー: 下降音 */
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(masterGain ?? ctx.destination);
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(300, t);
       osc.frequency.exponentialRampToValueAtTime(80, t + 0.45);
@@ -608,12 +778,12 @@ function lsLoad() {
     const b = parseInt(localStorage.getItem(LS_BEST));
     const m = localStorage.getItem(LS_MUTE);
     const bv = parseInt(localStorage.getItem(LS_BET));
-    coins     = (c > 0) ? c : 100;
+    coins     = (c > 0) ? c : 60;
     bestCoins = (b > 0) ? b : coins;
     if (m !== null) audioMuted = (m === '1');
     if (BET_OPTIONS.includes(bv)) bet = bv;
   } catch(e) {
-    coins = 100; bestCoins = 100;
+    coins = 60; bestCoins = 60;
   }
 }
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
@@ -657,9 +827,10 @@ let jingleScheduler = null;
 let jingleStep = 0;
 let jingleNextTime = 0;
 
-const JINGLE_BPM  = BGM_BPM;               // BGMと同じ152BPM
-const JINGLE_BEAT = 60 / JINGLE_BPM;       // ~0.395s
-const J16         = JINGLE_BEAT / 4;        // ~0.099s 16分音符
+const JINGLE_BPM    = BGM_BPM;             // BGMと同じ152BPM
+const JINGLE_BEAT   = 60 / JINGLE_BPM;     // ~0.395s
+const J16           = JINGLE_BEAT / 4;     // ~0.099s 16分音符
+const SCHEDULE_AHEAD = 0.25;               // スケジューラの先読み時間（秒）
 
 /*
   ジングルをステップ番号→ノート情報のフラット配列に展開済み。
@@ -688,7 +859,8 @@ _jingleDef.forEach(e => { JINGLE_MAP[e.at] = e; });
 const JINGLE_TOTAL_STEPS = 40 + 17; // 最終ハイハット(52)から5step=1.25拍後にBGMイン
 
 function scheduleJingle(onEnd) {
-  if (!audioCtx || audioMuted) { stopJingle(); onEnd && onEnd(); return; }
+  if (!audioCtx) { stopJingle(); onEnd && onEnd(); return; }
+  /* audioMuted はチェックしない: gain=0 で無音になるだけでタイマーは正常に進める */
   const ctx = audioCtx;
   if (jingleNextTime < ctx.currentTime) jingleNextTime = ctx.currentTime + 0.01;
 
@@ -700,30 +872,29 @@ function scheduleJingle(onEnd) {
     const t     = jingleNextTime;
     const entry = JINGLE_MAP[jingleStep] ?? null;
 
+    const dest = bgmGain ?? ctx.destination; // ジングルもBGM gainノード経由
     if (entry && entry.countIn) {
       /* カウントインハイハット: 小さめノイズバースト */
-      playNoise(ctx, t, 0.035, 0.10, 9000);
+      playNoise(ctx, t, 0.035, 0.10, 9000, dest);
     } else if (entry) {
       const { n, o: oct, vol, kick, dur, long: isLong, slur: isSlur } = entry;
       /* 通常発音 */
-      /* isSlur: 2段階エンベロープ（vol→vol*0.35でゆっくり減衰→20msリリース）でスラー */
       const melDur    = isSlur ? dur        : dur * 0.85;
       const melDec    = isSlur ? 0.020      : 0.06;
       const bassDur   = isSlur ? dur * 1.05 : dur * 1.6;
       const basDec    = isSlur ? 0.025      : 0.10;
       const slurTgt   = isSlur ? vol * 0.35 : null;
-      /* 長音ビブラート: 0.5s 後にフェードイン、速さ5.5Hz、深さ±6cent相当 */
       const vib = isLong ? { rate: 5.5, depth: 6, delay: 0.5 } : null;
-      playOsc(ctx, 'triangle', noteHz(n, oct),     t, melDur,  vol,        melDec, slurTgt, vib);
-      playOsc(ctx, 'sine',     noteHz(n, oct - 1), t, bassDur, vol * 0.65, basDec, isSlur ? vol * 0.65 * 0.35 : null, vib);
+      playOsc(ctx, 'triangle', noteHz(n, oct),     t, melDur,  vol,        melDec, slurTgt, vib, dest);
+      playOsc(ctx, 'sine',     noteHz(n, oct - 1), t, bassDur, vol * 0.65, basDec, isSlur ? vol * 0.65 * 0.35 : null, vib, dest);
 
-      /* ハイハット: BGM と同じ周波数帯 */
-      playNoise(ctx, t, 0.04, 0.10, 8000);
+      /* ハイハット */
+      playNoise(ctx, t, 0.04, 0.10, 8000, dest);
 
-      /* バスドラム: BGMと同じパラメータ */
+      /* バスドラム */
       if (kick > 0) {
         const oo = ctx.createOscillator(), gg = ctx.createGain();
-        oo.connect(gg); gg.connect(ctx.destination);
+        oo.connect(gg); gg.connect(dest);
         oo.type = 'sine';
         oo.frequency.setValueAtTime(110, t);
         oo.frequency.exponentialRampToValueAtTime(40, t + 0.12);
@@ -743,9 +914,14 @@ function stopJingle() {
 }
 
 function playStartJingle(onEnd) {
-  if (audioMuted || !audioCtx || audioCtx.state !== 'running') {
+  /* audioMuted はチェックしない: gain=0 で無音のままジングルが完了し BGM に繋がる */
+  if (!audioCtx || audioCtx.state !== 'running') {
     onEnd && onEnd(); return;
   }
+  /* bgmSource がすでに存在する場合: ensureAudioRunning の非同期コールバックが
+     ゲームオーバー→リセット後に遅れて届いた可能性がある（競合状態）。
+     BGM はすでに起動済みなのでジングルを再生しない。 */
+  if (bgmSource) { return; }
   stopJingle();
   jingleStep    = 0;
   jingleNextTime = audioCtx.currentTime + 0.10;
@@ -755,30 +931,43 @@ function playStartJingle(onEnd) {
 /* ════════════════ Init ════════════════ */
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
-  lsLoad();      // 保存済みコイン・betを復元
+  lsLoad();      // 保存済みコイン・betを復元（audioMutedもここで確定する）
   lsLoadAch();   // 実績をロード
   lsLoadStats(); // 統計カウンターをロード
+  applyMuteGain(); // lsLoad()でaudioMutedが確定したのでmasterGainに反映
   if (!BET_OPTIONS.includes(bet)) bet = 1; // 未保存時のみデフォルト1
   isGameOver = false;
+  pendingShoot = false;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
 function gameOverReset() {
-  coins      = 100;
+  coins      = 60;
   bestCoins  = Math.max(bestCoins ?? 0, 0); // best はそのまま
   isGameOver = false;
-  lsSave();           // リセット後の100を保存
-  init();
+  missPopups   = []; // ゲームオーバーリセット時はポップアップ・演出もクリア
+  payoutPopups = [];
+  goParticles  = [];
+  pendingShoot = false;
+  lsSave();
+  /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
+  if (audioCtx) audioCtx.resume().catch(() => {});
+  startBGMTape();
+  init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
+  /* テープが加速完了するまで射撃を禁止。update()でrate≥0.99になったらidleに移行 */
+  phase = 'tapestart';
 }
 
-function init(fromStartup) {
+function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: ジングル再生 → 完了後に BGM 開始 */
-    ensureAudioRunning(() => playStartJingle(() => { if (!audioMuted) startBGM(); }));
+    /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音） */
+    ensureAudioRunning(() => playStartJingle(() => startBGM()));
   } else {
-    /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続） */
-    if (audioCtx && !bgmScheduler && !audioMuted) startBGM();
+    /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
+       ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
+    if (audioCtx && !bgmSource && !jingleScheduler) startBGM();
   }
+  const prevSlowSpin = isSlowSpin;
   isSlowSpin = Math.random() < 0.01; // 1%の確率で回転速度半減
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i]));
   curIdx     = 0;
@@ -808,10 +997,17 @@ function init(fromStartup) {
   canRestart  = false;
   betLocked   = false;
   shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
-  payoutAmt      = 0;
-  payoutTimer    = 0;
   isMissResult = false;
-  missPopups   = [];
+  /* missPopups / payoutPopups はトライをまたいで自然フェードアウトするため init でクリアしない */
+  /* スローイベント: 通常トライ切り替え時にBGMテンポをなめらかに変化させる
+     ゲームオーバーリカバリー時は tapestart→idle 移行時に処理するため除外 */
+  if (!fromStartup && !fromGameOver && bgmSource) {
+    if (isSlowSpin && !prevSlowSpin) {
+      rampBGMRate(0.5, 1200, 'easeOut'); // 通常→スロー: 1.2秒でテンポ半減
+    } else if (!isSlowSpin && prevSlowSpin) {
+      rampBGMRate(1.0, 1200, 'easeIn');  // スロー→通常: 1.2秒でテンポ復帰
+    }
+  }
   /* ベットが所持コインを超えていたら最大払える額に下げる */
   if (coins !== undefined) clampBet();
   worms      = [];
@@ -895,17 +1091,31 @@ function update() {
     for (const w of wheels) w.rot += w.speed; // ホイールだけ背景で回す
     return;
   }
+  if (phase === 'tapestart') {
+    /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期 */
+    const tapeRate = bgmSource ? Math.max(0, Math.min(1, bgmSource.playbackRate.value)) : 1;
+    for (const w of wheels) w.rot += w.speed * tapeRate;
+    /* テープ加速完了（色が完全に戻った）ら射撃解放 */
+    if (tapeRate >= 0.99) {
+      phase = 'idle';
+      /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
+      if (isSlowSpin) rampBGMRate(0.5, 1200, 'easeOut');
+      if (pendingShoot) { pendingShoot = false; onShoot(); }
+    }
+    return;
+  }
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
   }
 
   if (phase === 'shooting') {
-    arrowProgress = Math.min(1, arrowProgress + 0.085);
+    arrowProgress = Math.min(1, arrowProgress + 0.25); // 4f≈1/4拍で着弾（旧0.085=12f）
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
-      playSE('lock'); // 着弾・ロック音
+      /* 1〜3文字目: 抽選決定音（コツン）。4文字目はハズレ/当たりSEが決定音を兼ねる */
+      if (curIdx < 3) playSE('lock', nextBeatDivTime(4));
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
@@ -940,6 +1150,11 @@ function update() {
           lsSaveStats();
         }
         const isMedium = isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo;
+        /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
+        if (isSlowSpin && (isJackpot || isMedium)) {
+          rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
+          isSlowSpin = false; // バッジも連動してフェードアウト
+        }
         if (isMedium) playSE('medium');
         if (isGizagiza) { launchGizaFireworks(); checkMediumAch('gizagiza'); unlockAch('first_medium'); }
         if (isUyouyo)   { initWorms();            checkMediumAch('uyouyo');   unlockAch('first_medium'); }
@@ -954,15 +1169,34 @@ function update() {
         const payout = calcPayout();
         if (payout > 0) {
           coins += payout;
-          payoutAmt   = payout;
-          payoutTimer = 150;
+          payoutPopups.push({ amt: payout, timer: 150 });
           if (!isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
-        if (coins <= 0) { isGameOver = true; playSE('gameover'); }
+        if (coins <= 0) {
+          isGameOver = true;
+          stopBGMTape(); // テープが止まるような演出でBGMをフェードアウト
+          /* ゲームオーバー演出: ギヨウザが散らばって落ちるパーティクル */
+          goParticles = [];
+          const CHARS = ['ギ','ヨ','ウ','ザ','💀','😢','💸'];
+          for (let i = 0; i < 40; i++) {
+            goParticles.push({
+              x:    Math.random() * W,
+              y:    Math.random() * H * 0.6,
+              vx:   (Math.random() - 0.5) * 4,
+              vy:   Math.random() * -3 - 1,
+              rot:  Math.random() * Math.PI * 2,
+              rotV: (Math.random() - 0.5) * 0.18,
+              char: CHARS[Math.floor(Math.random() * CHARS.length)],
+              size: 18 + Math.random() * 24,
+              alpha:1,
+              life: 120 + Math.random() * 80,
+            });
+          }
+        }
         /* ハズレ判定 */
         if (!isJackpot && !isMedium) {
-          playSE('miss');
+          playSE('miss', nextBeatDivTime(4)); // 4文字目の決定音＝ハズレ音
           isMissResult = true;
           missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
         }
@@ -1025,16 +1259,29 @@ function update() {
   }
   particles = particles.filter(p => p.life > 0 && p.r > 0.3);
 
+
   if (phase === 'done') {
     endTimer++;
-    for (const p of missPopups) { if (p.timer > 0) p.timer--; }
-    missPopups = missPopups.filter(p => p.timer > 0);
-    const restartWait = (isJackpot||isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo) ? 130 : 55;
-    /* ハズレ: BPM=152の半拍(約0.197s)を少し割った0.18s≒11フレームで自動リセット */
-    if (isMissResult && !isGameOver && endTimer > 11) { init(); return; }
-    if (endTimer > restartWait) canRestart = true;
+    /* BPM=152: 1拍≈24f / 2拍≈48f / 4拍≈95f / 8拍≈190f
+       矢速4f(1/4拍) → 着弾後、BGM拍グリッドの境界点でidle解放
+       ハズレ    : 最小2f後、次の1/4拍境界で解放 → 合計≈6f(1/4拍)サイクル
+       通常当たり : 最小24f(1拍)後、次の1/4拍境界で解放
+       大当たり系 : 最小96f(4拍)後、次の1/4拍境界で解放
+       ゲームオーバー: クリック確認が必要なためcanRestart方式を維持 */
+    const isBigWin = isJackpot||isGizagiza||isUyouyo||isUzauza||isGiugiu||isGigigigi||isYoyoyoyo||isUuuu||isZazazaza||isGyogyo;
+    const minWait  = isMissResult ? 2 : isBigWin ? 96 : 24;
+    /* 4文字目の結果が完全に表示されてからリセット */
+    const allShown = wheels.every(w => !w.result || w.resultPop >= 1);
+    if (!isGameOver && endTimer > minWait && allShown && onBeatGrid()) {
+      const fire = pendingShoot; init();
+      if (fire) { pendingShoot = false; shootGuard = 0; onShoot(); }
+      return;
+    }
+    /* 非ゲームオーバー: 結果表示完了後はクリック早送りも可 */
+    if (!isGameOver && endTimer > minWait && allShown) canRestart = true;
+    /* ゲームオーバー時のみクリック確認必須 */
+    if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
-    if (payoutTimer > 0) payoutTimer--;
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (isJackpot && endTimer % 85 === 40) launchFireworks();
     if (isJackpot)  updateGyozas();
@@ -1047,6 +1294,22 @@ function update() {
     if (isUuuu)     updateUuuu();
     if (isZazazaza) updateZazazaza();
   }
+  /* ────────────────────────────────────────────────
+     大ゲームスコープ: phaseをまたいで常時更新すべきもの
+     ──────────────────────────────────────────────── */
+  /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
+  for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
+  for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
+  missPopups   = missPopups.filter(p => p.timer > 0);
+  payoutPopups = payoutPopups.filter(p => p.timer > 0);
+  /* ゲームオーバーパーティクル */
+  for (const p of goParticles) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.15; p.vx *= 0.99;
+    p.rot += p.rotV; p.life--;
+    p.alpha = Math.min(1, p.life / 30);
+  }
+  goParticles = goParticles.filter(p => p.life > 0);
   /* 実績バナータイマー（phaseに関係なく常時更新） */
   if (achBannerTimer > 0) {
     achBannerTimer--;
@@ -1054,6 +1317,10 @@ function update() {
   } else if (achBannerQueue.length > 0) {
     achBannerCurrent = achBannerQueue.shift();
     achBannerTimer   = 200;
+  }
+  /* スローランプ完了: タイムスタンプをリセット */
+  if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime >= slowRampEndTime) {
+    slowRampEndTime = 0;
   }
 }
 
@@ -2166,6 +2433,16 @@ function draw() {
   ctx.save();
   ctx.translate(shakeX, shakeY);
 
+  /* テープ速度に連動したグレースケールフィルター
+     BGMが遅いほど色が失われ、再開とともに色が戻る */
+  if (bgmSource) {
+    const rate = Math.max(0.001, Math.min(1, bgmSource.playbackRate.value));
+    if (rate < 0.995) {
+      const gray = Math.round((1 - rate) * 90); // 最大90%（完全モノクロにはしない）
+      ctx.filter = `grayscale(${gray}%)`;
+    }
+  }
+
   /* 背景 */
   const bg = ctx.createLinearGradient(0,0,0,H);
   bg.addColorStop(0,'#145c24'); bg.addColorStop(0.5,'#0f5020'); bg.addColorStop(1,'#0a3d18');
@@ -2228,7 +2505,7 @@ function draw() {
      ─────────────────────────────────────────────── */
 
   /* 1. オーバーレイ（ハズレは暗幕なし） */
-  if (phase==='done'&&endTimer>45&&!isMissResult) drawEndOverlay();
+  if (phase==='done'&&endTimer>45&&!isMissResult&&!isGameOver) drawEndOverlay();
   if (phase==='reach')              drawReachOverlay();
 
   /* 2. エフェクト面 */
@@ -2254,13 +2531,17 @@ function draw() {
   }
 
   /* 3. テキスト最前面 */
-  if (phase==='done'&&endTimer>45&&!isMissResult) drawEndScreen();
-  /* ハズレポップアップ: 暗幕なし・endTimer制限なし */
-  if (missPopups.length > 0) drawMissPopup(); // phaseを問わず表示（次ゲーム中も残る）
+  if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)) drawEndScreen();
+  /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
+  if (missPopups.length > 0)   drawMissPopup();
+  if (payoutPopups.length > 0) drawPayoutPopup();
   if (phase==='reach')              drawReachText();
 
   /* スタートアップ画面 */
   drawStartup();
+
+  /* スローハンドバッジ（最前面・上部中央） */
+  drawSlowHandBadge();
 
   /* 実績バナー・オーバーレイ（最前面） */
   drawAchBanner();
@@ -2869,6 +3150,26 @@ function drawMissPopup() {
   ctx.restore();
 }
 
+function drawPayoutPopup() {
+  if (payoutPopups.length === 0) return;
+  const TOTAL = 150;
+  ctx.save();
+  ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#ffcc00'; ctx.shadowBlur = 30;
+  for (const p of payoutPopups) {
+    const pt      = p.timer / TOTAL;
+    const elapsed = TOTAL - p.timer;
+    const fadeIn  = Math.min(1, elapsed / 15);
+    const fadeOut = pt < 0.2 ? pt / 0.2 : 1;
+    const alpha   = fadeIn * fadeOut;
+    const popY    = H / 2 - 60 - (1 - pt) * 30;
+    ctx.globalAlpha = alpha * 0.95;
+    outText(`＋${fmt(p.amt)}ギヨウザ！`, W / 2, popY, '#ffee44', 'rgba(0,0,0,0.9)', 8);
+  }
+  ctx.restore();
+}
+
 function drawEndOverlay() {
   const alpha = Math.min(1,(endTimer-45)/35);
   /* 大当たりはギヨウザを見せるため薄め、ウザウザも半透明 */
@@ -3066,43 +3367,107 @@ function drawEndScreen() {
   /* ━━ ハズレ: drawMissPopup() で描画 ━━ */
   } else { /* miss */ }
 
-  /* 獲得ポップアップ */
-  if (payoutTimer > 0 && payoutAmt > 0) {
-    const pt = payoutTimer / 150;
-    const popAlpha = pt < 0.2 ? pt / 0.2 : pt > 0.7 ? (pt - 0.7) / 0.3 * -1 + 1 : 1;
-    const popY = cy - 60 - (1 - pt) * 30;
-    ctx.save();
-    ctx.globalAlpha = popAlpha * 0.95;
-    ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.shadowColor = Y; ctx.shadowBlur = 30;
-    outText(`＋${fmt(payoutAmt)}ギヨウザ！`, W/2, popY, Y, 'rgba(0,0,0,0.9)', 8);
-    ctx.restore();
-  }
+  /* 獲得ポップアップは常時描画ブロック（drawPayoutPopup）で描画 */
 
   /* ゲームオーバー */
   if (isGameOver) {
     ctx.save();
-    ctx.globalAlpha = alpha;
-    /* 暗幕強化 */
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+
+    /* 赤い暗幕（フェードイン） */
+    ctx.globalAlpha = alpha * 0.72;
+    ctx.fillStyle = 'rgba(60,0,0,1)';
     ctx.fillRect(0, 0, W, H);
-    ctx.font = `bold 62px 'Hiragino Mincho ProN',serif`;
+
+    /* ゲームオーバーパーティクル（文字が舞い落ちる） */
+    ctx.globalAlpha = 1;
+    for (const p of goParticles) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * alpha;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.font = `bold ${p.size}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ff6644';
+      ctx.fillText(p.char, 0, 0);
+      ctx.restore();
+    }
+
+    /* タイトルテキスト（ゆらゆら揺れる） */
+    const shake = endTimer > 10 ? 0 : (10 - endTimer) * 1.5;
+    const sx = (Math.random() - 0.5) * shake;
+    const sy = (Math.random() - 0.5) * shake;
+    ctx.globalAlpha = alpha;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.font = `bold ${IS_PORTRAIT ? 44 : 56}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.shadowColor = '#ff4422'; ctx.shadowBlur = 40;
-    outText('ギヨウザがなくなりました', W/2, H/2 - 30, '#ff8866', 'rgba(0,0,0,0.92)', 9);
-    ctx.shadowBlur = 0;
+    ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 50;
+    outText('ギヨウザがなくなりました', W/2, H/2 - 30, '#ff8866', 'rgba(40,0,0,0.95)', 9);
+    ctx.restore();
+
+    /* 再スタート案内（点滅） */
     if (canRestart) {
       const blink = 0.45 + 0.45 * Math.sin(endTimer * 0.1);
-      ctx.globalAlpha = blink;
+      ctx.globalAlpha = blink * alpha;
+      ctx.shadowBlur = 0;
       ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       outText(
-        IS_TOUCH ? '[ タップ ] で100ギヨウザに戻す' : '[ スペース ] で100ギヨウザに戻す',
-        W/2, H/2 + 50, '#ffe0d0', 'rgba(0,0,0,0.85)', 5
+        'ギヨウザを10パック買って出直す',
+        W/2, H/2 + 55, '#ffe0d0', 'rgba(0,0,0,0.85)', 5
       );
     }
     ctx.restore();
   }
+  ctx.restore();
+}
+
+/* ── スローハンド発動中バッジ（上部中央、BGMレートに連動してフェード） ── */
+function drawSlowHandBadge() {
+  if (phase === 'startup') return;
+  const rate = bgmSource ? Math.max(0, Math.min(1, bgmSource.playbackRate.value)) : 1;
+  /* rate: 1.0=通常→0, 0.5=スロー→1 に線形マッピング */
+  const alpha = Math.max(0, Math.min(1, (1.0 - rate) * 2));
+  if (alpha < 0.01) return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  const text  = '🐌  ス ロ ー ハ ン ド  発 動 中';
+  const fs    = IS_PORTRAIT ? 13 : 14;
+  ctx.font    = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  const tw    = ctx.measureText(text).width;
+  const padX  = 18, padY = 7;
+  const bw    = tw + padX * 2;
+  const bh    = fs + padY * 2;
+  const bx    = (W - bw) / 2;
+  const by    = IS_PORTRAIT ? 10 : 8;
+
+  /* 背景ピル */
+  ctx.beginPath();
+  const r = bh / 2;
+  ctx.moveTo(bx + r, by);
+  ctx.lineTo(bx + bw - r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.lineTo(bx + bw, by + bh - r);
+  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
+  ctx.lineTo(bx + r, by + bh);
+  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
+  ctx.lineTo(bx, by + r);
+  ctx.arcTo(bx, by, bx + r, by, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(20,10,60,0.82)';
+  ctx.fill();
+  ctx.strokeStyle = `rgba(160,130,255,${0.7 * alpha})`;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  /* テキスト */
+  ctx.fillStyle = '#e8d8ff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, W / 2, by + bh / 2);
+
   ctx.restore();
 }
 
@@ -3393,6 +3758,33 @@ function onShoot(){
     arrowSX=W/2; arrowSY=H+30; arrowTX=w.x; arrowTY=w.y-WR-5;
   }
 }
+/* クリック/タップの共通処理
+   - idle/reach       : 即時発射
+   - done(非GO)       : 先打ちバッファ登録。canRestartなら即時リセット＋発射
+   - done(GO)         : canRestartなら gameOverReset
+   - tapestart        : 先打ちバッファ登録（解放時に自動発射）
+   - shooting(4本目)  : 先打ちバッファ登録（着弾→done→idle移行時に自動発射）
+   その他フェーズ     : 無視 */
+function handleGameClick() {
+  if (phase === 'done') {
+    if (isGameOver) { if (canRestart) gameOverReset(); return; }
+    /* 非ゲームオーバー: 結果文字を即座に完全表示してからバッファ登録 */
+    wheels.forEach(w => { if (w.result) w.resultPop = 1; });
+    pendingShoot = true;
+    if (canRestart) {
+      /* 待機時間を即時スキップしてそのまま発射 */
+      init(); pendingShoot = false; shootGuard = 0; onShoot();
+    }
+    return;
+  }
+  if (phase === 'tapestart') { pendingShoot = true; return; }
+  /* 4本目の矢が飛行中（curIdx===3）にクリックした場合、着弾→done直後にそのまま発射 */
+  if (phase === 'shooting' && curIdx === 3) { pendingShoot = true; return; }
+  /* スローランプ中（BGMテンポ加減速）はクリックを無視: せっかくの演出を邪魔しない */
+  if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime) return;
+  onShoot(); // idle / reach
+}
+
 const CHEAT_MAP = { 'KeyG':'ギ', 'KeyY':'ヨ', 'KeyU':'ウ', 'KeyZ':'ザ' };
 
 function cheatShoot(char) {
@@ -3415,11 +3807,7 @@ document.addEventListener('keydown', e=>{
   }
   if (e.code==='Space') {
     e.preventDefault();
-    if (phase==='done'&&canRestart) {
-      if (isGameOver) gameOverReset(); else init();
-    } else {
-      onShoot();
-    }
+    handleGameClick();
     return;
   }
   /* カーソル左右でBET変更 */
@@ -3437,6 +3825,19 @@ document.addEventListener('keydown', e=>{
     e.preventDefault();
     try { localStorage.clear(); } catch(err) {}
     location.reload();
+  }
+  /* デバッグ: Ctrl+T → スローイベント強制トグル */
+  if (e.code === 'KeyT' && e.ctrlKey) {
+    e.preventDefault();
+    const prev = isSlowSpin;
+    isSlowSpin = !isSlowSpin;
+    if (isSlowSpin && !prev) {
+      rampBGMRate(0.5, 1200, 'easeOut');
+    } else if (!isSlowSpin && prev) {
+      rampBGMRate(1.0, 1200, 'easeIn');
+    }
+    /* ホイール速度も即時反映（現在スピンしているホイールを再生成） */
+    wheels.forEach(w => { w.speed *= isSlowSpin ? 0.5 : 2; });
   }
 });
 
@@ -3466,11 +3867,7 @@ canvas.addEventListener('mousedown', e=>{
     if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
     if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
   }
-  if (phase==='done'&&canRestart) {
-    if (isGameOver) gameOverReset(); else init();
-  } else {
-    onShoot();
-  }
+  handleGameClick();
 });
 
 /* タッチ操作対応（ページ内どこでもタップで反応） */
@@ -3505,11 +3902,7 @@ document.addEventListener('touchstart', e=>{
     if (incBtn && hitTest(incBtn, pt.x, pt.y)) { changeBet(+1); return; }
   }
 
-  if (phase==='done'&&canRestart) {
-    if (isGameOver) gameOverReset(); else init();
-  } else {
-    onShoot();
-  }
+  handleGameClick();
 }, { passive: false });
 
 /* ── キャンバスをビューポートに合わせてスケール ── */
