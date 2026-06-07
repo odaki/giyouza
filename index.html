@@ -105,7 +105,7 @@ const WR  = IS_PORTRAIT ? 66  : 95;
 const WXS = IS_PORTRAIT ? [185, 185, 185, 185] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
    コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
-const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [225, 225, 225, 225];
+const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [235, 235, 235, 235];
 const WY  = WYS[0]; // 後方互換 (PC=255, portrait=169)
 
 /* ── game state ── */
@@ -255,6 +255,14 @@ function onBeatGrid() {
   /* 1/3拍グリッドも許容（三連符でクリックする人向け）*/
   const ph3 = ((audioCtx.currentTime - bgmPhaseRef) % BEAT_DIV3) / BEAT_DIV3;
   return ph3 < 0.25 || ph3 > 0.75;
+}
+
+/* 1拍周期でキックに合わせた拍動値を返す（0-1、ビート直後=1、急速減衰）
+   pow(,2) で easeOut 的な鋭いアタック感を演出 */
+function getBeatPulse() {
+  if (!audioCtx || bgmPhaseRef === null) return 0;
+  const ph = ((audioCtx.currentTime - bgmPhaseRef) % BGM_BEAT) / BGM_BEAT;
+  return Math.pow(Math.max(0, 1 - ph * 2.5), 2); // ~160ms で減衰（0.4拍）
 }
 
 /* 現在の入力タイミングがビートにどれだけ近いかを 0-1 で返す
@@ -2689,8 +2697,10 @@ function draw() {
 
 function drawWheel(i) {
   const w=wheels[i], active=i===curIdx&&(phase==='idle'||phase==='reach');
+  /* ビート拍動: アクティブホイールの強調度をキックに合わせてパルス */
+  const bp = active ? getBeatPulse() : 0; // 0-1、ビート直後=1
   ctx.save(); ctx.translate(w.x,w.y);
-  if (active){ctx.shadowColor=Y;ctx.shadowBlur=50;}
+  if (active){ctx.shadowColor=Y;ctx.shadowBlur=50 + bp * 40;}
 
   for (const s of w.segs) {
     const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
@@ -2710,7 +2720,12 @@ function drawWheel(i) {
   ctx.shadowBlur=0;
 
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
-  ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5:2; ctx.stroke();
+  ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
+  /* ビート拍動: 外側に広がる拍動リング */
+  if (bp > 0.01) {
+    ctx.beginPath(); ctx.arc(0,0,WR+12+bp*14,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(245,208,32,${bp*0.55})`; ctx.lineWidth=2+bp*2; ctx.stroke();
+  }
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
 
@@ -2719,7 +2734,7 @@ function drawWheel(i) {
   hg.addColorStop(0,'#fffde7'); hg.addColorStop(1,YD);
   ctx.fillStyle=hg; ctx.fill();
 
-  if(active||w.locked){ctx.shadowColor=w.locked?'#ff4422':Y;ctx.shadowBlur=18;}
+  if(active||w.locked){ctx.shadowColor=w.locked?'#ff4422':Y;ctx.shadowBlur=18+bp*18;}
   /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き) */
   if (IS_PORTRAIT) {
     ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
