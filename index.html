@@ -3928,9 +3928,9 @@ const _syncColorBuf = ['', '', 0];
 function _syncBarColor(r) {
   /* 0=グレー → 0.4=赤 → 0.6=黄 → 0.8=緑 → 1.0=ゴールド */
   if (r >= 0.9) { _syncColorBuf[0]='#f5d020'; _syncColorBuf[1]='#f5a623'; _syncColorBuf[2]=1.0; return _syncColorBuf; }
-  if (r >= 0.7) { const t=(r-0.7)/0.2; _syncColorBuf[0]=`rgb(${Math.round(60+155*t)},200,40)`; _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
-  if (r >= 0.5) { const t=(r-0.5)/0.2; _syncColorBuf[0]=`rgb(220,${Math.round(100+100*t)},30)`; _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
-  if (r >= 0.3) { const t=(r-0.3)/0.2; _syncColorBuf[0]=`rgb(200,${Math.round(60*t)},30)`; _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
+  if (r >= 0.7) { const t=(r-0.7)/0.2; _syncColorBuf[0]=`rgb(${(60+155*t)|0},200,40)`;    _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
+  if (r >= 0.5) { const t=(r-0.5)/0.2; _syncColorBuf[0]=`rgb(220,${(100+100*t)|0},30)`;  _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
+  if (r >= 0.3) { const t=(r-0.3)/0.2; _syncColorBuf[0]=`rgb(200,${(60*t)|0},30)`;       _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
   _syncColorBuf[0]='rgba(130,130,130,0.9)'; _syncColorBuf[1]='#888'; _syncColorBuf[2]=0.5; return _syncColorBuf;
 }
 
