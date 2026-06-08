@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.48';
+const VERSION = 'v1.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -528,9 +528,12 @@ function getBeatPulse() {
 function calcSyncScore(atTime) {
   if (!audioCtx || bgmPhaseRef === null) return 0.5;
   const t = (atTime ?? audioCtx.currentTime) - SYNC_TIMING_OFFSET;
-  const ph = ((t - bgmPhaseRef) % BEAT_DIV4) / BEAT_DIV4;
-  const dist = ph < 0.5 ? ph : 1 - ph; // 0=完璧, 0.5=最悪
-  return 1 - dist * 2;                  // 1=完璧, 0=最悪
+  /* キック（4つ打ち=4分音符グリッド）からの絶対時間距離で判定
+     JUST:±50ms→score≥0.667, GOOD:±100ms→score≥0.333, OK:±150ms→score>0 */
+  const ph = ((t - bgmPhaseRef) % BGM_BEAT + BGM_BEAT) % BGM_BEAT; // 0〜BGM_BEAT
+  const distSec = ph < BGM_BEAT / 2 ? ph : BGM_BEAT - ph;          // 最近傍キックまでの距離
+  const distMs  = distSec * 1000;
+  return Math.max(0, 1 - distMs / 150);  // 0ms→1.0, 150ms→0.0, 150ms超→0
 }
 
 /* 次の1/4拍グリッド境界点のaudioCtx時刻を返す（SE先読みスケジュール用） */
@@ -681,8 +684,8 @@ const BGM_BASS = [
 /* ハイハット: 偶数ステップ=強, 奇数=弱 */
 const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
                  0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
-/* バスドラム: ステップ0,4,8,12 */
-const BGM_KICK = new Set([0,4,8,12]);
+/* バスドラム: 全拍打ち（4つ打ち）ステップ0,2,4,6,8,10,12,14 */
+const BGM_KICK = new Set([0,2,4,6,8,10,12,14]);
 /* 1ループの長さ（秒）*/
 const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
@@ -3033,7 +3036,7 @@ function draw() {
   if (audioMuted && phase !== 'startup') {
     const pulse = getBeatPulse();
     if (pulse > 0) {
-      const lw = pulse * 12; // 最大12px
+      const lw = pulse * 6; // 最大6px
       ctx.save();
       ctx.strokeStyle = `rgba(245,208,32,${0.3 + pulse * 0.55})`;
       ctx.lineWidth = lw;
@@ -4296,15 +4299,15 @@ function onShoot(_inputAudioTime){
     }
     /* JUST/GOOD/OK 演出: 連続してsyncRate≥0.5になってから表示 */
     if (syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
-      if (score >= 0.50) {
+      if (score >= 0.667) {        // ±50ms以内 → JUST
         syncJustLabel = 'JUST!'; syncChain++;
         playSE('sync_just');
-      } else if (score >= 0.30) {
+      } else if (score >= 0.333) { // ±100ms以内 → GOOD
         syncJustLabel = 'GOOD';  syncChain++;
         playSE('sync_just');
-      } else if (score >= 0.10) {
+      } else if (score > 0) {      // ±150ms以内 → OK
         syncJustLabel = 'OK';    syncChain = 0;
-      } else {
+      } else {                     // ±150ms超 → NG
         syncJustLabel = '';      syncChain = 0;
       }
       if (syncJustLabel) { syncJustTimer = 50; syncJustScore = score; }
