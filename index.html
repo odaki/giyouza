@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.46';
+const VERSION = 'v1.47';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -259,8 +259,8 @@ const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 
 const PAYOUT_RATE = {
   reachJackpot: 50,
   jackpot:      20,
-  hitMed4:       4,  // GIZAGIZA/UYOUYO/GIUGIU/GYOGYO
-  hitMed3:       3,  // GIGIGIGI/YOYOYOYO/UUUU/ZAZAZAZA
+  hitMed4:      10,  // GIZAGIZA/UYOUYO/GIUGIU/GYOGYO
+  hitMed3:       5,  // GIGIGIGI/YOYOYOYO/UUUU/ZAZAZAZA
 };
 let coins, bet, betLocked, isGameOver;
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
