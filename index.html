@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.58';
+const VERSION = 'v1.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -563,8 +563,15 @@ function _bgmAccumStep() {
   _bgmAccumAudioTime += dt * _getBgmRateJS();
 }
 
+/* getBeatPulse: 同一フレーム内で複数回呼ばれるためフレームキャッシュを使用 */
+let _beatPulseCache = 0, _beatPulseCacheFrame = -1;
 function getBeatPulse() {
-  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0;
+  /* 同じフレーム内の2回目以降はキャッシュを返す（_bgmAccumStepはupdate先頭で1回呼ばれる） */
+  if (_beatPulseCacheFrame === _bgmAccumLastWall) return _beatPulseCache;
+  _beatPulseCacheFrame = _bgmAccumLastWall;
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) {
+    return (_beatPulseCache = 0);
+  }
   /* playbackRate変動を考慮した音声バッファ内位置を計算。
      _bgmAccumAudioTime は audioCtx.currentTime 基準なので outputLatency 分を引いて
      実際にスピーカーから出ている音に揃え、さらに描画パイプライン分だけ先読みする。
@@ -576,7 +583,7 @@ function getBeatPulse() {
   const loopN     = Math.floor(rawPos / _bgmQuantizedLoopDur);
   const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
   const ph = (((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
-  return Math.pow(Math.max(0, 1 - ph * 2.5), 2); // ~160ms で減衰（0.4拍）
+  return (_beatPulseCache = Math.pow(Math.max(0, 1 - ph * 2.5), 2)); // ~160ms で減衰（0.4拍）
 }
 
 /* 現在の入力タイミングがビートにどれだけ近いかを 0-1 で返す
@@ -1192,14 +1199,15 @@ const LS_BEST  = 'giyouza_best';
 const LS_MUTE  = 'giyouza_mute';
 const LS_BET   = 'giyouza_bet';
 function lsSave() {
-  try {
-    localStorage.setItem(LS_COINS, coins);
-    localStorage.setItem(LS_BET, bet);
-    if (coins > bestCoins) {
-      bestCoins = coins;
-      localStorage.setItem(LS_BEST, bestCoins);
-    }
-  } catch(e) {}
+  /* _idle でアイドル時に書き込み（ゲームループのフレーム予算を削らない） */
+  const _c = coins, _b = bet;
+  if (_c > bestCoins) bestCoins = _c; // bestCoins は同期更新（表示に使うため）
+  const _best = bestCoins;
+  _idle(() => { try {
+    localStorage.setItem(LS_COINS, _c);
+    localStorage.setItem(LS_BET, _b);
+    localStorage.setItem(LS_BEST, _best);
+  } catch(e) {} });
 }
 function lsLoad() {
   try {
@@ -3142,6 +3150,18 @@ function draw() {
   ctx.restore(); // end shake
 }
 
+/* ── BETボタン描画ヘルパー: 関数外に置いてクロージャ毎フレーム生成を排除 ── */
+function _drawBetBtn(rect, label, canChange, fontSize) {
+  roundRect(rect.x, rect.y, rect.w, rect.h, 8);
+  ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
+  ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
+  ctx.lineWidth = 1.4; ctx.stroke();
+  ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+}
+
 function drawWheel(i) {
   const w=wheels[i], active=i===curIdx&&(phase==='idle'||phase==='reach');
   /* ビート拍動: アクティブホイールの強調度をキックに合わせてパルス */
@@ -3360,23 +3380,12 @@ function drawBottomBar() {
   const btnH = 50, btnY = BAR_Y + (BAR_H - btnH) / 2;
   const cx = W / 2, cy = btnY + btnH / 2;
 
-  const drawBetBtn = (rect, label, canChange) => {
-    roundRect(rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
-    ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
-    ctx.lineWidth = 1.4; ctx.stroke();
-    ctx.font = `bold 26px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
-    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
-  };
-
   const _betRampLocked = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
   const canDec = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
   const canInc = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') &&
     _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
-  drawBetBtn(BET_DEC_BTN, '◀', canDec);
-  drawBetBtn(BET_INC_BTN, '▶', canInc);
+  _drawBetBtn(BET_DEC_BTN, '◀', canDec, 26);
+  _drawBetBtn(BET_INC_BTN, '▶', canInc, 26);
 
   /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
   ctx.textBaseline = 'middle';
@@ -3419,24 +3428,13 @@ function drawPortraitBottomBar() {
   const decRect = P_BET_DEC_BTN;  // { x:27, y:747, w:84, h:36 }
   const incRect = P_BET_INC_BTN;  // { x:309, y:747, w:84, h:36 }
 
-  const drawBetBtn = (rect, label, canChange) => {
-    roundRect(rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
-    ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
-    ctx.lineWidth = 1.4; ctx.stroke();
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
-    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
-  };
-
   /* ボタン: 確定中またはスローランプ中は両方とも非活性 */
   const _betRampLockedP = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
   const canDec = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
   const canInc = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') &&
     _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
-  drawBetBtn(decRect, '◀', canDec);
-  drawBetBtn(incRect, '▶', canInc);
+  _drawBetBtn(decRect, '◀', canDec, 22);
+  _drawBetBtn(incRect, '▶', canInc, 22);
 
   /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
   const cx = W / 2, cy = btnY + btnH / 2;
@@ -3932,13 +3930,15 @@ function drawEndScreen() {
 }
 
 /* ── ビートシンクメーター ── */
+/* _syncBarColor: 毎フレーム配列を new しないよう固定バッファを再利用 */
+const _syncColorBuf = ['', '', 0];
 function _syncBarColor(r) {
   /* 0=グレー → 0.4=赤 → 0.6=黄 → 0.8=緑 → 1.0=ゴールド */
-  if (r >= 0.9) return ['#f5d020', '#f5a623', 1.0]; // ゴールド
-  if (r >= 0.7) { const t=(r-0.7)/0.2; return [`rgb(${Math.round(60+155*t)},200,40)`, '#40c840', 0.85]; }
-  if (r >= 0.5) { const t=(r-0.5)/0.2; return [`rgb(220,${Math.round(100+100*t)},30)`, '#ddc020', 0.75]; }
-  if (r >= 0.3) { const t=(r-0.3)/0.2; return [`rgb(200,${Math.round(60*t)},30)`, '#c83020', 0.65]; }
-  return ['rgba(130,130,130,0.9)', '#888', 0.5];
+  if (r >= 0.9) { _syncColorBuf[0]='#f5d020'; _syncColorBuf[1]='#f5a623'; _syncColorBuf[2]=1.0; return _syncColorBuf; }
+  if (r >= 0.7) { const t=(r-0.7)/0.2; _syncColorBuf[0]=`rgb(${Math.round(60+155*t)},200,40)`; _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
+  if (r >= 0.5) { const t=(r-0.5)/0.2; _syncColorBuf[0]=`rgb(220,${Math.round(100+100*t)},30)`; _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
+  if (r >= 0.3) { const t=(r-0.3)/0.2; _syncColorBuf[0]=`rgb(200,${Math.round(60*t)},30)`; _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
+  _syncColorBuf[0]='rgba(130,130,130,0.9)'; _syncColorBuf[1]='#888'; _syncColorBuf[2]=0.5; return _syncColorBuf;
 }
 
 function drawSyncMeter() {
@@ -3972,10 +3972,10 @@ function drawSyncMeter() {
 
   /* 目盛り線（25% / 50% / 75%） */
   ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
-  [0.25, 0.5, 0.75].forEach(t => {
-    const lx = mx + mw * t;
+  for (let _ti = 0; _ti < 3; _ti++) {
+    const lx = mx + mw * (_ti === 0 ? 0.25 : _ti === 1 ? 0.5 : 0.75);
     ctx.beginPath(); ctx.moveTo(lx, by); ctx.lineTo(lx, by + bh); ctx.stroke();
-  });
+  }
 
   /* テキスト（ゲージ上に重ねる） */
   ctx.font = `bold 9px monospace`;
