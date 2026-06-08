@@ -25,7 +25,8 @@ h1 {
 canvas {
   display: block;
   box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 3px #c8a800;
-  touch-action: manipulation;
+  touch-action: none; /* スクロール・ズームを完全に無効化してタッチ遅延を排除 */
+  will-change: filter; /* filter変化をGPUレイヤーで処理してメインスレッドへの影響を軽減 */
 }
 /* 横向き小型画面: タイトルを非表示にしてキャンバスを最大化 */
 @media (max-height: 480px) and (orientation: landscape) {
@@ -81,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.59';
+const VERSION = 'v1.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -114,6 +115,9 @@ const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [235, 235, 235, 235];
 /* ── キャッシュ（canvas生成後に初期化） ── */
 let bgGradient = null;   // 背景グラジェント（fitCanvas後に1回生成）
 let _lastFilter = '';    // canvas.style.filter の前回値（変化時のみ書き込み）
+/* getBoundingClientRect() キャッシュ: 入力ハンドラ内での強制レイアウトを排除
+   fitCanvas（リサイズ時）にのみ更新する */
+let _canvasRect = { left: 0, top: 0, width: 1, height: 1 };
 let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（playNoise用、毎回生成しない）
 
 /* ── 静的レイヤーキャッシュ ──
@@ -3540,10 +3544,9 @@ function drawBow() {
 
 /* タッチ座標をキャンバス座標に変換 */
 function touchToCanvas(touch) {
-  const rect = canvas.getBoundingClientRect();
   return {
-    x: (touch.clientX - rect.left) * (W / rect.width),
-    y: (touch.clientY - rect.top)  * (H / rect.height),
+    x: (touch.clientX - _canvasRect.left) * (W / _canvasRect.width),
+    y: (touch.clientY - _canvasRect.top)  * (H / _canvasRect.height),
   };
 }
 
@@ -4523,9 +4526,9 @@ canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
   /* 入力物理発生時刻をオーディオ時刻に換算（ハンドラ到達前の遅延を補正） */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
-  const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (W / rect.width);
-  const cy = (e.clientY - rect.top)  * (H / rect.height);
+  /* _canvasRect キャッシュを使用（getBoundingClientRect() 強制レイアウトを排除） */
+  const cx = (e.clientX - _canvasRect.left) * (W / _canvasRect.width);
+  const cy = (e.clientY - _canvasRect.top)  * (H / _canvasRect.height);
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
@@ -4630,6 +4633,9 @@ function fitCanvas() {
     fsEl.style.height = Math.round(FS_BTN_RECT.h * scale) + 'px';
     fsEl.style.right  = '';
   }
+
+  /* _canvasRect キャッシュを更新: 入力ハンドラ内での getBoundingClientRect() 強制レイアウトを排除 */
+  requestAnimationFrame(() => { _canvasRect = canvas.getBoundingClientRect(); });
 }
 window.addEventListener('resize', fitCanvas);
 window.addEventListener('orientationchange', () => setTimeout(() => location.reload(), 300));
