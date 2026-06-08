@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.53';
+const VERSION = 'v1.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3605,10 +3605,13 @@ function drawEndScreen() {
   if (alpha<0.6){ctx.restore();return;}
 
   const cy=H/2-25;
-  /* 縦画面(W=420)は横画面(W=1060)基準のフォントサイズをスケールダウン */
-  const _fsc = IS_PORTRAIT ? 0.58 : 1.0;
-  const _fs  = s => Math.round(s * _fsc); // フォントサイズ変換
-  const _fy  = y => Math.round(y * _fsc); // y オフセット変換
+  /* 縦画面(W=420)は横画面(W=1060)基準のフォントサイズをスケールダウン
+     「超大当たり！！」は7文字のため幅制約が厳しく個別に小さめのスケールを使用 */
+  const _fsc  = IS_PORTRAIT ? 0.72 : 1.0; // 通常テキスト用
+  const _fscR = IS_PORTRAIT ? 0.62 : 1.0; // 超大当たり！！タイトル用（7文字）
+  const _fs   = s => Math.round(s * _fsc);
+  const _fsR  = s => Math.round(s * _fscR);
+  const _fy   = y => Math.round(y * _fsc);
 
   /* ━━ 大当たり ━━ */
   if (isJackpot) {
@@ -3620,25 +3623,25 @@ function drawEndScreen() {
       ctx.save(); ctx.translate(W/2, cy); ctx.scale(pulse, pulse);
 
       /* 虹色の大光輪 */
-      const haloR = ctx.createRadialGradient(0,0,_fs(30),0,0,_fs(280));
+      const haloR = ctx.createRadialGradient(0,0,_fsR(30),0,0,_fsR(280));
       const hue = (endTimer * 2) % 360;
       haloR.addColorStop(0,   `hsla(${hue},100%,70%,0.45)`);
       haloR.addColorStop(0.5, `hsla(${(hue+120)%360},100%,60%,0.2)`);
       haloR.addColorStop(1,   'rgba(0,0,0,0)');
       ctx.fillStyle = haloR;
-      ctx.beginPath(); ctx.arc(0,0,_fs(280),0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0,0,_fsR(280),0,Math.PI*2); ctx.fill();
 
       /* 虹色グラデーションテキスト */
-      ctx.font = `bold ${_fs(96)}px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `bold ${_fsR(96)}px 'Hiragino Mincho ProN',serif`;
       ctx.textAlign='center'; ctx.textBaseline='middle';
-      const grad = ctx.createLinearGradient(-_fs(200),0,_fs(200),0);
+      const grad = ctx.createLinearGradient(-_fsR(200),0,_fsR(200),0);
       grad.addColorStop(0,   `hsl(${hue},100%,65%)`);
       grad.addColorStop(0.25,`hsl(${(hue+60)%360},100%,65%)`);
       grad.addColorStop(0.5, `hsl(${(hue+120)%360},100%,65%)`);
       grad.addColorStop(0.75,`hsl(${(hue+200)%360},100%,65%)`);
       grad.addColorStop(1,   `hsl(${(hue+300)%360},100%,65%)`);
       ctx.shadowColor = '#fff'; ctx.shadowBlur = 60;
-      outText('超大当たり！！',0,0, grad, 'rgba(0,0,0,0.92)', _fs(13));
+      outText('超大当たり！！',0,0, grad, 'rgba(0,0,0,0.92)', _fsR(13));
       ctx.shadowBlur = 22;
       ctx.font = `bold ${_fs(36)}px 'Hiragino Mincho ProN',serif`;
       outText('リーチ達成！ ギ ヨ ウ ザ',0,_fy(92), '#ffffff', 'rgba(0,0,0,0.88)', _fs(8));
