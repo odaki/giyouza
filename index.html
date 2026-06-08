@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.45';
+const VERSION = 'v1.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1415,7 +1415,12 @@ function changeBet(dir) {
     playSE('bet'); lsSave();
     /* スローハンド中かつ第1矢未発射: 新BETに対応する速度へランプ（ランプ完了まで射撃・BET変更ロック） */
     if (isSlowSpin && !betLocked && bgmSource) {
-      rampBGMRate(_slowHandRate(bet), 600, 'easeOut', true);
+      const oldRate = _slowHandRate(prev);
+      const newRate = _slowHandRate(bet);
+      rampBGMRate(newRate, 600, 'easeOut', true);
+      /* ホイール視覚速度もBGMレートに合わせてリスケール */
+      const scale = newRate / oldRate;
+      for (const w of wheels) if (!w.locked) w.speed *= scale;
     }
   }
 }
@@ -1454,7 +1459,7 @@ function createWheel(x, y) {
   return {
     x, y, segs, hubGrd,
     rot:       Math.random() * Math.PI * 2,
-    speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? 0.5 : 1),
+    speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1),
     locked:    false,
     result:    null,
     resultPop: 0,
@@ -4391,8 +4396,9 @@ document.addEventListener('keydown', e=>{
     } else if (!isSlowSpin && prev) {
       rampBGMRate(1.0, 1200, 'easeIn',  true); // Ctrl+T: ランプ中は入力ブロック
     }
-    /* ホイール速度も即時反映（現在スピンしているホイールを再生成） */
-    wheels.forEach(w => { w.speed *= isSlowSpin ? 0.5 : 2; });
+    /* ホイール速度も即時反映（BET対応レートで倍率計算） */
+    const _rate = _slowHandRate(bet);
+    wheels.forEach(w => { w.speed *= isSlowSpin ? _rate : (1 / _rate); });
   }
 });
 
