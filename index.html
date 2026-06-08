@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.44';
+const VERSION = 'v1.45';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -855,6 +855,12 @@ function startBGMTape(durationMs = 1400) {
   grayRateTarget = 1.0; // グレースケールを解除方向へアニメーション
 }
 
+/* BET額に対応するスローハンドBGM速度比率を返す
+   BET=1→30%, BET=100000→90%, 対数補間 */
+function _slowHandRate(betVal) {
+  return 0.50 + 0.48 * Math.log10(Math.max(1, betVal)) / 6;
+}
+
 /* BGMのplaybackRateを現在値から targetRate へテープカーブでなめらかに変化させる
    スローイベント開始・終了時のテンポ演出に使用 */
 /* blockInput=true のときだけランプ中のクリックを無視する
@@ -1363,7 +1369,7 @@ function init(fromStartup, fromGameOver) {
      ゲームオーバーリカバリー時は tapestart→idle 移行時に処理するため除外 */
   if (!fromStartup && !fromGameOver && bgmSource) {
     if (isSlowSpin && !prevSlowSpin) {
-      rampBGMRate(0.5, 1200, 'easeOut'); // 通常→スロー: 1.2秒でテンポ半減
+      rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // 通常→スロー: BET対応速度へ、ランプ中は射撃・BET変更ロック
       slowHandLockFrames = 60; // 約1秒: バッジ・テンポ変化に気づくまで入力ロック
       slowHandPopTimer   = 25; // バッジポップアニメーション開始
       playSE('slow_hand');     // 発動SE
@@ -1405,7 +1411,13 @@ function changeBet(dir) {
   /* 払えない選択肢はスキップ */
   while (next < BET_OPTIONS.length && BET_OPTIONS[next] > coins) next++;
   if (next < BET_OPTIONS.length) bet = BET_OPTIONS[next];
-  if (bet !== prev) { playSE('bet'); lsSave(); } // 変化したときだけ音・保存
+  if (bet !== prev) {
+    playSE('bet'); lsSave();
+    /* スローハンド中かつ第1矢未発射: 新BETに対応する速度へランプ（ランプ完了まで射撃・BET変更ロック） */
+    if (isSlowSpin && !betLocked && bgmSource) {
+      rampBGMRate(_slowHandRate(bet), 600, 'easeOut', true);
+    }
+  }
 }
 
 function calcPayout() {
@@ -1483,7 +1495,7 @@ function update() {
     if (tapeRate >= 0.99) {
       phase = 'idle';
       /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
-      if (isSlowSpin) rampBGMRate(0.5, 1200, 'easeOut');
+      if (isSlowSpin) rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // ゲームオーバーリカバリー後もBET対応速度へ
       if (pendingShoot) { pendingShoot = false; onShoot(); }
     }
     return;
@@ -3244,8 +3256,9 @@ function drawBottomBar() {
     ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
   };
 
-  const canDec = !betLocked && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
-  const canInc = !betLocked && (phase==='idle'||phase==='reach') &&
+  const _betRampLocked = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
+  const canDec = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
+  const canInc = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') &&
     _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
   drawBetBtn(BET_DEC_BTN, '◀', canDec);
   drawBetBtn(BET_INC_BTN, '▶', canInc);
@@ -3302,9 +3315,10 @@ function drawPortraitBottomBar() {
     ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
   };
 
-  /* ボタン: 確定中は両方とも非活性 */
-  const canDec = !betLocked && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
-  const canInc = !betLocked && (phase==='idle'||phase==='reach') &&
+  /* ボタン: 確定中またはスローランプ中は両方とも非活性 */
+  const _betRampLockedP = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
+  const canDec = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
+  const canInc = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') &&
     _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
   drawBetBtn(decRect, '◀', canDec);
   drawBetBtn(incRect, '▶', canInc);
@@ -4349,6 +4363,8 @@ document.addEventListener('keydown', e=>{
   /* カーソル左右でBET変更 */
   if ((e.code==='ArrowLeft'||e.code==='ArrowRight') && !betLocked && (phase==='idle'||phase==='reach')) {
     e.preventDefault();
+    /* スローハンドランプ中はBET変更ロック */
+    if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime) return;
     changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
@@ -4368,7 +4384,7 @@ document.addEventListener('keydown', e=>{
     const prev = isSlowSpin;
     isSlowSpin = !isSlowSpin;
     if (isSlowSpin && !prev) {
-      rampBGMRate(0.5, 1200, 'easeOut', true); // Ctrl+T: ランプ中は入力ブロック
+      rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // Ctrl+T: BET対応速度、ランプ中は入力ブロック
       slowHandLockFrames = 60; // 約1秒の入力ロック
       slowHandPopTimer   = 25; // バッジポップアニメーション開始
       playSE('slow_hand');     // 発動SE
@@ -4403,10 +4419,13 @@ canvas.addEventListener('mousedown', e=>{
   }
   /* ベット◀▶ボタン（縦画面 or PCボトムバー） */
   if (!betLocked && (phase==='idle'||phase==='reach')) {
-    const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
-    const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
-    if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
-    if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
+    /* スローハンドランプ中はBET変更ロック */
+    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime)) {
+      const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
+      const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
+      if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
+      if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
+    }
   }
   handleGameClick(inputAudioTime);
 });
@@ -4439,10 +4458,13 @@ document.addEventListener('touchstart', e=>{
 
   /* スマホ: ベット◀▶ボタン */
   if (!betLocked && (phase==='idle'||phase==='reach')) {
-    const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
-    const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
-    if (decBtn && hitTest(decBtn, pt.x, pt.y)) { changeBet(-1); return; }
-    if (incBtn && hitTest(incBtn, pt.x, pt.y)) { changeBet(+1); return; }
+    /* スローハンドランプ中はBET変更ロック */
+    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime)) {
+      const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
+      const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
+      if (decBtn && hitTest(decBtn, pt.x, pt.y)) { changeBet(-1); return; }
+      if (incBtn && hitTest(incBtn, pt.x, pt.y)) { changeBet(+1); return; }
+    }
   }
 
   handleGameClick(inputAudioTime);
