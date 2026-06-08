@@ -494,19 +494,21 @@ function _bgmAccumStep() {
   const now = audioCtx.currentTime;
   const dt  = now - _bgmAccumLastWall;
   _bgmAccumLastWall = now;
-  if (dt <= 0 || dt > 0.5) return; // タブ非表示などの大きなギャップはスキップ
+  if (dt <= 0) return;
+  /* dt > 10s: タブ長時間非表示など AudioContext が止まっていたケース → スキップ
+     jackpot/reach_jackpot SE（2〜2.5s）はここに含めず正常に積算する */
+  if (dt > 10) return;
   /* bgmSource.playbackRate.value はランプ中に正しい値を返さないため JS 側で計算 */
   _bgmAccumAudioTime += dt * _getBgmRateJS();
 }
 
 function getBeatPulse() {
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0;
-  _bgmAccumStep();
   /* playbackRate変動を考慮した音声バッファ内位置を計算。
      _bgmAccumAudioTime は audioCtx.currentTime 基準なので outputLatency 分を引いて
      実際にスピーカーから出ている音に揃え、さらに描画パイプライン分だけ先読みする。
      rate を掛けるのは latency が壁時計秒だが offset は音声秒で評価するため。 */
-  const rate      = bgmSource ? bgmSource.playbackRate.value : 1;
+  const rate      = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo; // ランプ中も正確に取得
   const hw        = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
   const rawPos    = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - hw) * rate;
   /* ループ量子化ドリフト対策: loopEnd はサンプル丸めされた実ループ長で割り切る */
@@ -1456,6 +1458,9 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
+  /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
+     update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
+  _bgmAccumStep();
   if (shootGuard > 0) shootGuard--;
   if (slowHandLockFrames > 0) slowHandLockFrames--;
   if (slowHandPopTimer  > 0) slowHandPopTimer--;
