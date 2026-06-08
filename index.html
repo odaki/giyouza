@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.50';
+const VERSION = 'v1.51';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -268,7 +268,7 @@ let isSlowSpin   = false;   // 低確率: 回転速度半減イベント
 let missPopups   = []; // ハズレポップアップ（複数同時・トライ横断フェードアウト）
 let payoutPopups = []; // 獲得ポップアップ（複数同時・トライ横断フェードアウト）
 /* ── ビートシンク ── */
-const SYNC_HIST_LEN  = 8;
+const SYNC_HIST_LEN  = 16;
 const _syncHistBuf   = new Float32Array(SYNC_HIST_LEN); // リングバッファ（shift()不要）
 let   _syncHistHead  = 0; // 次の書き込み位置
 let   _syncHistCount = 0; // 有効エントリ数（最大SYNC_HIST_LEN）
