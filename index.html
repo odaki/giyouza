@@ -209,16 +209,9 @@ function _gyozaAlloc() {
   }
   return _gyozaPool[0]; // fallback（最古を強制再利用）
 }
-/* gyozas専用swapRemove: 除去時に _dead=true でプールに戻す */
-function swapRemoveGyoza(pred) {
-  for (let i = gyozas.length - 1; i >= 0; i--) {
-    if (!pred(gyozas[i])) {
-      gyozas[i]._dead = true;
-      gyozas[i] = gyozas[gyozas.length - 1];
-      gyozas.length--;
-    }
-  }
-}
+/* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
+   モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
+const _deadify = o => { o._dead = true; };
 
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
@@ -233,11 +226,7 @@ function _poolAlloc(pool) {
   for (let i = 0; i < pool.length; i++) if (pool[i]._dead) return pool[i];
   return pool[0]; // fallback
 }
-function _swapRemovePool(arr, pred) {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (!pred(arr[i])) { arr[i]._dead = true; arr[i] = arr[arr.length-1]; arr.length--; }
-  }
-}
+/* _swapRemovePool は swapRemove(arr, pred, _deadify) に統一したため削除 */
 
 const _gigiPool = _makePool(256, () =>
   ({ x:0, y:0, vx:0, vy:0, life:0, color:'', r:0, _dead:true }));
@@ -269,22 +258,14 @@ function spawnParticle(x, y, vx, vy, color, life, r) {
   p.color = color; p.life = life; p.r = r; p._dead = false;
   particles.push(p);
 }
-/* パーティクル専用swapRemove: 除去時に _dead=true でプールに戻す */
-function swapRemoveParticles(pred) {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    if (!pred(particles[i])) {
-      particles[i]._dead = true;
-      particles[i] = particles[particles.length - 1];
-      particles.length--;
-    }
-  }
-}
-
 /* GC削減: filter()の代わりにswap-and-popでdeadな要素をインプレース除去
-   predがtrueの要素を保持する（filter同様の意味）*/
-function swapRemove(arr, pred) {
+   pred がtrueの要素を保持する（filter同様の意味）
+   onRemove（省略可）: 除去された要素に呼ぶコールバック。
+     プールオブジェクトを返却する場合は _deadify を渡す。 */
+function swapRemove(arr, pred, onRemove) {
   for (let i = arr.length - 1; i >= 0; i--) {
     if (!pred(arr[i])) {
+      if (onRemove) onRemove(arr[i]);
       arr[i] = arr[arr.length - 1];
       arr.length--;
     }
@@ -1731,7 +1712,7 @@ function update() {
     p.vy += 0.22; p.vx *= 0.985;
     p.r  *= 0.97; p.life--;
   }
-  swapRemoveParticles(p => p.life > 0 && p.r > 0.3);
+  swapRemove(particles, p => p.life > 0 && p.r > 0.3, _deadify);
 
 
   if (phase === 'done') {
@@ -2101,10 +2082,10 @@ function updateGyozas() {
   }
 
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
-  swapRemoveGyoza(g => {
+  swapRemove(gyozas, g => {
     const r = g.size * 0.52;
     return g.y < H + 120 && g.x + r > 0 && g.x - r < W;
-  });
+  }, _deadify);
   /* updateの末尾でソートしておくことでdrawGyozas側でのslice+sortを排除 */
   gyozas.sort((a, b) => a.y - b.y);
 }
@@ -2214,7 +2195,7 @@ function updateUzaTexts() {
     if (t.age < 15)             t.alpha = Math.min(t.peak, t.alpha+t.peak/15);
     else if (t.age > t.life-20) t.alpha = Math.max(0, t.alpha-t.peak/20);
   }
-  _swapRemovePool(uzaTexts, t => t.age < t.life);
+  swapRemove(uzaTexts, t => t.age < t.life, _deadify);
 }
 
 function drawUzaTexts() {
@@ -2330,7 +2311,7 @@ function updateGigigigi() {
     s.vy += 0.4; s.vx *= 0.93;
     s.life--;
   }
-  _swapRemovePool(gigiSparks, s => s.life > 0);
+  swapRemove(gigiSparks, s => s.life > 0, _deadify);
 }
 
 function drawGigigigi() {
@@ -2548,7 +2529,7 @@ function updateZazazaza() {
       rainDrops.push(rp);
     }
   }
-  _swapRemovePool(rainDrops, r => r.ripple ? r.life > 0 : r.y < H + 30);
+  swapRemove(rainDrops, r => r.ripple ? r.life > 0 : r.y < H + 30, _deadify);
 }
 
 function drawZazazaza() {
