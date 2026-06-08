@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.47';
+const VERSION = 'v1.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3028,6 +3028,19 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(11, -7); ctx.lineTo(5, -1); ctx.stroke();
   }
   ctx.restore();
+
+  /* ── ミュート時ビートパルス: 外枠の太さ変化 ── */
+  if (audioMuted && phase !== 'startup') {
+    const pulse = getBeatPulse();
+    if (pulse > 0) {
+      const lw = pulse * 12; // 最大12px
+      ctx.save();
+      ctx.strokeStyle = `rgba(245,208,32,${0.3 + pulse * 0.55})`;
+      ctx.lineWidth = lw;
+      ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
+      ctx.restore();
+    }
+  }
 
   ctx.restore(); // end shake
 }
