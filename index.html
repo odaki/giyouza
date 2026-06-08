@@ -540,16 +540,21 @@ function _setBgmRateJS(from, to, startT, durSec, easeType = 'linear') {
   _bgmRateEase  = easeType;
 }
 
+/* ease補間ヘルパー: p∈[0,1] → easeOut/easeIn/linear の補間係数を返す
+   _tapeRateCurve と _getBgmRateJS で同一式が重複していたため共通化 */
+function _easeF(p, type) {
+  if (type === 'easeOut') return Math.sin(p * Math.PI / 2);
+  if (type === 'easeIn')  return 1 - Math.cos(p * Math.PI / 2);
+  return p; // linear
+}
+
 /* 現在の audioCtx.currentTime におけるレートを解析的に返す */
 function _getBgmRateJS() {
   if (_bgmRateDur <= 0) return _bgmRateTo; // 即時変化
   const p = Math.max(0, Math.min(1,
     (audioCtx.currentTime - _bgmRateStart) / _bgmRateDur));
   if (p >= 1) return _bgmRateTo;
-  const f = _bgmRateEase === 'easeOut' ? Math.sin(p * Math.PI / 2)
-          : _bgmRateEase === 'easeIn'  ? 1 - Math.cos(p * Math.PI / 2)
-          : p; // linear
-  return _bgmRateFrom + (_bgmRateTo - _bgmRateFrom) * f;
+  return _bgmRateFrom + (_bgmRateTo - _bgmRateFrom) * _easeF(p, _bgmRateEase);
 }
 
 function _bgmAccumReset() {
@@ -879,11 +884,7 @@ function scheduleBGMRestart(delayMs) {
 function _tapeRateCurve(from, to, easeType, N = 64) {
   const curve = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    const p = i / (N - 1);
-    const f = easeType === 'easeOut' ? Math.sin(p * Math.PI / 2)
-            : easeType === 'easeIn'  ? 1 - Math.cos(p * Math.PI / 2)
-            : p;
-    curve[i] = from + (to - from) * f;
+    curve[i] = from + (to - from) * _easeF(i / (N - 1), easeType);
   }
   return curve;
 }
