@@ -230,6 +230,8 @@ function swapRemove(arr, pred) {
 /* ── game state ── */
 let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
+let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音の基準）
+const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
 let shootGuard = 0;    // init直後の誤射防止フレームカウンタ
 let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
 let slowRampEndTime = 0;   // スローランプ終了のaudioCtx時刻（0=ランプなし）
@@ -400,10 +402,10 @@ function updateSyncTimingOffset() {
      outputLatency + baseLatency も加算する必要がある。 */
   const hasOutputTimestamp = typeof audioCtx.getOutputTimestamp === 'function';
   if (hasOutputTimestamp) {
-    SYNC_TIMING_OFFSET = 0.032; // 視覚遅延のみ
+    SYNC_TIMING_OFFSET = 0.042; // 視覚遅延のみ（+10ms調整: わずかなツッコミ感を解消）
   } else {
     const hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-    SYNC_TIMING_OFFSET = hw + 0.032;
+    SYNC_TIMING_OFFSET = hw + 0.042;
   }
 }
 
@@ -431,23 +433,86 @@ function inputEventToAudioTime(eventTimeStamp) {
    SYNC_TIMING_OFFSET は入力判定専用（用途が異なる）なのでここでは使わない。 */
 const _BEAT_DISPLAY_ADVANCE = 2 / 60; // ~33ms: 描画パイプライン遅延補正（≈2フレーム先読み）
 
+/* BGM ループ長をサンプル単位に量子化した実ループ長（秒）。
+   AudioBuffer の loopEnd は内部で floor(loopEnd * sampleRate)/sampleRate に丸められるため、
+   この値を使ってビート位相を計算しないとループを重ねるたびにズレが蓄積する。
+   getAudioCtx() 内で sampleRate が確定してから更新される。 */
+let _bgmQuantizedLoopDur = 0; // _updateBgmQuantizedLoopDur() で sampleRate確定後に設定
+
+function _updateBgmQuantizedLoopDur() {
+  if (!audioCtx) return;
+  const sr = audioCtx.sampleRate;
+  _bgmQuantizedLoopDur = Math.floor(BGM_LOOP_DUR * sr) / sr;
+}
+
+/* ── BGM 音声バッファ位置の積算追跡 ──────────────────────────────────────────
+   playbackRate が変化する場合（スロースピン・テープ演出）、
+   audioCtx.currentTime - bgmPhaseRef は壁時計で進むが実際の音声位置は rate 倍速で
+   しか進まない。そのため rampBGMRate(0.5) が10秒続くと最大5秒のズレが蓄積する。
+   対策: 毎フレーム playbackRate × Δt を積算し、実際の音声バッファ位置を追跡する。 */
+let _bgmAccumAudioTime = 0;    // BGMバッファ内積算再生位置（秒）
+let _bgmAccumLastWall  = null; // 最後に積算した audioCtx.currentTime
+
+/* ── JS側レート追跡 ───────────────────────────────────────────────────────────
+   AudioParam.value は setValueCurveAtTime 実行中に古い値を返すブラウザ実装差異があり
+   (line 240-243 コメント参照)、bgmSource.playbackRate.value が信頼できない。
+   レートのランプパラメータを JS 側で持ち、_getBgmRateJS() で解析的に求める。 */
+let _bgmRateFrom  = 1.0;   // ランプ開始レート
+let _bgmRateTo    = 1.0;   // ランプ目標レート
+let _bgmRateStart = 0;     // ランプ開始 audioCtx.currentTime
+let _bgmRateDur   = 0;     // ランプ時間（秒）。0=即時変化
+let _bgmRateEase  = 'linear'; // 'easeIn' | 'easeOut' | 'linear'
+
+/* ランプパラメータを記録する。setValueCurveAtTime と同時に呼ぶ */
+function _setBgmRateJS(from, to, startT, durSec, easeType = 'linear') {
+  _bgmRateFrom  = from;
+  _bgmRateTo    = to;
+  _bgmRateStart = startT;
+  _bgmRateDur   = durSec;
+  _bgmRateEase  = easeType;
+}
+
+/* 現在の audioCtx.currentTime におけるレートを解析的に返す */
+function _getBgmRateJS() {
+  if (_bgmRateDur <= 0) return _bgmRateTo; // 即時変化
+  const p = Math.max(0, Math.min(1,
+    (audioCtx.currentTime - _bgmRateStart) / _bgmRateDur));
+  if (p >= 1) return _bgmRateTo;
+  const f = _bgmRateEase === 'easeOut' ? Math.sin(p * Math.PI / 2)
+          : _bgmRateEase === 'easeIn'  ? 1 - Math.cos(p * Math.PI / 2)
+          : p; // linear
+  return _bgmRateFrom + (_bgmRateTo - _bgmRateFrom) * f;
+}
+
+function _bgmAccumReset() {
+  _bgmAccumAudioTime = 0;
+  _bgmAccumLastWall  = audioCtx ? audioCtx.currentTime : null;
+}
+
+function _bgmAccumStep() {
+  if (!audioCtx || !bgmSource || _bgmAccumLastWall === null) return;
+  const now = audioCtx.currentTime;
+  const dt  = now - _bgmAccumLastWall;
+  _bgmAccumLastWall = now;
+  if (dt <= 0 || dt > 0.5) return; // タブ非表示などの大きなギャップはスキップ
+  /* bgmSource.playbackRate.value はランプ中に正しい値を返さないため JS 側で計算 */
+  _bgmAccumAudioTime += dt * _getBgmRateJS();
+}
+
 function getBeatPulse() {
-  if (!audioCtx || bgmPhaseRef === null) return 0;
-  let t;
-  if (typeof audioCtx.getOutputTimestamp === 'function') {
-    const ts = audioCtx.getOutputTimestamp();
-    if (ts && ts.performanceTime > 0) {
-      /* ts.contextTime = 現在スピーカー出力中の音声時刻（outputLatency補正済み）
-         + 描画パイプライン分だけ先読み → フレーム表示時にちょうどビートに一致 */
-      t = ts.contextTime + _BEAT_DISPLAY_ADVANCE;
-    }
-  }
-  if (t === undefined) {
-    /* フォールバック: currentTime からハードウェア遅延を引いて聴こえている音時刻を推定 */
-    const hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-    t = audioCtx.currentTime - hw + _BEAT_DISPLAY_ADVANCE;
-  }
-  const ph = ((t - bgmPhaseRef) % BGM_BEAT) / BGM_BEAT;
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0;
+  _bgmAccumStep();
+  /* playbackRate変動を考慮した音声バッファ内位置を計算。
+     _bgmAccumAudioTime は audioCtx.currentTime 基準なので outputLatency 分を引いて
+     実際にスピーカーから出ている音に揃え、さらに描画パイプライン分だけ先読みする。
+     rate を掛けるのは latency が壁時計秒だが offset は音声秒で評価するため。 */
+  const rate      = bgmSource ? bgmSource.playbackRate.value : 1;
+  const hw        = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+  const rawPos    = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - hw) * rate;
+  /* ループ量子化ドリフト対策: loopEnd はサンプル丸めされた実ループ長で割り切る */
+  const loopN     = Math.floor(rawPos / _bgmQuantizedLoopDur);
+  const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
+  const ph = (((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
   return Math.pow(Math.max(0, 1 - ph * 2.5), 2); // ~160ms で減衰（0.4拍）
 }
 
@@ -497,6 +562,8 @@ function getAudioCtx() {
     /* ホワイトノイズバッファを事前生成（最長ノイズ使用: reach_jackpot dur=0.3+0.05=0.35s → 0.45s確保）
        playNoise() はこのバッファを参照するだけでフレームごとのランダム生成ループが不要になる */
     _buildNoiseBuffer();
+    /* ループ量子化ドリフト補正用: sampleRate確定後に実ループ長を計算 */
+    _updateBgmQuantizedLoopDur();
   }
   return audioCtx;
 }
@@ -661,6 +728,7 @@ function _createBGMSource(startRate = 1.0) {
   src.loop       = true;
   src.loopEnd    = BGM_LOOP_DUR;
   src.playbackRate.value = startRate;
+  _setBgmRateJS(startRate, startRate, 0, 0); // 即時セット（ランプなし）
   src.connect(bgmGain);
   bgmSource = src;
   return src;
@@ -689,7 +757,7 @@ function startBGM() {
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   const src = _createBGMSource(1.0);
-  if (src) { src.start(); bgmPhaseRef = audioCtx.currentTime; }
+  if (src) { src.start(); bgmPhaseRef = audioCtx.currentTime; _bgmAccumReset(); }
   grayRateTarget = 1.0; grayRateCur = 1.0; // 通常BGM開始時はグレースケール即時解除
 }
 
@@ -741,11 +809,12 @@ function stopBGMTape(durationMs = 1300) {
   /* ソースを止めずに極低速（0.001x）まで落とす。
      再生位置がほぼ止まったまま保持されるので、リセット時に同じ場所から加速できる。 */
   const t       = audioCtx.currentTime;
-  const curRate = bgmSource.playbackRate.value || 1;
+  const curRate = _getBgmRateJS(); // .value は自動化中に正しい値を返さないため JS 側で取得
   bgmSource.playbackRate.cancelScheduledValues(t);
   /* easeOut: 最初に素早くテンポが落ち、最後にじわり停止 */
   bgmSource.playbackRate.setValueCurveAtTime(
     _tapeRateCurve(curRate, 0.001, 'easeOut'), t, durationMs / 1000);
+  _setBgmRateJS(curRate, 0.001, t, durationMs / 1000, 'easeOut');
   grayRateTarget = 0.001; // グレースケールを最大に向かってアニメーション
 }
 
@@ -758,11 +827,12 @@ function startBGMTape(durationMs = 1400) {
   const t = audioCtx.currentTime;
   if (bgmSource) {
     /* 極低速で回り続けているソースを現在位置からeaseInで加速 */
-    const curRate = bgmSource.playbackRate.value || 0.001;
+    const curRate = _getBgmRateJS(); // .value は自動化中に正しい値を返さないため JS 側で取得
     bgmSource.playbackRate.cancelScheduledValues(t);
     /* easeIn: じわりと動き出し、後半で加速して通常速度へ */
     bgmSource.playbackRate.setValueCurveAtTime(
       _tapeRateCurve(curRate, 1.0, 'easeIn'), t, durationMs / 1000);
+    _setBgmRateJS(curRate, 1.0, t, durationMs / 1000, 'easeIn');
   } else {
     /* フォールバック: ソースが消えていた場合は新規作成してeaseIn加速 */
     if (!bgmBuffer) return;
@@ -770,8 +840,10 @@ function startBGMTape(durationMs = 1400) {
     if (!src) return;
     src.playbackRate.setValueCurveAtTime(
       _tapeRateCurve(0.001, 1.0, 'easeIn'), t, durationMs / 1000);
+    _setBgmRateJS(0.001, 1.0, t, durationMs / 1000, 'easeIn');
     src.start();
     bgmPhaseRef = t + durationMs / 1000; // 加速完了時点を拍グリッド基準にする
+    _bgmAccumReset(); // 新規ソースなので積算位置もリセット
     grayRateCur = 0.001; // フォールバック時はグレースケール現在値もリセット
   }
   grayRateTarget = 1.0; // グレースケールを解除方向へアニメーション
@@ -785,11 +857,12 @@ function startBGMTape(durationMs = 1400) {
 function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockInput = false) {
   if (!bgmSource || !audioCtx) return;
   const t       = audioCtx.currentTime;
-  const curRate = bgmSource.playbackRate.value || 1;
+  const curRate = _getBgmRateJS(); // .value は自動化中に正しい値を返さないため JS 側で取得
   if (Math.abs(curRate - targetRate) < 0.005) return; // すでに目標値
   bgmSource.playbackRate.cancelScheduledValues(t);
   bgmSource.playbackRate.setValueCurveAtTime(
     _tapeRateCurve(curRate, targetRate, easeType), t, durationMs / 1000);
+  _setBgmRateJS(curRate, targetRate, t, durationMs / 1000, easeType);
   grayRateTarget = targetRate; // グレースケールも同じ目標へ追従
   /* 入力ブロックが必要な場合のみランプ終了時刻を記録 */
   if (blockInput) slowRampEndTime = t + durationMs / 1000;
@@ -1412,12 +1485,17 @@ function update() {
   }
 
   if (phase === 'shooting') {
-    arrowProgress = Math.min(1, arrowProgress + 0.25); // 4f≈1/4拍で着弾（旧0.085=12f）
+    /* フレームレート非依存: 発射時刻からの経過実時間で進行 */
+    const _now = audioCtx ? audioCtx.currentTime : performance.now() / 1000;
+    arrowProgress = _arrowStartAudioTime > 0
+      ? Math.min(1, (_now - _arrowStartAudioTime) / ARROW_FLIGHT_SEC)
+      : Math.min(1, arrowProgress + 0.25); // audioCtx未初期化時フォールバック
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
-      /* 1〜3文字目: 抽選決定音（コツン）。4文字目はハズレ/当たりSEが決定音を兼ねる */
-      if (curIdx < 3) playSE('lock', nextBeatDivTime(4));
+      /* 1〜3文字目: 着弾音を発射時刻+飛行時間で固定スケジュール（ビートスナップ廃止）
+         shoot音との間隔が常に ARROW_FLIGHT_SEC（≈67ms）で一定になる */
+      if (curIdx < 3) playSE('lock', _arrowStartAudioTime > 0 ? _arrowStartAudioTime + ARROW_FLIGHT_SEC : undefined);
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
@@ -4151,7 +4229,9 @@ function onShoot(_inputAudioTime){
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
-  playSE('shoot');
+  /* 発射時刻を記録: shoot音・arrowProgress・lock音をすべてこの時刻基準で計算 */
+  _arrowStartAudioTime = audioCtx ? audioCtx.currentTime + 0.01 : 0;
+  playSE('shoot'); // currentTime + 0.01 で即再生
   /* ── ビートシンク評価（先頭でキャプチャした値を使用） ── */
   if (_syncScore !== null) {
     const score = _syncScore;
