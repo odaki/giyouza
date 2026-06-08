@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.51';
+const VERSION = 'v1.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1609,7 +1609,7 @@ function update() {
            第4ホイールは減速しながら回り続け、
            プレイヤーが自分のタイミングで矢を放つ。 */
         const r3 = [wheels[0].result, wheels[1].result, wheels[2].result];
-        const reachRoll = r3.every((r, i) => r === TARGET[i]) && Math.random() < 1/6;
+        const reachRoll = r3.every((r, i) => r === TARGET[i]) && Math.random() < 1/10;
         if (reachRoll) {
           phase = 'reach';
           isReach = true;
