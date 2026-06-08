@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.49';
+const VERSION = 'v1.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -526,14 +526,21 @@ function getBeatPulse() {
    atTime: inputEventToAudioTime() で換算した入力時刻（省略時は currentTime）
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
 function calcSyncScore(atTime) {
-  if (!audioCtx || bgmPhaseRef === null) return 0.5;
-  const t = (atTime ?? audioCtx.currentTime) - SYNC_TIMING_OFFSET;
-  /* キック（4つ打ち=4分音符グリッド）からの絶対時間距離で判定
-     JUST:±50ms→score≥0.667, GOOD:±100ms→score≥0.333, OK:±150ms→score>0 */
-  const ph = ((t - bgmPhaseRef) % BGM_BEAT + BGM_BEAT) % BGM_BEAT; // 0〜BGM_BEAT
-  const distSec = ph < BGM_BEAT / 2 ? ph : BGM_BEAT - ph;          // 最近傍キックまでの距離
-  const distMs  = distSec * 1000;
-  return Math.max(0, 1 - distMs / 150);  // 0ms→1.0, 150ms→0.0, 150ms超→0
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0.5;
+  /* getBeatPulseと同じ rawPos を使うことで「リングのピーク = JUST」に正確に一致させる。
+     atTimeまでの追加積算をレートで補外し、getBeatPulseと同じ (_BEAT_DISPLAY_ADVANCE - hw) 補正を適用。 */
+  const rate    = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
+  const hw      = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+  const wallNow = atTime ?? audioCtx.currentTime;
+  const extra   = Math.max(0, Math.min(wallNow - _bgmAccumLastWall, 0.1)); // 最後のstepから入力までの差分
+  const audioPos = _bgmAccumAudioTime + extra * rate;
+  const rawPos   = audioPos + (_BEAT_DISPLAY_ADVANCE - hw) * rate; // getBeatPulseと同一基準
+  const loopN    = Math.floor(rawPos / _bgmQuantizedLoopDur);
+  const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
+  const ph       = ((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT; // 0〜BGM_BEAT
+  const distSec  = ph < BGM_BEAT / 2 ? ph : BGM_BEAT - ph;         // 最近傍キックまでの距離
+  const distMs   = distSec * 1000;
+  return Math.max(0, 1 - distMs / 150); // 0ms→1.0, 150ms→0.0, 150ms超→0
 }
 
 /* 次の1/4拍グリッド境界点のaudioCtx時刻を返す（SE先読みスケジュール用） */
