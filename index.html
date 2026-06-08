@@ -230,7 +230,8 @@ function swapRemove(arr, pred) {
 /* ── game state ── */
 let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
-let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音の基準）
+let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音スケジュール用）
+let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニメ用: suspended中も進む）
 const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
 let shootGuard = 0;    // init直後の誤射防止フレームカウンタ
 let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
@@ -1490,11 +1491,10 @@ function update() {
   }
 
   if (phase === 'shooting') {
-    /* フレームレート非依存: 発射時刻からの経過実時間で進行 */
-    const _now = audioCtx ? audioCtx.currentTime : performance.now() / 1000;
-    arrowProgress = _arrowStartAudioTime > 0
-      ? Math.min(1, (_now - _arrowStartAudioTime) / ARROW_FLIGHT_SEC)
-      : Math.min(1, arrowProgress + 0.25); // audioCtx未初期化時フォールバック
+    /* フレームレート非依存: performance.now() でアニメーション進行（audioCtx suspended中も動く） */
+    arrowProgress = _arrowStartWallTime > 0
+      ? Math.min(1, (performance.now() / 1000 - _arrowStartWallTime) / ARROW_FLIGHT_SEC)
+      : Math.min(1, arrowProgress + 0.25); // 念のためフォールバック
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
@@ -4234,7 +4234,10 @@ function onShoot(_inputAudioTime){
   const w=wheels[curIdx];
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
-  /* 発射時刻を記録: shoot音・arrowProgress・lock音をすべてこの時刻基準で計算 */
+  /* 発射時刻を記録:
+     _arrowStartWallTime: アニメーション進行用（performance.now: suspended中も止まらない）
+     _arrowStartAudioTime: 着弾音スケジュール用（audioCtx.currentTime: 音声API基準） */
+  _arrowStartWallTime  = performance.now() / 1000;
   _arrowStartAudioTime = audioCtx ? audioCtx.currentTime + 0.01 : 0;
   playSE('shoot'); // currentTime + 0.01 で即再生
   /* ── ビートシンク評価（先頭でキャプチャした値を使用） ── */
