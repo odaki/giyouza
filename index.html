@@ -361,12 +361,12 @@ const BAR_X = 335, BAR_W = 390, BAR_Y = H - 106, BAR_H = 80;
 const P_BAR_X = 12, P_BAR_Y = 732, P_BAR_W = W - 24, P_BAR_H = 66;
 
 /* ベットボタン当たり判定（上下15px余白） */
-const BET_DEC_BTN = { x:350, y:BAR_Y+15, w:50, h:50 }; // ◀ (BAR_X+15)
-const BET_INC_BTN = { x:660, y:BAR_Y+15, w:50, h:50 }; // ▶ (BAR_X+BAR_W-15-50)
+const BET_DEC_BTN = { x:BAR_X+1,            y:BAR_Y+1, w:BAR_H-2, h:BAR_H-2 }; // ◀ 1pt隙間
+const BET_INC_BTN = { x:BAR_X+BAR_W-BAR_H+1, y:BAR_Y+1, w:BAR_H-2, h:BAR_H-2 }; // ▶ 1pt隙間
 
 /* 縦画面専用 BET ボタン (中央揃えy=747) */
-const P_BET_DEC_BTN = IS_PORTRAIT ? { x:27,  y:747, w:36, h:36 } : null;
-const P_BET_INC_BTN = IS_PORTRAIT ? { x:357, y:747, w:36, h:36 } : null;
+const P_BET_DEC_BTN = IS_PORTRAIT ? { x:P_BAR_X+1,              y:P_BAR_Y+1, w:P_BAR_H-2, h:P_BAR_H-2 } : null; // ◀ 1pt隙間
+const P_BET_INC_BTN = IS_PORTRAIT ? { x:P_BAR_X+P_BAR_W-P_BAR_H+1, y:P_BAR_Y+1, w:P_BAR_H-2, h:P_BAR_H-2 } : null; // ▶ 1pt隙間
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
