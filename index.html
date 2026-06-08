@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.57';
+const VERSION = 'v1.58';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -215,6 +215,32 @@ function swapRemoveGyoza(pred) {
     }
   }
 }
+
+/* ── 中当たりエフェクト用プール群 ──
+   gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
+   rainDrops:  最大レート20/frame×寿命30f ≈ 600 + 波紋20 → 800
+   uzaTexts:   最大1/2f×寿命240f ≈ 120同時 → 160 */
+function _makePool(size, factory) {
+  const pool = [];
+  for (let i = 0; i < size; i++) pool.push(factory());
+  return pool;
+}
+function _poolAlloc(pool) {
+  for (let i = 0; i < pool.length; i++) if (pool[i]._dead) return pool[i];
+  return pool[0]; // fallback
+}
+function _swapRemovePool(arr, pred) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (!pred(arr[i])) { arr[i]._dead = true; arr[i] = arr[arr.length-1]; arr.length--; }
+  }
+}
+
+const _gigiPool = _makePool(256, () =>
+  ({ x:0, y:0, vx:0, vy:0, life:0, color:'', r:0, _dead:true }));
+const _rainPool = _makePool(800, () =>
+  ({ x:0, y:0, vx:0, vy:0, len:0, a:0, splashed:false, ripple:false, life:0, maxLife:0, _dead:true }));
+const _uzaPool  = _makePool(160, () =>
+  ({ x:0, y:0, text:'', rot:0, size:0, alpha:0, peak:0, color:'', age:0, life:0, _dead:true }));
 
 /* ── パーティクルプール ──
    パーティクルオブジェクトを事前確保して再利用し、GCを排除する。
@@ -2147,31 +2173,30 @@ function drawGyozas() {
 /* ── ウザウザ: ウザいテキスト大量発生 ── */
 const UZA_WORDS = ['ウザ','うざっ','ウザい','うざい','ウザっ！','うざ…','ウザすぎ','うわウザ'];
 
-function initUzaTexts() { uzaTexts = []; }
+function initUzaTexts() { for (const o of uzaTexts) o._dead = true; uzaTexts = []; }
 
 function updateUzaTexts() {
   /* 徐々に増える間隔: 最初は5フレームに1個、後は2フレームに1個 */
   const interval = Math.max(2, 10 - Math.floor(endTimer/40));
   if (endTimer > 40 && endTimer % interval === 0) {
-    uzaTexts.push({
-      x:    Math.random()*W,
-      y:    Math.random()*H,
-      text: UZA_WORDS[Math.floor(Math.random()*UZA_WORDS.length)],
-      rot:  (Math.random()-0.5)*0.9,
-      size: 14 + Math.random()*52,
-      alpha: 0,
-      peak:  0.5 + Math.random()*0.5,
-      color: `hsl(${Math.random()*40+5},90%,${55+Math.random()*25}%)`,
-      age:   0,
-      life:  90 + Math.random()*150,
-    });
+    const t = _poolAlloc(_uzaPool);
+    t._dead = false;
+    t.x = Math.random()*W; t.y = Math.random()*H;
+    t.text  = UZA_WORDS[Math.floor(Math.random()*UZA_WORDS.length)];
+    t.rot   = (Math.random()-0.5)*0.9;
+    t.size  = 14 + Math.random()*52;
+    t.alpha = 0; t.age = 0;
+    t.peak  = 0.5 + Math.random()*0.5;
+    t.color = `hsl(${Math.random()*40+5|0},90%,${55+Math.random()*25|0}%)`;
+    t.life  = 90 + Math.random()*150;
+    uzaTexts.push(t);
   }
   for (const t of uzaTexts) {
     t.age++;
-    if (t.age < 15)            t.alpha = Math.min(t.peak, t.alpha+t.peak/15);
+    if (t.age < 15)             t.alpha = Math.min(t.peak, t.alpha+t.peak/15);
     else if (t.age > t.life-20) t.alpha = Math.max(0, t.alpha-t.peak/20);
   }
-  swapRemove(uzaTexts, t => t.age < t.life);
+  _swapRemovePool(uzaTexts, t => t.age < t.life);
 }
 
 function drawUzaTexts() {
@@ -2265,28 +2290,29 @@ function drawGiugiu() {
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
-function initGigigigi() { gigiSparks = []; }
+function initGigigigi() { for (const o of gigiSparks) o._dead = true; gigiSparks = []; }
 
 function updateGigigigi() {
-  /* 火花をランダムに飛ばす */
+  /* 火花をランダムに飛ばす（プール再利用） */
   const rate = Math.min(8, 2 + Math.floor(endTimer / 60));
   for (let i = 0; i < rate; i++) {
     const a = Math.random() * Math.PI * 2;
     const spd = 3 + Math.random() * 9;
-    gigiSparks.push({
-      x: Math.random() * W, y: Math.random() * H,
-      vx: Math.cos(a)*spd, vy: Math.sin(a)*spd,
-      life: 10 + Math.random() * 14,
-      color: Math.random() < 0.6 ? '#fff' : (Math.random()<0.5 ? '#ffaa00' : '#ff4400'),
-      r: 0.8 + Math.random() * 1.8,
-    });
+    const s = _poolAlloc(_gigiPool);
+    s._dead = false;
+    s.x = Math.random() * W; s.y = Math.random() * H;
+    s.vx = Math.cos(a)*spd;  s.vy = Math.sin(a)*spd;
+    s.life = 10 + Math.random() * 14;
+    s.color = Math.random() < 0.6 ? '#fff' : (Math.random()<0.5 ? '#ffaa00' : '#ff4400');
+    s.r = 0.8 + Math.random() * 1.8;
+    gigiSparks.push(s);
   }
   for (const s of gigiSparks) {
     s.x += s.vx; s.y += s.vy;
     s.vy += 0.4; s.vx *= 0.93;
     s.life--;
   }
-  swapRemove(gigiSparks, s => s.life > 0);
+  _swapRemovePool(gigiSparks, s => s.life > 0);
 }
 
 function drawGigigigi() {
@@ -2329,16 +2355,30 @@ function initYoyoyoyo() {
   const count = 14;
   for (let i = 0; i < count; i++) {
     const hue = 160 + Math.random()*120;
+    const r   = 16 + Math.random()*12;
+    const colorL = `hsl(${hue},75%,60%)`;
+    const colorD = `hsl(${hue},75%,35%)`;
+    /* ボール本体をオフスクリーンに事前レンダリング: drawYoyoyoyo毎のcreateRadialGradientを排除 */
+    const sz  = Math.ceil(r * 2 + 4);
+    const oc  = document.createElement('canvas');
+    oc.width  = sz; oc.height = sz;
+    const oc2 = oc.getContext('2d');
+    const cx  = sz / 2, cy = sz / 2;
+    const grd = oc2.createRadialGradient(cx-r*0.3, cy-r*0.3, 0, cx, cy, r);
+    grd.addColorStop(0, colorL); grd.addColorStop(1, colorD);
+    oc2.beginPath(); oc2.arc(cx, cy, r, 0, Math.PI*2);
+    oc2.fillStyle = grd; oc2.fill();
+    oc2.strokeStyle = 'rgba(0,0,0,0.25)'; oc2.lineWidth = 1; oc2.stroke();
+    oc2.beginPath(); oc2.arc(cx-r*0.32, cy-r*0.32, r*0.26, 0, Math.PI*2);
+    oc2.fillStyle = 'rgba(255,255,255,1)'; oc2.fill();
     yoyos.push({
-      x:      (i + 0.5) * (W / count) + (Math.random()-0.5)*18,
-      phase:  Math.random() * Math.PI * 2,
-      freq:   0.055 + Math.random()*0.04,
-      amp:    H * 0.30 + Math.random() * H * 0.25,
-      topY:   10 + Math.random()*20,
-      r:      16 + Math.random()*12,
-      colorL: `hsl(${hue},75%,60%)`,
-      colorD: `hsl(${hue},75%,35%)`,
-      delay:  i * 6,
+      x: (i + 0.5) * (W / count) + (Math.random()-0.5)*18,
+      phase: Math.random() * Math.PI * 2,
+      freq:  0.055 + Math.random()*0.04,
+      amp:   H * 0.30 + Math.random() * H * 0.25,
+      topY:  10 + Math.random()*20,
+      r, colorL, colorD, delay: i * 6,
+      _oc: oc, _ocSz: sz, // 事前レンダリング済みキャンバス
     });
   }
 }
@@ -2358,22 +2398,13 @@ function drawYoyoyoyo() {
     ctx.beginPath(); ctx.moveTo(y.x, 0); ctx.lineTo(y.x, bY);
     ctx.strokeStyle = 'rgba(220,220,200,0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-    /* ボール本体 */
-    const grd = ctx.createRadialGradient(y.x-y.r*0.3, bY-y.r*0.3, 0, y.x, bY, y.r);
-    grd.addColorStop(0, y.colorL); grd.addColorStop(1, y.colorD);
-    ctx.beginPath(); ctx.arc(y.x, bY, y.r, 0, Math.PI*2);
-    ctx.fillStyle = grd; ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1; ctx.stroke();
+    /* ボール本体: 事前レンダリング済みキャンバスをdrawImageで貼り付け（毎フレームのグラジェント生成なし） */
+    ctx.drawImage(y._oc, y.x - y._ocSz/2, bY - y._ocSz/2);
 
     /* 中央の溝 */
     ctx.beginPath(); ctx.moveTo(y.x - y.r, bY); ctx.lineTo(y.x + y.r, bY);
-    ctx.strokeStyle = `hsl(${y.colorD},40%,25%)`; ctx.lineWidth = 2.5;
+    ctx.strokeStyle = y.colorD; ctx.lineWidth = 2.5;
     ctx.globalAlpha = a * 0.5; ctx.stroke();
-
-    /* ハイライト */
-    ctx.globalAlpha = a * 0.55;
-    ctx.beginPath(); ctx.arc(y.x - y.r*0.32, bY - y.r*0.32, y.r*0.26, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(255,255,255,1)'; ctx.fill();
   }
   ctx.globalAlpha = 1;
   ctx.restore();
@@ -2382,8 +2413,39 @@ function drawYoyoyoyo() {
 /* ════════════════ ウウウウ: 幽霊 ════════════════ */
 function initUuuu() { ghosts = []; }
 
+/* 幽霊ボディをオフスクリーンに事前レンダリングしてcreateRadialGradientの毎フレーム生成を排除 */
+function _makeGhostCanvas(r) {
+  const sz  = Math.ceil(r * 3.4 + 4);
+  const oc  = document.createElement('canvas');
+  oc.width  = sz; oc.height = sz;
+  const c2  = oc.getContext('2d');
+  const cx  = sz / 2, cy = sz * 0.42; // 重心を上寄りに
+  c2.beginPath();
+  c2.arc(cx, cy, r, Math.PI, 0);
+  c2.lineTo(cx + r, cy + r * 0.6);
+  const segs = 5;
+  for (let i = segs-1; i >= 0; i--) {
+    const x1 = cx + r - (2*r/segs)*(segs-i-0.5);
+    const x2 = cx + r - (2*r/segs)*(segs-i);
+    c2.quadraticCurveTo(x1, cy + r*0.6 + (i%2===0?1:-1)*r*0.32, x2, cy + r*0.6);
+  }
+  c2.closePath();
+  const grd = c2.createRadialGradient(cx, cy - r*0.2, 0, cx, cy, r*1.6);
+  grd.addColorStop(0,   'rgba(210,235,255,0.95)');
+  grd.addColorStop(0.6, 'rgba(160,200,255,0.7)');
+  grd.addColorStop(1,   'rgba(100,160,255,0.05)');
+  c2.fillStyle = grd; c2.fill();
+  c2.fillStyle = 'rgba(10,40,90,0.65)';
+  c2.beginPath(); c2.ellipse(cx-r*0.30, cy-r*0.08, r*0.14, r*0.20, 0, 0, Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(cx+r*0.30, cy-r*0.08, r*0.14, r*0.20, 0, 0, Math.PI*2); c2.fill();
+  c2.beginPath(); c2.arc(cx, cy+r*0.15, r*0.15, 0.2, Math.PI-0.2);
+  c2.strokeStyle='rgba(10,40,90,0.5)'; c2.lineWidth=r*0.07; c2.stroke();
+  return { oc, sz, cy: cy }; // cy: キャンバス内での幽霊中心y
+}
+
 function spawnGhost() {
   const r = 28 + Math.random()*20;
+  const { oc, sz, cy: ocCy } = _makeGhostCanvas(r);
   ghosts.push({
     x:        Math.random() * W,
     y:        H + r + 20,
@@ -2391,9 +2453,8 @@ function spawnGhost() {
     wobble:   Math.random() * Math.PI * 2,
     wobbleSpd:0.025 + Math.random()*0.025,
     wobbleAmp:18 + Math.random()*22,
-    r,
-    alpha:    0,
-    alive:    true,
+    r, alpha: 0, alive: true,
+    _oc: oc, _ocSz: sz, _ocCy: ocCy, // 事前レンダリング済みキャンバス
   });
 }
 
@@ -2416,71 +2477,60 @@ function drawUuuu() {
   ctx.save();
   for (const g of ghosts) {
     if (g.alpha <= 0.01) continue;
-    ctx.save();
     ctx.globalAlpha = g.alpha;
-    ctx.translate(g.x, g.y);
-
-    /* 胴体 */
-    ctx.beginPath();
-    ctx.arc(0, 0, g.r, Math.PI, 0);       // 上半円
-    ctx.lineTo(g.r, g.r * 0.6);
-    /* 波打つ裾 */
-    const segs = 5;
-    for (let i = segs-1; i >= 0; i--) {
-      const x1 = g.r - (2*g.r/segs)*(segs-i-0.5);
-      const x2 = g.r - (2*g.r/segs)*(segs-i);
-      ctx.quadraticCurveTo(x1, g.r*0.6 + (i%2===0?1:-1)*g.r*0.32, x2, g.r*0.6);
+    if (g._oc) {
+      /* 事前レンダリング済みキャンバスをdrawImageで貼り付け（createRadialGradient不要） */
+      ctx.drawImage(g._oc, g.x - g._ocSz / 2, g.y - g._ocCy);
+    } else {
+      /* フォールバック: 旧パス */
+      ctx.save();
+      ctx.translate(g.x, g.y);
+      ctx.beginPath();
+      ctx.arc(0, 0, g.r, Math.PI, 0);
+      ctx.lineTo(g.r, g.r * 0.6);
+      const segs = 5;
+      for (let i = segs-1; i >= 0; i--) {
+        const x1 = g.r - (2*g.r/segs)*(segs-i-0.5);
+        const x2 = g.r - (2*g.r/segs)*(segs-i);
+        ctx.quadraticCurveTo(x1, g.r*0.6 + (i%2===0?1:-1)*g.r*0.32, x2, g.r*0.6);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(180,215,255,0.8)'; ctx.fill();
+      ctx.restore();
     }
-    ctx.closePath();
-    const grd = ctx.createRadialGradient(0, -g.r*0.2, 0, 0, 0, g.r*1.6);
-    grd.addColorStop(0, 'rgba(210,235,255,0.95)');
-    grd.addColorStop(0.6, 'rgba(160,200,255,0.7)');
-    grd.addColorStop(1,   'rgba(100,160,255,0.05)');
-    ctx.fillStyle = grd; ctx.fill();
-
-    /* 目 */
-    ctx.fillStyle = 'rgba(10,40,90,0.65)';
-    ctx.beginPath(); ctx.ellipse(-g.r*0.30, -g.r*0.08, g.r*0.14, g.r*0.20, 0, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse( g.r*0.30, -g.r*0.08, g.r*0.14, g.r*0.20, 0, 0, Math.PI*2); ctx.fill();
-    /* 口 */
-    ctx.beginPath(); ctx.arc(0, g.r*0.15, g.r*0.15, 0.2, Math.PI-0.2);
-    ctx.strokeStyle='rgba(10,40,90,0.5)'; ctx.lineWidth=g.r*0.07; ctx.stroke();
-
-    ctx.restore();
   }
   ctx.globalAlpha = 1;
   ctx.restore();
 }
 
 /* ════════════════ ザザザザ: 雨 ════════════════ */
-function initZazazaza() { rainDrops = []; }
+function initZazazaza() { for (const o of rainDrops) o._dead = true; rainDrops = []; }
 
 function updateZazazaza() {
   const rate = endTimer < 80 ? 4 : endTimer < 180 ? 10 : 20;
   for (let i = 0; i < rate; i++) {
-    const vy = 9 + Math.random()*9;
-    rainDrops.push({
-      x:   Math.random() * (W + 80) - 40,
-      y:   -20,
-      vx:  -1.5 + Math.random()*0.5,
-      vy,
-      len: 12 + Math.random()*18,
-      a:   0.35 + Math.random()*0.45,
-    });
+    const d = _poolAlloc(_rainPool);
+    d._dead = false; d.ripple = false; d.splashed = false;
+    d.x = Math.random() * (W + 80) - 40; d.y = -20;
+    d.vx = -1.5 + Math.random()*0.5; d.vy = 9 + Math.random()*9;
+    d.len = 12 + Math.random()*18; d.a = 0.35 + Math.random()*0.45;
+    rainDrops.push(d);
   }
 
-  const rLen = rainDrops.length; // 追加前の長さ（新規リップルはこのフレームでは除去しない）
+  const rLen = rainDrops.length;
   for (let ri = 0; ri < rLen; ri++) {
     const r = rainDrops[ri];
-    if (r.ripple) { r.life--; continue; }   // リップルは移動しない
+    if (r.ripple) { r.life--; continue; }
     r.x += r.vx; r.y += r.vy;
-    /* 着地したら波紋を生成(1回のみ) */
     if (r.y >= H - 16 && !r.splashed) {
       r.splashed = true;
-      rainDrops.push({ ripple:true, x:r.x, y:H-16, life:12, maxLife:12 });
+      const rp = _poolAlloc(_rainPool);
+      rp._dead = false; rp.ripple = true;
+      rp.x = r.x; rp.y = H-16; rp.life = 12; rp.maxLife = 12;
+      rainDrops.push(rp);
     }
   }
-  swapRemove(rainDrops, r => r.ripple ? r.life > 0 : r.y < H + 30);
+  _swapRemovePool(rainDrops, r => r.ripple ? r.life > 0 : r.y < H + 30);
 }
 
 function drawZazazaza() {
