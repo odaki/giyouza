@@ -211,9 +211,18 @@ function _gyozaAlloc() {
 }
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
-const _deadify   = o => { o._dead = true; };
+const _deadify      = o => { o._dead = true; };
 /* gyozas.sort() に毎フレーム渡す comparator。定数化でクロージャ生成ゼロ */
-const _cmpGyozaY = (a, b) => a.y - b.y;
+const _cmpGyozaY    = (a, b) => a.y - b.y;
+/* 毎フレーム呼ばれる swapRemove の pred を定数化してクロージャ生成ゼロに */
+const _predParticle  = p => p.life > 0 && p.r > 0.3;
+const _predTimer     = p => p.timer > 0;
+const _predAlive     = o => o.alive;
+const _predLife      = o => o.life > 0;
+const _predUzaText   = t => t.age < t.life;
+const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
+/* H・W は起動後不変なので定数クロージャとして安全に使える */
+const _predGyoza     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
 
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
@@ -1714,7 +1723,7 @@ function update() {
     p.vy += 0.22; p.vx *= 0.985;
     p.r  *= 0.97; p.life--;
   }
-  swapRemove(particles, p => p.life > 0 && p.r > 0.3, _deadify);
+  swapRemove(particles, _predParticle, _deadify);
 
 
   if (phase === 'done') {
@@ -1759,8 +1768,8 @@ function update() {
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
-  swapRemove(missPopups,   p => p.timer > 0);
-  swapRemove(payoutPopups, p => p.timer > 0);
+  swapRemove(missPopups,   _predTimer);
+  swapRemove(payoutPopups, _predTimer);
 
   /* 実績バナータイマー（phaseに関係なく常時更新） */
   if (achBannerTimer > 0) {
@@ -1874,7 +1883,7 @@ function updateWorms() {
     w.segsY[w.head] = ny;
     if (nx < -60 || nx > W+60 || ny < -60 || ny > H+60) w.alive = false;
   }
-  swapRemove(worms, w => w.alive);
+  swapRemove(worms, _predAlive);
   if (endTimer % 18 === 0 && worms.length < 22) spawnWorm();
 }
 
@@ -2084,10 +2093,7 @@ function updateGyozas() {
   }
 
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
-  swapRemove(gyozas, g => {
-    const r = g.size * 0.52;
-    return g.y < H + 120 && g.x + r > 0 && g.x - r < W;
-  }, _deadify);
+  swapRemove(gyozas, _predGyoza, _deadify);
   /* updateの末尾でソートしておくことでdrawGyozas側でのslice+sortを排除 */
   gyozas.sort(_cmpGyozaY);
 }
@@ -2197,7 +2203,7 @@ function updateUzaTexts() {
     if (t.age < 15)             t.alpha = Math.min(t.peak, t.alpha+t.peak/15);
     else if (t.age > t.life-20) t.alpha = Math.max(0, t.alpha-t.peak/20);
   }
-  swapRemove(uzaTexts, t => t.age < t.life, _deadify);
+  swapRemove(uzaTexts, _predUzaText, _deadify);
 }
 
 function drawUzaTexts() {
@@ -2313,7 +2319,7 @@ function updateGigigigi() {
     s.vy += 0.4; s.vx *= 0.93;
     s.life--;
   }
-  swapRemove(gigiSparks, s => s.life > 0, _deadify);
+  swapRemove(gigiSparks, _predLife, _deadify);
 }
 
 function drawGigigigi() {
@@ -2470,7 +2476,7 @@ function updateUuuu() {
     else if (g.y < fadeZone) g.alpha = Math.max(0, g.alpha - 0.025);
     if (g.y < -g.r * 3) g.alive = false;
   }
-  swapRemove(ghosts, g => g.alive);
+  swapRemove(ghosts, _predAlive);
 }
 
 function drawUuuu() {
@@ -2531,7 +2537,7 @@ function updateZazazaza() {
       rainDrops.push(rp);
     }
   }
-  swapRemove(rainDrops, r => r.ripple ? r.life > 0 : r.y < H + 30, _deadify);
+  swapRemove(rainDrops, _predRainDrop, _deadify);
 }
 
 function drawZazazaza() {
@@ -4332,7 +4338,13 @@ phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
 particles = [];
 
-(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+(function loop(){
+  try { update(); draw(); } catch(e) {
+    /* ゲームループ内例外: コンソールに出力してループを継続 */
+    console.error('[loop error]', e);
+  }
+  requestAnimationFrame(loop);
+})();
 
 function onShoot(_inputAudioTime){
   /* idle と reach の両フェーズで矢を放てる */
