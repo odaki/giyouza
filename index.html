@@ -389,7 +389,6 @@ const LS_SCHEMA = 'giyouza_schema';
 const SCHEMA_VER  = 1; // 保存フォーマット変更時にインクリメント
 const SCHEMA_HASH = `v${SCHEMA_VER}|${ACHIEVEMENTS.map(a => a.id).join(',')}`;
 
-const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS];
 function lsClearAll() {
   for (const k of _LS_ALL_KEYS) try { localStorage.removeItem(k); } catch(e) {}
 }
@@ -1214,6 +1213,8 @@ const LS_COINS = 'giyouza_coins';
 const LS_BEST  = 'giyouza_best';
 const LS_MUTE  = 'giyouza_mute';
 const LS_BET   = 'giyouza_bet';
+/* LS_COINS 等が確定した後に定義（TDZ回避） */
+const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS];
 function lsSave() {
   /* _idle でアイドル時に書き込み（ゲームループのフレーム予算を削らない） */
   const _c = coins, _b = bet;
