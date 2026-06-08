@@ -81,7 +81,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.54';
+const VERSION = 'v1.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3607,8 +3607,8 @@ function drawEndScreen() {
   const cy=H/2-25;
   /* 縦画面(W=420)は横画面(W=1060)基準のフォントサイズをスケールダウン
      「超大当たり！！」は7文字のため幅制約が厳しく個別に小さめのスケールを使用 */
-  const _fsc  = IS_PORTRAIT ? 0.72 : 1.0; // 通常テキスト用
-  const _fscR = IS_PORTRAIT ? 0.62 : 1.0; // 超大当たり！！タイトル用（7文字）
+  const _fsc  = IS_PORTRAIT ? 0.82 : 1.0; // 通常テキスト用
+  const _fscR = IS_PORTRAIT ? 0.65 : 1.0; // 超大当たり！！タイトル用（7文字）
   const _fs   = s => Math.round(s * _fsc);
   const _fsR  = s => Math.round(s * _fscR);
   const _fy   = y => Math.round(y * _fsc);
