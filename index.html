@@ -380,10 +380,9 @@ const LS_SCHEMA = 'giyouza_schema';
 const SCHEMA_VER  = 1; // 保存フォーマット変更時にインクリメント
 const SCHEMA_HASH = `v${SCHEMA_VER}|${ACHIEVEMENTS.map(a => a.id).join(',')}`;
 
+const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS];
 function lsClearAll() {
-  [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS].forEach(k => {
-    try { localStorage.removeItem(k); } catch(e) {}
-  });
+  for (const k of _LS_ALL_KEYS) try { localStorage.removeItem(k); } catch(e) {}
 }
 
 /* スキーマチェック: 不一致ならデータ全消去して新スキーマを保存。
@@ -4429,7 +4428,7 @@ function handleGameClick(inputAudioTime) {
     if (isGameOver) { if (canRestart) gameOverReset(); return; }
     if (isMissResult) {
       /* ハズレ: 結果文字を即座に完全表示してバッファ登録。canRestartなら即時リセット＋発射 */
-      wheels.forEach(w => { if (w.result) w.resultPop = 1; });
+      for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
         init(); shootGuard = 0; pendingShoot = false; onShoot(inputAudioTime);
@@ -4508,7 +4507,7 @@ document.addEventListener('keydown', e=>{
     }
     /* ホイール速度も即時反映（BET対応レートで倍率計算） */
     const _rate = _slowHandRate(bet);
-    wheels.forEach(w => { w.speed *= isSlowSpin ? _rate : (1 / _rate); });
+    for (const w of wheels) w.speed *= isSlowSpin ? _rate : (1 / _rate);
   }
 });
 
