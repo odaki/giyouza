@@ -211,7 +211,9 @@ function _gyozaAlloc() {
 }
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
-const _deadify = o => { o._dead = true; };
+const _deadify   = o => { o._dead = true; };
+/* gyozas.sort() に毎フレーム渡す comparator。定数化でクロージャ生成ゼロ */
+const _cmpGyozaY = (a, b) => a.y - b.y;
 
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
@@ -2087,7 +2089,7 @@ function updateGyozas() {
     return g.y < H + 120 && g.x + r > 0 && g.x - r < W;
   }, _deadify);
   /* updateの末尾でソートしておくことでdrawGyozas側でのslice+sortを排除 */
-  gyozas.sort((a, b) => a.y - b.y);
+  gyozas.sort(_cmpGyozaY);
 }
 
 function drawOneGyoza(g) {
