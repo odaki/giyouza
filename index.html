@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.67';
+const VERSION = 'v1.68';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1457,7 +1457,7 @@ function init(fromStartup, fromGameOver) {
   }
   const prevSlowSpin = isSlowSpin;
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
-  const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.04) : 0.005;
+  const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
   isSlowSpin = Math.random() < slowProb;
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i]));
   curIdx     = 0;
