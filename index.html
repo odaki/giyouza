@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.68';
+const VERSION = 'v1.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -377,6 +377,25 @@ const _syncHistBuf   = new Float32Array(SYNC_HIST_LEN); // リングバッファ
 let   _syncHistHead  = 0; // 次の書き込み位置
 let   _syncHistCount = 0; // 有効エントリ数（最大SYNC_HIST_LEN）
 let syncRate     = 0;  // 平均同期率（0-1）
+let _autoDecayBeatIdx = -1; // ビート自動減衰: 最後に処理したビート番号
+
+/* syncRateリングバッファへスコアを1件追加し syncRate / 表示カウンタを更新する。
+   onShoot() からも、ビート自動減衰からも呼ばれる。 */
+function _pushSyncScore(score) {
+  _syncHistBuf[_syncHistHead] = score;
+  _syncHistHead = (_syncHistHead + 1) % SYNC_HIST_LEN;
+  if (_syncHistCount < SYNC_HIST_LEN) _syncHistCount++;
+  let _s = 0;
+  for (let _i = 0; _i < _syncHistCount; _i++) _s += _syncHistBuf[_i];
+  syncRate = _s / _syncHistCount;
+  if (syncRate >= 0.5) {
+    syncRateAboveCount++;
+    syncRateBelowCount = 0;
+  } else {
+    syncRateBelowCount++;
+    if (syncRateBelowCount >= SYNC_VISIBLE_THRESHOLD) syncRateAboveCount = 0;
+  }
+}
 let syncChain    = 0;  // 連続GOOD以上の連鎖数
 let syncJustTimer = 0; // JUST/GOOD演出タイマー（50→0カウントダウン）
 let syncJustLabel = ''; // 'JUST!', 'GOOD', 'OK'
@@ -1109,13 +1128,13 @@ function playSE(name, atTime) {
       break;
     }
     case 'miss': {
-      /* ズコー: 下降音 */
+      /* ズコー: D4→E2 スライド（元のキャラを保ちつつCメジャーのノートに調律） */
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(masterGain ?? ctx.destination);
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, t);
-      osc.frequency.exponentialRampToValueAtTime(80, t + 0.45);
+      osc.frequency.setValueAtTime(noteHz('D', 4), t);
+      osc.frequency.exponentialRampToValueAtTime(noteHz('E', 2), t + 0.45);
       gain.gain.setValueAtTime(0.22, t);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.50);
       osc.start(t); osc.stop(t + 0.52);
@@ -1478,6 +1497,8 @@ function init(fromStartup, fromGameOver) {
   canRestart  = false;
   betLocked   = false;
   shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
+  /* done フェーズ中に経過したビートをミスとして数えないようリセット */
+  _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2)) : -1;
   isMissResult = false;
   /* missPopups / payoutPopups はトライをまたいで自然フェードアウトするため init でクリアしない */
   /* スローイベント: 通常トライ切り替え時にBGMテンポをなめらかに変化させる
@@ -1596,6 +1617,20 @@ function update() {
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
   if (shootGuard > 0) shootGuard--;
+  /* ── ビート自動減衰: idle/reach 中に2拍経過するたびにスコア0を追加 ──
+     2拍単位（152BPM→76/分に相当）にすることで、2拍おきに射つプレイヤーは
+     decay が発生せず syncRate を高く保てる。4拍以上あけると下がり始める。
+     done/shooting/tapestart/startup フェーズは対象外（プレイヤーの責任ではない）
+     shootGuard > 0 の初期保護期間も除外 */
+  if ((phase === 'idle' || phase === 'reach') && shootGuard <= 0 && BGM_BEAT > 0) {
+    const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2));
+    if (_autoDecayBeatIdx >= 0 && _curBeat > _autoDecayBeatIdx) {
+      /* フレーム落ち等で複数期間分まとめて来た場合は最大4件に制限 */
+      const _missed = Math.min(_curBeat - _autoDecayBeatIdx, 4);
+      for (let _bi = 0; _bi < _missed; _bi++) _pushSyncScore(0);
+    }
+    _autoDecayBeatIdx = _curBeat;
+  }
   if (slowHandLockFrames > 0) slowHandLockFrames--;
   if (slowHandPopTimer  > 0) slowHandPopTimer--;
   if (syncJustTimer     > 0) syncJustTimer--;
@@ -1690,7 +1725,7 @@ function update() {
         }
         /* ハズレ判定 */
         if (!_isJackpot && !_isMedium) {
-          playSE('miss', nextBeatDivTime(4)); // 4文字目の決定音＝ハズレ音
+          playSE('miss', _arrowStartAudioTime + ARROW_FLIGHT_SEC); // 4射目着弾と同タイミング
           isMissResult = true;
           missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
         }
@@ -4423,21 +4458,10 @@ function onShoot(_inputAudioTime){
   if (_syncScore !== null) {
     const score = _syncScore;
     w.syncScore = score; // 結果文字の色付けに使用
-    /* リングバッファへ追記（shift()なしで O(1)） */
-    _syncHistBuf[_syncHistHead] = score;
-    _syncHistHead = (_syncHistHead + 1) % SYNC_HIST_LEN;
-    if (_syncHistCount < SYNC_HIST_LEN) _syncHistCount++;
-    let _syncSum = 0;
-    for (let _i = 0; _i < _syncHistCount; _i++) _syncSum += _syncHistBuf[_i];
-    syncRate = _syncSum / _syncHistCount;
-    /* syncRateAboveCount/BelowCount: 表示ON/OFFの連続判定 */
-    if (syncRate >= 0.5) {
-      syncRateAboveCount++;
-      syncRateBelowCount = 0;
-    } else {
-      syncRateBelowCount++;
-      if (syncRateBelowCount >= SYNC_VISIBLE_THRESHOLD) syncRateAboveCount = 0;
-    }
+    /* リングバッファへ追記 + syncRate更新（_pushSyncScore共通ヘルパー） */
+    _pushSyncScore(score);
+    /* このビートは発射済みとしてマーク（auto-decayが二重にカウントしないよう） */
+    _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2)) : -1;
     /* JUST/GOOD/OK 演出: 連続してsyncRate≥0.5になってから表示 */
     if (syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
       if (score >= 0.667) {        // ±33ms以内 → JUST
