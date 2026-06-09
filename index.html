@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.61';
+const VERSION = 'v1.62';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -223,6 +223,8 @@ const _predUzaText   = t => t.age < t.life;
 const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
 /* H・W は起動後不変なので定数クロージャとして安全に使える */
 const _predGyoza     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
+/* done フェーズで毎フレーム呼ばれる allShown 判定用 pred */
+const _predWheelShown = w => !w.result || w.resultPop >= 1;
 
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
@@ -272,13 +274,16 @@ function spawnParticle(x, y, vx, vy, color, life, r) {
 /* GC削減: filter()の代わりにswap-and-popでdeadな要素をインプレース除去
    pred がtrueの要素を保持する（filter同様の意味）
    onRemove（省略可）: 除去された要素に呼ぶコールバック。
-     プールオブジェクトを返却する場合は _deadify を渡す。 */
+     プールオブジェクトを返却する場合は _deadify を渡す。
+   ホットループ内の条件分岐を排除するため onRemove の有無でパスを分岐する。 */
 function swapRemove(arr, pred, onRemove) {
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (!pred(arr[i])) {
-      if (onRemove) onRemove(arr[i]);
-      arr[i] = arr[arr.length - 1];
-      arr.length--;
+  if (onRemove) {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (!pred(arr[i])) { onRemove(arr[i]); arr[i] = arr[arr.length-1]; arr.length--; }
+    }
+  } else {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (!pred(arr[i])) { arr[i] = arr[arr.length-1]; arr.length--; }
     }
   }
 }
@@ -1739,7 +1744,7 @@ function update() {
     const _isMedium  = hitType !== 'none' && !_isJackpot;
     const minWait  = isMissResult ? 2 : (_isJackpot || _isMedium) ? 96 : 24;
     /* 4文字目の結果が完全に表示されてからリセット */
-    const allShown = wheels.every(w => !w.result || w.resultPop >= 1);
+    const allShown = wheels.every(_predWheelShown);
     /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
     if (!isGameOver && isMissResult && endTimer > minWait && allShown && onBeatGrid()) {
       const fire = pendingShoot; init();
@@ -3167,7 +3172,16 @@ function drawWheel(i) {
   /* ビート拍動: アクティブホイールの強調度をキックに合わせてパルス */
   const bp = active ? getBeatPulse() : 0; // 0-1、ビート直後=1
   ctx.save(); ctx.translate(w.x,w.y);
-  if (active){ctx.shadowColor=Y;ctx.shadowBlur=50 + bp * 40;}
+  /* グロー光輪: セグメント描画前に1回だけ shadowBlur を使用し GPUブラーパスを集約
+     旧: 各セグメントのfill/stroke/strokeText/fillText すべてに shadowBlur が効いて
+         8〜12セグ × 4操作 = 32〜48 GPU ブラーパス/フレーム → Input Delay 17〜27ms の原因
+     新: 外周リングを1ストロークするだけ = 1 GPU ブラーパス/フレーム */
+  if (active) {
+    ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
+    ctx.shadowColor=Y; ctx.shadowBlur=50+bp*40;
+    ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
+    ctx.shadowBlur=0; // セグメント描画前にリセット
+  }
 
   for (const s of w.segs) {
     const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
@@ -3178,7 +3192,7 @@ function drawWheel(i) {
     ctx.save(); ctx.translate(tx,ty);
     ctx.font=s.font; // キャッシュ済み文字列を使用（毎フレーム生成しない）
     ctx.textAlign='center'; ctx.textBaseline='middle';
-    /* shadowBlur の代わりに strokeText でアウトライン描画（GPU blur パスを排除） */
+    /* strokeText でアウトライン描画（shadowBlur は上で既にリセット済み） */
     ctx.lineWidth=4; ctx.strokeStyle='rgba(0,0,0,0.88)'; ctx.strokeText(s.char,0,0);
     ctx.fillStyle='#fffde7'; ctx.fillText(s.char,0,0); ctx.restore();
   }
@@ -4339,13 +4353,7 @@ phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
 particles = [];
 
-(function loop(){
-  try { update(); draw(); } catch(e) {
-    /* ゲームループ内例外: コンソールに出力してループを継続 */
-    console.error('[loop error]', e);
-  }
-  requestAnimationFrame(loop);
-})();
+(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
 
 function onShoot(_inputAudioTime){
   /* idle と reach の両フェーズで矢を放てる */
