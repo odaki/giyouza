@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.66';
+const VERSION = 'v1.67';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -654,7 +654,7 @@ function calcSyncScore(atTime) {
   const ph       = ((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT; // 0〜BGM_BEAT
   const distSec  = ph < BGM_BEAT / 2 ? ph : BGM_BEAT - ph;         // 最近傍キックまでの距離
   const distMs   = distSec * 1000;
-  return Math.max(0, 1 - distMs / 150); // 0ms→1.0, 150ms→0.0, 150ms超→0
+  return Math.max(0, 1 - distMs / 100); // 0ms→1.0, 100ms→0.0, 100ms超→0
 }
 
 /* 次の1/4拍グリッド境界点のaudioCtx時刻を返す（SE先読みスケジュール用） */
@@ -4440,11 +4440,11 @@ function onShoot(_inputAudioTime){
     }
     /* JUST/GOOD/OK 演出: 連続してsyncRate≥0.5になってから表示 */
     if (syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
-      if (score >= 0.667) {        // ±50ms以内 → JUST
+      if (score >= 0.667) {        // ±33ms以内 → JUST
         syncJustLabel = 'JUST!'; syncChain++;
-      } else if (score >= 0.333) { // ±100ms以内 → GOOD
+      } else if (score >= 0.333) { // ±67ms以内 → GOOD
         syncJustLabel = 'GOOD';  syncChain++;
-      } else if (score > 0) {      // ±150ms以内 → OK
+      } else if (score > 0) {      // ±100ms以内 → OK
         syncJustLabel = 'OK';    syncChain = 0;
       } else {                     // ±150ms超 → NG
         syncJustLabel = '';      syncChain = 0;
