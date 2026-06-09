@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.65';
+const VERSION = 'v1.66';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1146,26 +1146,7 @@ function playSE(name, atTime) {
       achSeq.forEach((f, i) => playOsc(ctx, 'sine', f, t + i*0.06, 0.15, 0.25, 0.10));
       break;
     }
-    case 'sync_just': {
-      /* ビートジャスト: 音程固定(A5=880Hz)、音色だけでタイミング品質を表現
-         JUST : sine基音 + 2倍音(1760Hz) + 3倍音(2640Hz) → 澄んで明るい倍音豊かな音
-         GOOD : sine基音のみ → 通常のチン
-         OK   : triangle → 柔らかく控えめ */
-      const base = noteHz('A', 5); // 880Hz (BGMキー C メジャーの長6度 = 調和する)
-      if (syncJustScore >= 0.667) {
-        /* JUST: 倍音を重ねて明るく輝く音 */
-        playOsc(ctx, 'sine', base,     t, 0.05, 0.18, 0.10);
-        playOsc(ctx, 'sine', base * 2, t, 0.05, 0.09, 0.10); // 2倍音
-        playOsc(ctx, 'sine', base * 3, t, 0.04, 0.04, 0.08); // 3倍音
-      } else if (syncJustScore >= 0.333) {
-        /* GOOD: sineのみ、通常の明るさ */
-        playOsc(ctx, 'sine', base, t, 0.04, 0.13, 0.08);
-      } else {
-        /* OK: triangleで柔らかく */
-        playOsc(ctx, 'triangle', base, t, 0.04, 0.07, 0.07);
-      }
-      break;
-    }
+    case 'sync_just': break; // 廃止: 視覚表示（JUST!/GOOD）のみ、SE なし
     case 'slow_hand': {
       /* スローハンド発動: テープが引っかかって遅くなるような"ウォ〜ン"音 */
       const osc  = ctx.createOscillator();
@@ -4461,10 +4442,8 @@ function onShoot(_inputAudioTime){
     if (syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
       if (score >= 0.667) {        // ±50ms以内 → JUST
         syncJustLabel = 'JUST!'; syncChain++;
-        playSE('sync_just');
       } else if (score >= 0.333) { // ±100ms以内 → GOOD
         syncJustLabel = 'GOOD';  syncChain++;
-        playSE('sync_just');
       } else if (score > 0) {      // ±150ms以内 → OK
         syncJustLabel = 'OK';    syncChain = 0;
       } else {                     // ±150ms超 → NG
