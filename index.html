@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.64';
+const VERSION = 'v1.65';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -225,6 +225,10 @@ const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
 const _predGyoza     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
 /* done フェーズで毎フレーム呼ばれる allShown 判定用 pred */
 const _predWheelShown = w => !w.result || w.resultPop >= 1;
+
+/* 発射SE用: Cメジャーアルペジオ音程テーブル（4本の矢 = C→E→G→C'）
+   モジュールスコープに置いて playSE 呼び出しごとの配列生成を排除 */
+const _SHOOT_ARPEGIO = [noteHz('C',5), noteHz('E',5), noteHz('G',5), noteHz('C',6)];
 
 /* ── 毎フレーム生成を避けるための描画用ルックアップテーブル ──
    テンプレートリテラルによる毎フレーム文字列アロケーションを排除する。
@@ -1029,10 +1033,11 @@ function playSE(name, atTime) {
   const t   = atTime ?? (ctx.currentTime + 0.01);
   switch (name) {
     case 'shoot': {
-      /* シュッ + 弦の放つ音 */
-      playNoise(ctx, t, 0.06, 0.25, 3000);
-      playOsc(ctx, 'sawtooth', 600, t, 0.04, 0.12, 0.04);
-      playOsc(ctx, 'sawtooth', 400, t+0.03, 0.05, 0.10, 0.04);
+      /* 弓を放つ音: noise（弦の放つ音）+ Cメジャーアルペジオ
+         4本の矢ごとに C5→E5→G5→C6 と音程が上がり、コードが積み上がる演出
+         curIdx は発射時の矢番号（0〜3）をグローバル変数から参照 */
+      playNoise(ctx, t, 0.05, 0.20, 3000);
+      playOsc(ctx, 'triangle', _SHOOT_ARPEGIO[Math.min(curIdx, 3)], t, 0.03, 0.15, 0.06);
       break;
     }
     case 'lock': {
