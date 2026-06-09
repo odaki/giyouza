@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.63';
+const VERSION = 'v1.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -225,6 +225,28 @@ const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
 const _predGyoza     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
 /* done フェーズで毎フレーム呼ばれる allShown 判定用 pred */
 const _predWheelShown = w => !w.result || w.resultPop >= 1;
+
+/* ── 毎フレーム生成を避けるための描画用ルックアップテーブル ──
+   テンプレートリテラルによる毎フレーム文字列アロケーションを排除する。
+   ① ビートリングの strokeStyle: bp(0〜1) を 32段階に量子化
+   ② _syncBarColor の動的 rgb 文字列: r(0〜1) を 64段階に量子化        */
+const _BEAT_RING_COLORS = /* 32段階 rgba(245,208,32, 0〜0.55) */
+  Array.from({length:32}, (_,i) => `rgba(245,208,32,${((i/31)*0.55).toFixed(4)})`);
+const _BEAT_BORDER_COLORS = /* ミュート時枠線: rgba(245,208,32, 0.3〜0.85) */
+  Array.from({length:32}, (_,i) => `rgba(245,208,32,${(0.3 + (i/31)*0.55).toFixed(4)})`);
+/* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
+const _SYNC_RGB_TABLE = (() => {
+  const t64 = Array.from({length:64});
+  return {
+    green:  t64.map((_,i) => { const t=i/63; return `rgb(${(60+155*t)|0},200,40)`; }),
+    yellow: t64.map((_,i) => { const t=i/63; return `rgb(220,${(100+100*t)|0},30)`; }),
+    red:    t64.map((_,i) => { const t=i/63; return `rgb(200,${(60*t)|0},30)`;      }),
+  };
+})();
+
+/* ── 同期メーターのテキストキャッシュ（毎フレームのテンプレートリテラルを排除） ── */
+let _cachedSyncPctVal = -1, _cachedSyncPctStr = '';
+let _cachedSyncChainVal = -1, _cachedSyncChainStr = '';
 
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
@@ -3159,7 +3181,7 @@ function draw() {
     if (pulse > 0) {
       const lw = pulse * 6; // 最大6px
       ctx.save();
-      ctx.strokeStyle = `rgba(245,208,32,${0.3 + pulse * 0.55})`;
+      ctx.strokeStyle = _BEAT_BORDER_COLORS[Math.min(31,pulse*31|0)];
       ctx.lineWidth = lw;
       ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
       ctx.restore();
@@ -3212,10 +3234,10 @@ function drawWheel(i) {
   }
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
   ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
-  /* ビート拍動: 外側に広がる拍動リング */
+  /* ビート拍動: 外側に広がる拍動リング（テーブルで文字列生成ゼロ） */
   if (bp > 0.01) {
     ctx.beginPath(); ctx.arc(0,0,WR+12+bp*14,0,Math.PI*2);
-    ctx.strokeStyle=`rgba(245,208,32,${bp*0.55})`; ctx.lineWidth=2+bp*2; ctx.stroke();
+    ctx.strokeStyle=_BEAT_RING_COLORS[Math.min(31,bp*31|0)]; ctx.lineWidth=2+bp*2; ctx.stroke();
   }
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
@@ -3957,14 +3979,15 @@ function drawEndScreen() {
 }
 
 /* ── ビートシンクメーター ── */
-/* _syncBarColor: 毎フレーム配列を new しないよう固定バッファを再利用 */
+/* _syncBarColor: 固定バッファを再利用 + テンプレートリテラルを事前テーブルに置換 */
 const _syncColorBuf = ['', '', 0];
 function _syncBarColor(r) {
-  /* 0=グレー → 0.4=赤 → 0.6=黄 → 0.8=緑 → 1.0=ゴールド */
+  /* 0=グレー → 0.4=赤 → 0.6=黄 → 0.8=緑 → 1.0=ゴールド
+     テンプレートリテラル文字列の動的生成を排除するため _SYNC_RGB_TABLE を参照 */
   if (r >= 0.9) { _syncColorBuf[0]='#f5d020'; _syncColorBuf[1]='#f5a623'; _syncColorBuf[2]=1.0; return _syncColorBuf; }
-  if (r >= 0.7) { const t=(r-0.7)/0.2; _syncColorBuf[0]=`rgb(${(60+155*t)|0},200,40)`;    _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
-  if (r >= 0.5) { const t=(r-0.5)/0.2; _syncColorBuf[0]=`rgb(220,${(100+100*t)|0},30)`;  _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
-  if (r >= 0.3) { const t=(r-0.3)/0.2; _syncColorBuf[0]=`rgb(200,${(60*t)|0},30)`;       _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
+  if (r >= 0.7) { const i=Math.min(63,(r-0.7)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.green[i];  _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
+  if (r >= 0.5) { const i=Math.min(63,(r-0.5)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.yellow[i]; _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
+  if (r >= 0.3) { const i=Math.min(63,(r-0.3)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.red[i];    _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
   _syncColorBuf[0]='rgba(130,130,130,0.9)'; _syncColorBuf[1]='#888'; _syncColorBuf[2]=0.5; return _syncColorBuf;
 }
 
@@ -3974,8 +3997,12 @@ function drawSyncMeter() {
 
   const pct     = syncRate;                         // 0-1
   const [fillC, glowC, glowStr] = _syncBarColor(pct);
-  const pctText = `${Math.round(pct * 100)}%`;
-  const chainText = syncChain >= 2 ? `🎵×${syncChain}` : '';
+  /* テキストキャッシュ: 値が変化した時のみ再生成（毎フレームのテンプレートリテラルを排除） */
+  const pctRounded = Math.round(pct * 100);
+  if (pctRounded !== _cachedSyncPctVal) { _cachedSyncPctVal = pctRounded; _cachedSyncPctStr = `SYNC ${pctRounded}%`; }
+  if (syncChain   !== _cachedSyncChainVal) { _cachedSyncChainVal = syncChain; _cachedSyncChainStr = syncChain >= 2 ? `🎵×${syncChain}` : ''; }
+  const pctText   = _cachedSyncPctStr;
+  const chainText = _cachedSyncChainStr;
 
   ctx.save();
 
@@ -4008,7 +4035,7 @@ function drawSyncMeter() {
   ctx.font = `bold 9px monospace`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(220,220,220,0.7)';
-  ctx.fillText(`SYNC ${pctText}`, mx + 6, my + mh / 2);
+  ctx.fillText(pctText, mx + 6, my + mh / 2);
   if (chainText) {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#f5d020';
