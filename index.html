@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.90';
+const VERSION = 'v1.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2336,8 +2336,16 @@ function updateGiugiu() {
   const CX = W/2 + Math.cos(endTimer * 0.022) * driftR;
   const CY = H/2 + Math.sin(endTimer * 0.037) * driftR * 0.6;
   /* ATTRACT脈動: ビート同期（拍頭に一瞬だけ弱反発→すぐ引き戻し）
-     getBeatPulse()=1 at beat, ~160ms decay → attractMul: 1.0(通常) → -0.3(拍頭) */
-  const beatPulse    = getBeatPulse();
+     getBeatPulse()に+60ms先読みを追加してギウギウ拍動の体感遅延を補正 */
+  const beatPulse = (function() {
+    if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0;
+    const rate = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
+    const hw   = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+    const pos  = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - hw + 0.06) * rate;
+    const pip  = ((pos % _bgmQuantizedLoopDur) + _bgmQuantizedLoopDur) % _bgmQuantizedLoopDur;
+    const ph   = (((pip % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
+    return Math.pow(Math.max(0, 1 - ph * 2.5), 2);
+  })();
   const attractMul   = 1.0 - beatPulse * 1.75;
   const ATTRACT_DYNA = ATTRACT * attractMul;
 
