@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.91';
+const VERSION = 'v1.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1904,8 +1904,9 @@ function launchGizaFireworks() {
   }
 }
 
-/* ── ウヨウヨ: うごめく虫 ── */
+/* ── ウヨウヨ: うごめくギヨウザ ── */
 function initWorms() {
+  for (const g of worms) g._dead = true;
   worms = [];
   for (let i = 0; i < 10; i++) setTimeout(() => spawnWorm(), i * 300);
 }
@@ -1913,77 +1914,41 @@ function initWorms() {
 function spawnWorm() {
   const side = Math.floor(Math.random()*4);
   let x, y, angle;
-  if      (side===0){ x=Math.random()*W; y=-12;   angle=Math.PI/2; }
-  else if (side===1){ x=W+12;  y=Math.random()*H; angle=Math.PI;   }
-  else if (side===2){ x=Math.random()*W; y=H+12;  angle=-Math.PI/2;}
-  else              { x=-12;   y=Math.random()*H; angle=0;          }
+  if      (side===0){ x=Math.random()*W; y=-40;   angle= Math.PI/2; }
+  else if (side===1){ x=W+40;  y=Math.random()*H; angle= Math.PI;   }
+  else if (side===2){ x=Math.random()*W; y=H+40;  angle=-Math.PI/2; }
+  else              { x=-40;   y=Math.random()*H; angle= 0;          }
   angle += (Math.random()-0.5)*0.8;
-
-  const len = 12 + Math.floor(Math.random()*8);
-  /* リングバッファ: Float32Arrayで事前確保、毎フレームのオブジェクト生成ゼロ */
-  const segsX = new Float32Array(len).fill(x);
-  const segsY = new Float32Array(len).fill(y);
-  const hue  = 90 + Math.random()*70;
-  worms.push({
-    segsX, segsY,
-    head:       0,   // リングバッファのヘッドインデックス
-    len,
-    angle,
-    speed:      1.5 + Math.random()*1.8,
-    wiggle:     Math.random()*Math.PI*2,
-    wiggleSpd:  0.09 + Math.random()*0.07,
-    wiggleAmp:  0.05 + Math.random()*0.05,
-    color:      `hsl(${hue},80%,45%)`,
-    colorDark:  `hsl(${hue},80%,28%)`,
-    size:       5 + Math.random()*4,
-    alive:      true,
-  });
+  const g       = makeGyozaObj(x, y, 0, 0);
+  g.angle       = angle;
+  g.speed       = 1.2 + Math.random()*1.5;
+  g.wiggle      = Math.random()*Math.PI*2;
+  g.wiggleSpd   = 0.08 + Math.random()*0.06;
+  g.wiggleAmp   = 0.04 + Math.random()*0.04;
+  g.alive       = true;
+  worms.push(g);
 }
 
 function updateWorms() {
   for (const w of worms) {
     w.wiggle += w.wiggleSpd;
     w.angle  += Math.sin(w.wiggle) * w.wiggleAmp;
-    /* リングバッファ: ヘッドを1つ戻して新しい先頭位置に書き込む */
-    const prevHead = w.head;
-    w.head = (w.head + w.len - 1) % w.len;
-    const nx = w.segsX[prevHead] + Math.cos(w.angle) * w.speed;
-    const ny = w.segsY[prevHead] + Math.sin(w.angle) * w.speed;
-    w.segsX[w.head] = nx;
-    w.segsY[w.head] = ny;
-    if (nx < -60 || nx > W+60 || ny < -60 || ny > H+60) w.alive = false;
+    w.x      += Math.cos(w.angle) * w.speed;
+    w.y      += Math.sin(w.angle) * w.speed;
+    w.rot     = w.angle;  // 進行方向に向ける
+    w.rotSpd  = 0;
+    if (w.x < -80 || w.x > W+80 || w.y < -80 || w.y > H+80) {
+      w.alive = false;
+      w._dead = true;
+    }
   }
   swapRemove(worms, _predAlive);
   if (endTimer % 18 === 0 && worms.length < 22) spawnWorm();
 }
 
 function drawWorms() {
-  ctx.save();
   for (const w of worms) {
-    /* リングバッファを末尾（最古）から先頭（最新）に向かって描画 */
-    for (let i = w.len - 1; i >= 0; i--) {
-      const idx = (w.head + i) % w.len;
-      const x = w.segsX[idx], y = w.segsY[idx];
-      const t = i / w.len;
-      const r = w.size * (1 - t*0.55);
-      ctx.globalAlpha = 0.92 - t*0.45;
-      ctx.fillStyle   = i < 3 ? w.color : w.colorDark;
-      ctx.beginPath();
-      ctx.arc(x, y, Math.max(1, r), 0, Math.PI*2);
-      ctx.fill();
-    }
-    /* 目: headが先頭（最新位置） */
-    const hx = w.segsX[w.head], hy = w.segsY[w.head];
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#111';
-    const perp = w.angle + Math.PI/2;
-    const er = w.size * 0.22;
-    const ed = w.size * 0.32;
-    ctx.beginPath(); ctx.arc(hx+Math.cos(perp)*ed, hy+Math.sin(perp)*ed, er, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(hx-Math.cos(perp)*ed, hy-Math.sin(perp)*ed, er, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(hx+Math.cos(perp)*ed+er*0.3, hy+Math.sin(perp)*ed+er*0.3, er*0.4, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(hx-Math.cos(perp)*ed+er*0.3, hy-Math.sin(perp)*ed+er*0.3, er*0.4, 0, Math.PI*2); ctx.fill();
+    drawOneGyoza(w);
   }
   ctx.globalAlpha = 1;
   ctx.restore();
