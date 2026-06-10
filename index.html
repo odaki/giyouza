@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.92';
+const VERSION = 'v1.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1523,6 +1523,7 @@ function init(fromStartup, fromGameOver) {
   gyozas     = [];
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
+  for (const g of yoyos) g._dead = true;
   yoyos       = [];
   ghosts      = [];
   for (const o of rainDrops)  o._dead = true;
@@ -2430,63 +2431,44 @@ function drawGigigigi() {
 
 /* ════════════════ ヨヨヨヨ: ヨーヨー ════════════════ */
 function initYoyoyoyo() {
+  for (const g of yoyos) g._dead = true;
   yoyos = [];
   const count = 14;
   for (let i = 0; i < count; i++) {
-    const hue = 160 + Math.random()*120;
-    const r   = 16 + Math.random()*12;
-    const colorL = `hsl(${hue},75%,60%)`;
-    const colorD = `hsl(${hue},75%,35%)`;
-    /* ボール本体をオフスクリーンに事前レンダリング: drawYoyoyoyo毎のcreateRadialGradientを排除 */
-    const sz  = Math.ceil(r * 2 + 4);
-    const oc  = document.createElement('canvas');
-    oc.width  = sz; oc.height = sz;
-    const oc2 = oc.getContext('2d');
-    const cx  = sz / 2, cy = sz / 2;
-    const grd = oc2.createRadialGradient(cx-r*0.3, cy-r*0.3, 0, cx, cy, r);
-    grd.addColorStop(0, colorL); grd.addColorStop(1, colorD);
-    oc2.beginPath(); oc2.arc(cx, cy, r, 0, Math.PI*2);
-    oc2.fillStyle = grd; oc2.fill();
-    oc2.strokeStyle = 'rgba(0,0,0,0.25)'; oc2.lineWidth = 1; oc2.stroke();
-    oc2.beginPath(); oc2.arc(cx-r*0.32, cy-r*0.32, r*0.26, 0, Math.PI*2);
-    oc2.fillStyle = 'rgba(255,255,255,1)'; oc2.fill();
-    yoyos.push({
-      x: (i + 0.5) * (W / count) + (Math.random()-0.5)*18,
-      phase: Math.random() * Math.PI * 2,
-      freq:  0.055 + Math.random()*0.04,
-      amp:   H * 0.30 + Math.random() * H * 0.25,
-      topY:  10 + Math.random()*20,
-      r, colorL, colorD, delay: i * 6,
-      _oc: oc, _ocSz: sz, // 事前レンダリング済みキャンバス
-    });
+    const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*18;
+    const g   = makeGyozaObj(x, 0, 0, 0);
+    g.phase   = Math.random() * Math.PI * 2;
+    g.freq    = 0.055 + Math.random()*0.04;
+    g.amp     = H * 0.30 + Math.random() * H * 0.25;
+    g.topY    = 10 + Math.random()*20;
+    g.delay   = i * 6;
+    g.spinSpd = (Math.random() > 0.5 ? 1 : -1) * (0.03 + Math.random()*0.03);
+    yoyos.push(g);
   }
 }
 
 function drawYoyoyoyo() {
   if (hitType !== 'yoyoyoyo' || endTimer < 50) return;
-  ctx.save();
   for (const y of yoyos) {
     const age = endTimer - 50 - y.delay;
     if (age <= 0) continue;
     const a  = Math.min(1, age / 22);
-    const bY = y.topY + y.amp * (0.5 + 0.5*Math.sin(endTimer * y.freq + y.phase));
-
-    ctx.globalAlpha = a;
+    y.y  = y.topY + y.amp * (0.5 + 0.5*Math.sin(endTimer * y.freq + y.phase));
+    y.rot += y.spinSpd;
 
     /* 糸 */
-    ctx.beginPath(); ctx.moveTo(y.x, 0); ctx.lineTo(y.x, bY);
-    ctx.strokeStyle = 'rgba(220,220,200,0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.save();
+    ctx.globalAlpha = a * 0.7;
+    ctx.beginPath(); ctx.moveTo(y.x, 0); ctx.lineTo(y.x, y.y);
+    ctx.strokeStyle = 'rgba(220,220,200,0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.restore();
 
-    /* ボール本体: 事前レンダリング済みキャンバスをdrawImageで貼り付け（毎フレームのグラジェント生成なし） */
-    ctx.drawImage(y._oc, y.x - y._ocSz/2, bY - y._ocSz/2);
-
-    /* 中央の溝 */
-    ctx.beginPath(); ctx.moveTo(y.x - y.r, bY); ctx.lineTo(y.x + y.r, bY);
-    ctx.strokeStyle = y.colorD; ctx.lineWidth = 2.5;
-    ctx.globalAlpha = a * 0.5; ctx.stroke();
+    /* ギヨウザ */
+    ctx.save();
+    ctx.globalAlpha = a;
+    drawOneGyoza(y);
+    ctx.restore();
   }
-  ctx.globalAlpha = 1;
-  ctx.restore();
 }
 
 /* ════════════════ ウウウウ: 幽霊 ════════════════ */
