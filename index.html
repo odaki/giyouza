@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.79';
+const VERSION = 'v1.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1287,7 +1287,7 @@ function lsLoad() {
   }
 }
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
-const REACH_MIN_SPEED_RATIO = 1 / 3; // 最低回転速度 = 初期速度のこの割合（1/3 ≈ スローハンド相当）
+const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
 let worms, uzaTexts, gyozas, giugiuCells;
 let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
