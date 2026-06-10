@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.75';
+const VERSION = 'v1.76';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4551,8 +4551,9 @@ document.addEventListener('keydown', e=>{
   /* カーソル左右でBET変更 */
   if ((e.code==='ArrowLeft'||e.code==='ArrowRight') && !betLocked && (phase==='idle'||phase==='reach')) {
     e.preventDefault();
-    /* スローハンドランプ中はBET変更ロック */
-    if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime) return;
+    /* スローハンドランプ中はBET変更ロック（suspended時は currentTime が止まるためロック免除） */
+    if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+        && audioCtx.currentTime < slowRampEndTime) return;
     changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
