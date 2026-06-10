@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.77';
+const VERSION = 'v1.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1517,6 +1517,7 @@ function init(fromStartup, fromGameOver) {
   if (coins !== undefined) clampBet();
   worms      = [];
   uzaTexts   = [];
+  for (const g of gyozas) g._dead = true; // プールに返却してからクリア（リーク防止）
   gyozas     = [];
   giugiuCells = [];
   gigiSparks  = [];
