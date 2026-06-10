@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.76';
+const VERSION = 'v1.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1287,7 +1287,7 @@ function lsLoad() {
   }
 }
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
-const REACH_MIN_SPEED    = 0.030; // 最低回転速度（リーチ減速後の速さ）
+const REACH_MIN_SPEED_RATIO = 1 / 3; // 最低回転速度 = 初期速度のこの割合（1/3 ≈ スローハンド相当）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
 let worms, uzaTexts, gyozas, giugiuCells;
 let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
@@ -1762,7 +1762,7 @@ function update() {
     const w4 = wheels[3];
     const decayT = Math.min(1, reachTimer / REACH_DECEL_FRAMES);
     const ease   = 1 - Math.pow(1 - decayT, 2.5); // ease-out
-    w4.speed = w4._reachSpeed0 * (1 - ease) + REACH_MIN_SPEED * ease;
+    w4.speed = w4._reachSpeed0 * (1 - ease * (1 - REACH_MIN_SPEED_RATIO));
 
     /* 金色パーティクル (第4ホイール周辺) */
     if (reachTimer % 3 === 0) {
