@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.74';
+const VERSION = 'v1.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1842,8 +1842,10 @@ function update() {
     achBannerCurrent = achBannerQueue.shift();
     achBannerTimer   = 200;
   }
-  /* スローランプ完了: タイムスタンプをリセット */
-  if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime >= slowRampEndTime) {
+  /* スローランプ完了: タイムスタンプをリセット
+     suspended 中は currentTime が止まるため、その場合も即リセットして永久ロックを防ぐ */
+  if (slowRampEndTime > 0 && audioCtx &&
+      (audioCtx.state === 'suspended' || audioCtx.currentTime >= slowRampEndTime)) {
     slowRampEndTime = 0;
   }
 }
@@ -4514,8 +4516,10 @@ function handleGameClick(inputAudioTime) {
   if (phase === 'tapestart') { pendingShoot = true; return; }
   /* 4本目の矢が飛行中（curIdx===3）にクリックした場合、着弾→done直後にそのまま発射 */
   if (phase === 'shooting' && curIdx === 3) { pendingShoot = true; return; }
-  /* スローランプ中（BGMテンポ加減速）はクリックを無視: せっかくの演出を邪魔しない */
-  if (slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime) return;
+  /* スローランプ中（BGMテンポ加減速）はクリックを無視: せっかくの演出を邪魔しない
+     ただし AudioContext が suspended の場合は currentTime が止まるためロックを免除する */
+  if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+      && audioCtx.currentTime < slowRampEndTime) return;
   onShoot(inputAudioTime); // idle / reach
 }
 
@@ -4605,7 +4609,8 @@ canvas.addEventListener('mousedown', e=>{
   /* ベット◀▶ボタン（縦画面 or PCボトムバー） */
   if (!betLocked && (phase==='idle'||phase==='reach')) {
     /* スローハンドランプ中はBET変更ロック */
-    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime)) {
+    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+          && audioCtx.currentTime < slowRampEndTime)) {
       const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
       const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
       if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
@@ -4619,6 +4624,9 @@ canvas.addEventListener('mousedown', e=>{
 document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
+  /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
+     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
@@ -4644,7 +4652,8 @@ document.addEventListener('touchstart', e=>{
   /* スマホ: ベット◀▶ボタン */
   if (!betLocked && (phase==='idle'||phase==='reach')) {
     /* スローハンドランプ中はBET変更ロック */
-    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime)) {
+    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+          && audioCtx.currentTime < slowRampEndTime)) {
       const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
       const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
       if (decBtn && hitTest(decBtn, pt.x, pt.y)) { changeBet(-1); return; }
