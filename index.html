@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.87';
+const VERSION = 'v1.88';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2335,8 +2335,10 @@ function updateGiugiu() {
   const driftR = Math.min(W, H) * 0.10;
   const CX = W/2 + Math.cos(endTimer * 0.022) * driftR;
   const CY = H/2 + Math.sin(endTimer * 0.037) * driftR * 0.6;
-  /* ATTRACT脈動: sin波で集合↔拡散を繰り返す（-0.8〜+2.0倍） */
-  const attractMul = 0.6 + Math.sin(endTimer * 0.06) * 1.4;
+  /* ATTRACT脈動: ビート同期（拍頭に一瞬だけ弱反発→すぐ引き戻し）
+     getBeatPulse()=1 at beat, ~160ms decay → attractMul: 1.0(通常) → -0.3(拍頭) */
+  const beatPulse    = getBeatPulse();
+  const attractMul   = 1.0 - beatPulse * 1.3;
   const ATTRACT_DYNA = ATTRACT * attractMul;
 
   /* ① 距離反比例引力 + 位置更新 */
@@ -2352,7 +2354,7 @@ function updateGiugiu() {
     g.y     += g.vy;
     /* 回転振動: 衝突減衰に負けないよう強めのトルクで直接駆動 */
     const oscFreq = 0.10 + (g.size - 34) * 0.004;
-    g.rotSpd += Math.sign(Math.sin(endTimer * oscFreq + g._rotPhase)) * 0.025;
+    g.rotSpd += Math.sign(Math.sin(endTimer * oscFreq + g._rotPhase)) * (0.015 + beatPulse * 0.04);
     g.rotSpd *= 0.85;
     g.rot    += g.rotSpd;
   }
