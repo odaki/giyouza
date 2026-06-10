@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.80';
+const VERSION = 'v1.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1289,7 +1289,7 @@ function lsLoad() {
 const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
 const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
-let worms, uzaTexts, gyozas, giugiuCells;
+let worms, uzaTexts, gyozas;
 let gigiSparks, yoyos, ghosts, rainDrops, gyogyoFish;
 
 /* ── 吉祥雲配置 ── */
@@ -1521,7 +1521,6 @@ function init(fromStartup, fromGameOver) {
   uzaTexts   = [];
   for (const g of gyozas)     g._dead = true;
   gyozas     = [];
-  giugiuCells = [];
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   yoyos       = [];
@@ -1826,6 +1825,7 @@ function update() {
     if (hitType === 'gizagiza' && endTimer % 120 === 60) launchGizaFireworks();
     if (hitType === 'uyouyo')                 updateWorms();
     if (hitType === 'uzauza')                 updateUzaTexts();
+    if (hitType === 'giugiu')                 updateGiugiu();
     if (hitType === 'gigigigi')               updateGigigigi();
     if (hitType === 'uuuu')                   updateUuuu();
     if (hitType === 'zazazaza')               updateZazazaza();
@@ -2296,74 +2296,89 @@ function drawUzaTexts() {
 
 /* ════════════════ ギウギウ: ぎゅうぎゅう詰め ════════════════ */
 function initGiugiu() {
-  giugiuCells = [];
-  const r  = 20;
-  const dx = r * 2;
-  const dy = r * Math.sqrt(3);
-  let idx  = 0;
-  for (let row = 0; row * dy - r < H; row++) {
-    const offX = (row % 2) * r;
-    for (let col = 0; col * dx + offX - r < W; col++) {
-      giugiuCells.push({
-        cx:    col * dx + offX,
-        cy:    row * dy,
-        r,
-        phase: Math.random() * Math.PI * 2,
-        delay: idx * 0.6,           // 順番にじわじわ出現
-        skin:  `hsl(${40+Math.random()*14},${44+Math.random()*12}%,${74+Math.random()*10}%)`,
-        greenR: 0.22 + Math.random()*0.10,
-        greenA: (Math.random()-0.5)*1.0,
-      });
-      idx++;
-    }
+  for (const g of gyozas) g._dead = true;
+  gyozas = [];
+  /* 外周リングから中央へ向かって一斉に投下 */
+  const N = 44;
+  const R = Math.hypot(W, H) * 0.55;
+  for (let i = 0; i < N; i++) {
+    const angle = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+    const sx  = W/2 + Math.cos(angle) * R;
+    const sy  = H/2 + Math.sin(angle) * R;
+    const spd = 2.5 + Math.random() * 2;
+    const vx  = (W/2 - sx) / R * spd;
+    const vy  = (H/2 - sy) / R * spd;
+    gyozas.push(makeGyozaObj(sx, sy, vx, vy));
   }
 }
 
-
-function drawGiugiu() {
-  if (hitType !== 'giugiu' || endTimer < 50) return;
-
-  for (const c of giugiuCells) {
-    const age = endTimer - 50 - c.delay;
-    if (age <= 0) continue;
-    const a = Math.min(1, age / 18);
-
-    /* ぎゅうぎゅう感: sin波でつぶれる */
-    const squeeze = Math.sin(endTimer * 0.07 + c.phase) * 0.13;
-    const sx = 1 - squeeze, sy = 1 + squeeze;
-
-    ctx.save();
-    ctx.globalAlpha = a;
-    ctx.translate(c.cx, c.cy);
-    ctx.scale(sx, sy);
-
-    /* 本体 */
-    ctx.beginPath();
-    ctx.arc(0, 0, c.r - 0.8, 0, Math.PI * 2);
-    ctx.fillStyle = c.skin;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(110,80,40,0.45)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    /* 緑の具 */
-    ctx.save();
-    ctx.rotate(c.greenA);
-    ctx.beginPath();
-    ctx.ellipse(0, -c.r * 0.18, c.r * c.greenR, c.r * c.greenR * 0.65, 0, 0, Math.PI*2);
-    ctx.fillStyle = `hsl(112,62%,36%)`;
-    ctx.fill();
-    ctx.restore();
-
-    /* ハイライト */
-    ctx.beginPath();
-    ctx.ellipse(-c.r*0.28, -c.r*0.28, c.r*0.22, c.r*0.13, -0.4, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(255,255,255,0.30)';
-    ctx.fill();
-
-    ctx.restore();
+function updateGiugiu() {
+  /* 外縁から追加投入（最大60個） */
+  if (endTimer % 20 === 0 && gyozas.length < 60) {
+    const angle = Math.random() * Math.PI * 2;
+    const R = Math.hypot(W, H) * 0.55;
+    const sx = W/2 + Math.cos(angle) * R;
+    const sy = H/2 + Math.sin(angle) * R;
+    const spd = 2.5 + Math.random() * 2;
+    gyozas.push(makeGyozaObj(sx, sy,
+      (W/2 - sx) / R * spd, (H/2 - sy) / R * spd));
   }
-  ctx.globalAlpha = 1;
+
+  const ATTRACT     = 0.26;  // 中心引力
+  const DAMPING     = 0.96;  // 速度減衰
+  const RESTITUTION = 0.20;  // 反発係数
+  const FRICTION2   = 0.88;  // ギヨウザ間摩擦
+  const ITERS       = 4;
+  const CX = W / 2, CY = H / 2;
+
+  /* ① 中心引力 + 位置更新 */
+  for (const g of gyozas) {
+    const dx = CX - g.x, dy = CY - g.y;
+    const d  = Math.sqrt(dx*dx + dy*dy) || 0.001;
+    g.vx    += dx / d * ATTRACT;
+    g.vy    += dy / d * ATTRACT;
+    g.vx    *= DAMPING;
+    g.vy    *= DAMPING;
+    g.x     += g.vx;
+    g.y     += g.vy;
+    g.rot   += g.rotSpd;
+    g.rotSpd *= 0.978;
+  }
+
+  /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス） */
+  for (let iter = 0; iter < ITERS; iter++) {
+    for (let i = 0; i < gyozas.length; i++) {
+      const a = gyozas[i], ra = a.size * 0.52;
+      for (let j = i + 1; j < gyozas.length; j++) {
+        const b  = gyozas[j], rb = b.size * 0.52;
+        const minD = ra + rb;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 >= minD*minD || d2 < 0.001) continue;
+        const dist = Math.sqrt(d2);
+        const nx = dx/dist, ny = dy/dist;
+        const corr = (minD - dist) * 0.5;
+        a.x -= nx*corr; a.y -= ny*corr;
+        b.x += nx*corr; b.y += ny*corr;
+        const dvx = b.vx-a.vx, dvy = b.vy-a.vy;
+        const vrel = dvx*nx + dvy*ny;
+        if (vrel >= 0) continue;
+        const imp = -(1 + RESTITUTION) * vrel * 0.5;
+        a.vx -= imp*nx; a.vy -= imp*ny;
+        b.vx += imp*nx; b.vy += imp*ny;
+        const tx = -ny, ty = nx;
+        const tvel = dvx*tx + dvy*ty;
+        const fric = tvel * (1 - FRICTION2) * 0.5;
+        a.vx += fric*tx; a.vy += fric*ty;
+        b.vx -= fric*tx; b.vy -= fric*ty;
+        a.rotSpd *= 0.85; b.rotSpd *= 0.85;
+        if (Math.abs(a.rotSpd) < 0.003) a.rotSpd = 0;
+        if (Math.abs(b.rotSpd) < 0.003) b.rotSpd = 0;
+      }
+    }
+  }
+
+  gyozas.sort(_cmpGyozaY);
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
@@ -3071,8 +3086,7 @@ function draw() {
   if (phase==='reach')              drawReachOverlay();
 
   /* 2. エフェクト面 */
-  if (hitType==='jackpot'  && gyozas.length>0) drawGyozas();         // 大当たり: 落下ギヨウザ
-  if (hitType==='giugiu')                      drawGiugiu();         // ギウギウ: ぎゅうぎゅう詰め
+  if ((hitType==='jackpot'||hitType==='giugiu') && gyozas.length>0) drawGyozas(); // 大当たり/ギウギウ: ギヨウザ
   if (hitType==='uyouyo'  && endTimer>40)      drawWorms();          // ウヨウヨ: 虫
   if (hitType==='gizagiza')                    drawGizagizaEffect(); // ギザギザ: ジグザグ
   if (hitType==='uzauza'  && endTimer>40)      drawUzaTexts();       // ウザウザ: テキスト群
