@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.78';
+const VERSION = 'v1.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1487,6 +1487,7 @@ function init(fromStartup, fromGameOver) {
   } else {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
+  for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
   particles  = [];
   hitType    = 'none';
   endTimer   = 0;
@@ -1516,13 +1517,16 @@ function init(fromStartup, fromGameOver) {
   /* ベットが所持コインを超えていたら最大払える額に下げる */
   if (coins !== undefined) clampBet();
   worms      = [];
+  for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
-  for (const g of gyozas) g._dead = true; // プールに返却してからクリア（リーク防止）
+  for (const g of gyozas)     g._dead = true;
   gyozas     = [];
   giugiuCells = [];
+  for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   yoyos       = [];
   ghosts      = [];
+  for (const o of rainDrops)  o._dead = true;
   rainDrops   = [];
   gyogyoFish  = [];
 }
