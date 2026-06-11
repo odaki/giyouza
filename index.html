@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.93';
+const VERSION = 'v1.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -462,6 +462,7 @@ let jackpotCount = 0; // 大当たり累計回数
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
+let isPaused = false;
 /* 実績パネル・ボタンの当たり判定領域（canvas座標） */
 
 /* ── 右上ボタン群 共通レイアウト定数 ──
@@ -477,7 +478,8 @@ const BTN_GAP   = BTN_M;      // = 10 (旧8から変更)
 const BTN_X       = W - BTN_RIGHT - BTN_SIZE; // 右端を起点に縦並び
 const MUTE_BTN    = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE, h: BTN_SIZE };
 const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
-const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE }; // 左上
+const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP,                        w: BTN_SIZE, h: BTN_SIZE }; // 左上
+const PAUSE_BTN   = { x: BTN_RIGHT, y: BTN_TOP + BTN_SIZE + BTN_GAP,  w: BTN_SIZE, h: BTN_SIZE }; // 左上・トロフィー下
 
 /* ── BETバーレイアウト定数（横画面） ── */
 const BAR_X = 335, BAR_W = 390, BAR_Y = H - 106, BAR_H = 80;
@@ -3143,6 +3145,46 @@ function draw() {
   ctx.stroke();
   ctx.restore();
 
+  /* ── ポーズボタン（左上・トロフィー下、startup以外で表示） ── */
+  if (phase !== 'startup') {
+    ctx.save();
+    roundRect(PAUSE_BTN.x, PAUSE_BTN.y, PAUSE_BTN.w, PAUSE_BTN.h, 6);
+    ctx.fillStyle = isPaused ? 'rgba(0,100,0,0.75)' : 'rgba(0,0,0,0.55)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.translate(PAUSE_BTN.x + PAUSE_BTN.w / 2, PAUSE_BTN.y + PAUSE_BTN.h / 2);
+    ctx.fillStyle = '#f5d020';
+    if (isPaused) {
+      /* ▶ 再生アイコン */
+      ctx.beginPath();
+      ctx.moveTo(-5, -8); ctx.lineTo(-5, 8); ctx.lineTo(9, 0);
+      ctx.closePath(); ctx.fill();
+    } else {
+      /* ⏸ ポーズアイコン（縦バー2本） */
+      ctx.fillRect(-6, -8, 4, 16);
+      ctx.fillRect( 2, -8, 4, 16);
+    }
+    ctx.restore();
+  }
+
+  /* ── ポーズオーバーレイ ── */
+  if (isPaused) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(245,208,32,0.95)';
+    ctx.font = 'bold 36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⏸  PAUSED', W/2, H/2 - 18);
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText('タップして再開', W/2, H/2 + 22);
+    ctx.restore();
+  }
+
   /* ── ミュートボタン（右上・常時最前面） ── */
   ctx.save();
   /* 背景ボックス（全画面ボタンと同スタイル） */
@@ -4405,7 +4447,22 @@ phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
 particles = [];
 
-(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+let _rafId;
+function _gameLoop() { update(); draw(); _rafId = requestAnimationFrame(_gameLoop); }
+_rafId = requestAnimationFrame(_gameLoop);
+
+function togglePause() {
+  if (phase === 'startup') return;
+  isPaused = !isPaused;
+  if (isPaused) {
+    cancelAnimationFrame(_rafId);
+    if (audioCtx) audioCtx.suspend();
+    draw(); // オーバーレイを即座に描画
+  } else {
+    if (audioCtx) audioCtx.resume();
+    _rafId = requestAnimationFrame(_gameLoop);
+  }
+}
 
 function onShoot(_inputAudioTime){
   /* idle と reach の両フェーズで矢を放てる */
@@ -4588,6 +4645,8 @@ canvas.addEventListener('mousedown', e=>{
     if (hitTest(STARTUP_BTN, cx, cy)) { initGame(); return; }
     return;
   }
+  if (hitTest(PAUSE_BTN, cx, cy)) { togglePause(); return; }
+  if (isPaused) return;
   if (showAchievements) { showAchievements = false; return; }
   if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (hitTest(MUTE_BTN, cx, cy)) {
@@ -4615,7 +4674,7 @@ document.addEventListener('touchstart', e=>{
   e.preventDefault();
   /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
      state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  if (audioCtx && audioCtx.state === 'suspended' && !isPaused) audioCtx.resume();
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
@@ -4627,6 +4686,8 @@ document.addEventListener('touchstart', e=>{
     if (hitTest(STARTUP_BTN, pt.x, pt.y)) { initGame(); return; }
     return;
   }
+  if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
+  if (isPaused) return;
   /* 実績オーバーレイ中 */
   if (showAchievements) { showAchievements = false; return; }
   /* トロフィーボタン */
