@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.96';
+const VERSION = 'v1.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3187,6 +3187,29 @@ function draw() {
     ctx.fillStyle = '#fff';
     ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
     ctx.fillText('▶  再 開', W/2, by + bh/2);
+    /* ── レイテンシ診断（右下隅） ── */
+    if (audioCtx) {
+      const outL = audioCtx.outputLatency ?? 0;
+      const baseL = audioCtx.baseLatency ?? 0;
+      const total = outL + baseL;
+      const lines = [
+        `outputLatency : ${(outL  *1000).toFixed(1)} ms`,
+        `baseLatency   : ${(baseL *1000).toFixed(1)} ms`,
+        `total         : ${(total *1000).toFixed(1)} ms`,
+        `BEAT_ADVANCE  : ${(_BEAT_DISPLAY_ADVANCE*1000).toFixed(1)} ms`,
+        `diff          : ${((total - _BEAT_DISPLAY_ADVANCE)*1000).toFixed(1)} ms`,
+      ];
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      const lh = 15, px = W - 10, py = H - 10;
+      lines.slice().reverse().forEach((l, i) => {
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(px - ctx.measureText(l).width - 4, py - i*lh - 13, ctx.measureText(l).width + 8, lh);
+        ctx.fillStyle = 'rgba(245,208,32,0.9)';
+        ctx.fillText(l, px, py - i*lh);
+      });
+    }
     ctx.restore();
   }
 
