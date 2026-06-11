@@ -342,10 +342,10 @@ let reachFlash = 0; // 白フラッシュ用タイマー
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
 /* 配当倍率（没収型: 掛け金は戻らない） */
 const PAYOUT_RATE = {
-  reachJackpot: 50,
-  jackpot:      20,
-  hitMed4:      10,  // GIZAGIZA/UYOUYO/GIUGIU/GYOGYO
-  hitMed3:       5,  // GIGIGIGI/YOYOYOYO/UUUU/ZAZAZAZA
+  reachJackpot: 60,
+  jackpot:      24,  // 大当たり
+  hitMed:       12,  // 中当たり（ギヨウザあり）
+  hitSml:        6,  // 小当たり（ギヨウザなし）
 };
 
 /* 当たり判定テーブル:
@@ -355,16 +355,16 @@ const PAYOUT_RATE = {
    onHit   = 当たり時に呼ぶエフェクト初期化関数（なければnull）
    ※ 関数宣言はホイスティングされるため、この定数より後に定義された関数も参照可能 */
 const HIT_TABLE = [
-  { type:'jackpot',  pat:TARGET,   payout:'jackpot',  medId:null,        onHit:null             },
-  { type:'gizagiza', pat:GIZAGIZA, payout:'hitMed4',  medId:'gizagiza',  onHit:launchGizaFireworks },
-  { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed4',  medId:'uyouyo',    onHit:initWorms           },
-  { type:'uzauza',   pat:UZAUZA,   payout:'hitMed4',  medId:'uzauza',    onHit:initUzaTexts        },
-  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed4',  medId:'giugiu',    onHit:initGiugiu          },
-  { type:'gigigigi', pat:GIGIGIGI, payout:'hitMed3',  medId:'gigigigi',  onHit:null                },
-  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed3',  medId:'yoyoyoyo',  onHit:initYoyoyoyo        },
-  { type:'uuuu',     pat:UUUU,     payout:'hitMed3',  medId:'uuuu',      onHit:initUuuu            },
-  { type:'zazazaza', pat:ZAZAZAZA, payout:'hitMed3',  medId:'zazazaza',  onHit:initZazazaza        },
-  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed4',  medId:'gyogyo',    onHit:initGyogyo          },
+  { type:'jackpot',  pat:TARGET,   payout:'jackpot', medId:null,        onHit:null             },
+  { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  medId:'uyouyo',    onHit:initWorms           },  // 中当たり
+  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  medId:'giugiu',    onHit:initGiugiu          },  // 中当たり
+  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  medId:'yoyoyoyo',  onHit:initYoyoyoyo        },  // 中当たり
+  { type:'uuuu',     pat:UUUU,     payout:'hitMed',  medId:'uuuu',      onHit:initUuuu            },  // 中当たり
+  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  medId:'gyogyo',    onHit:initGyogyo          },  // 中当たり
+  { type:'gizagiza', pat:GIZAGIZA, payout:'hitSml',  medId:'gizagiza',  onHit:launchGizaFireworks },  // 小当たり
+  { type:'uzauza',   pat:UZAUZA,   payout:'hitSml',  medId:'uzauza',    onHit:initUzaTexts        },  // 小当たり
+  { type:'gigigigi', pat:GIGIGIGI, payout:'hitSml',  medId:'gigigigi',  onHit:null                },  // 小当たり
+  { type:'zazazaza', pat:ZAZAZAZA, payout:'hitSml',  medId:'zazazaza',  onHit:initZazazaza        },  // 小当たり
 ];
 let coins, bet, betLocked, isGameOver;
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
