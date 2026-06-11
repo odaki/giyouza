@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.94';
+const VERSION = 'v1.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3175,13 +3175,18 @@ function draw() {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = 'rgba(245,208,32,0.95)';
-    ctx.font = 'bold 36px sans-serif';
+    ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⏸  PAUSED', W/2, H/2 - 18);
-    ctx.font = '18px sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText('タップして再開', W/2, H/2 + 22);
+    ctx.fillText('PAUSED', W/2, H/2 - 38);
+    /* 再開ボタン（スタートボタンと同スタイル） */
+    const bw = 240, bh = 52, bx = W/2 - bw/2, by = H/2 - 4;
+    roundRect(bx, by, bw, bh, 10);
+    ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(245,208,32,1)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.fillText('▶  再 開', W/2, by + bh/2);
     ctx.restore();
   }
 
@@ -4646,7 +4651,11 @@ canvas.addEventListener('mousedown', e=>{
     return;
   }
   if (hitTest(PAUSE_BTN, cx, cy)) { togglePause(); return; }
-  if (isPaused) return;
+  if (isPaused) {
+    const bw=240,bh=52,bx=W/2-bw/2,by=H/2-4;
+    if (cx>=bx&&cx<=bx+bw&&cy>=by&&cy<=by+bh) togglePause();
+    return;
+  }
   if (showAchievements) { showAchievements = false; return; }
   if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (hitTest(MUTE_BTN, cx, cy)) {
@@ -4687,7 +4696,11 @@ document.addEventListener('touchstart', e=>{
     return;
   }
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
-  if (isPaused) return;
+  if (isPaused) {
+    const bw=240,bh=52,bx=W/2-bw/2,by=H/2-4;
+    if (pt.x>=bx&&pt.x<=bx+bw&&pt.y>=by&&pt.y<=by+bh) togglePause();
+    return;
+  }
   /* 実績オーバーレイ中 */
   if (showAchievements) { showAchievements = false; return; }
   /* トロフィーボタン */
