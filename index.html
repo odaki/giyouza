@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.97';
+const VERSION = 'v1.98';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -558,7 +558,15 @@ function inputEventToAudioTime(eventTimeStamp) {
    getOutputTimestamp().contextTime は現在スピーカーから出ている音の時刻なので
    これを基準に描画パイプライン遅延（≈2フレーム）だけ先読みすれば視覚と音が一致する。
    SYNC_TIMING_OFFSET は入力判定専用（用途が異なる）なのでここでは使わない。 */
-const _BEAT_DISPLAY_ADVANCE = 2 / 60; // ~33ms: 描画パイプライン遅延補正（≈2フレーム先読み）
+let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx初期化後に動的更新
+
+/* outputLatency + baseLatency + _BEAT_DISPLAY_ADVANCE = TARGET になるよう動的設定 */
+const _BEAT_ADVANCE_TARGET = 0.030; // 30ms
+function _updateBeatDisplayAdvance() {
+  if (!audioCtx) return;
+  const hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+  _BEAT_DISPLAY_ADVANCE = Math.max(0, _BEAT_ADVANCE_TARGET - hw);
+}
 
 /* BGM ループ長をサンプル単位に量子化した実ループ長（秒）。
    AudioBuffer の loopEnd は内部で floor(loopEnd * sampleRate)/sampleRate に丸められるため、
@@ -708,8 +716,8 @@ function getAudioCtx() {
     }).catch(e => { console.warn('BGM render failed:', e); });
     /* AudioContext生成直後にデバイス遅延を実測してオフセット更新
        resume()後に値が確定するので少し待って再計測 */
-    updateSyncTimingOffset();
-    setTimeout(() => updateSyncTimingOffset(), 500);
+    updateSyncTimingOffset();    _updateBeatDisplayAdvance();
+    setTimeout(() => { updateSyncTimingOffset(); _updateBeatDisplayAdvance(); }, 500);
     /* ホワイトノイズバッファを事前生成（最長ノイズ使用: reach_jackpot dur=0.3+0.05=0.35s → 0.45s確保）
        playNoise() はこのバッファを参照するだけでフレームごとのランダム生成ループが不要になる */
     _buildNoiseBuffer();
@@ -3195,9 +3203,9 @@ function draw() {
       const lines = [
         `outputLatency : ${(outL  *1000).toFixed(1)} ms`,
         `baseLatency   : ${(baseL *1000).toFixed(1)} ms`,
-        `total         : ${(total *1000).toFixed(1)} ms`,
+        `total hw      : ${(total *1000).toFixed(1)} ms`,
         `BEAT_ADVANCE  : ${(_BEAT_DISPLAY_ADVANCE*1000).toFixed(1)} ms`,
-        `diff          : ${((total - _BEAT_DISPLAY_ADVANCE)*1000).toFixed(1)} ms`,
+        `hw+adv (→${(_BEAT_ADVANCE_TARGET*1000).toFixed(0)}ms): ${((total+_BEAT_DISPLAY_ADVANCE)*1000).toFixed(1)} ms`,
       ];
       ctx.font = '11px monospace';
       ctx.textAlign = 'right';
