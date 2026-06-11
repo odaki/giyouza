@@ -376,7 +376,8 @@ const SYNC_HIST_LEN  = 16;
 const _syncHistBuf   = new Float32Array(SYNC_HIST_LEN); // リングバッファ（shift()不要）
 let   _syncHistHead  = 0; // 次の書き込み位置
 let   _syncHistCount = 0; // 有効エントリ数（最大SYNC_HIST_LEN）
-let syncRate     = 0;  // 平均同期率（0-1）
+let syncRate     = 0;  // 平均同期率（0-1、計算値）
+let syncRateDisp = 0;  // 表示用同期率（VUメーター式: 上昇速・下降遅）
 let _autoDecayBeatIdx = -1; // ビート自動減衰: 最後に処理したビート番号
 
 /* syncRateリングバッファへスコアを1件追加し syncRate / 表示カウンタを更新する。
@@ -407,26 +408,31 @@ let bestCoins; // ハイスコア
 
 /* ── 実績システム ── */
 const ACHIEVEMENTS = [
-  /* 左列 */
+  /* 初体験（横画面: 左列上段） */
   { id:'first_shot',    icon:'🎯', name:'はじめての一射',    desc:'矢を初めて放った'                    },
-  { id:'first_jackpot', icon:'🎊', name:'初大当たり',         desc:'大当たりを初めて達成した'            },
-  { id:'first_medium',  icon:'⭐', name:'初中当たり',         desc:'中当たりを初めて達成した'            },
   { id:'first_reach',   icon:'🎰', name:'リーチ経験者',       desc:'リーチを初めて体験した'              },
+  { id:'first_medium',  icon:'⭐', name:'初中当たり',         desc:'中当たりを初めて達成した'            },
+  { id:'first_jackpot', icon:'🎊', name:'初大当たり',         desc:'大当たりを初めて達成した'            },
   { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験',   desc:'リーチ経由大当たりを達成した'        },
-  { id:'coins_200',     icon:'💰', name:'初めての倍増',       desc:'所持200ギヨウザを超えた'             },
-  { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
-  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
-  { id:'all_medium',    icon:'🏆', name:'全中当たり制覇',     desc:'全9種の中当たりを達成した'           },
-  /* 右列 */
+  /* プレイ回数（小→大） */
   { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'100回プレイした'                     },
   { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'500回プレイした'                     },
+  /* 矢数 */
   { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計1000本放った'                },
+  /* コイン所持（小→大）前半（横画面: 左列下段） */
+  { id:'coins_200',     icon:'💰', name:'初めての倍増',       desc:'所持200ギヨウザを超えた'             },
+  /* コイン所持（小→大）後半（横画面: 右列上段） */
+  { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
+  { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
+  { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持10000ギヨウザを超えた'           },
+  /* 大当たり回数 */
+  { id:'jackpot_3',     icon:'🎆', name:'三冠王',             desc:'大当たりを累計3回達成した'           },
+  /* 特殊（易→難）（横画面: 右列下段） */
   { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット100でプレイした'               },
   { id:'poor',          icon:'💸', name:'文無し',             desc:'所持コインが一桁になった'            },
   { id:'comeback',      icon:'🔥', name:'不死鳥',             desc:'所持10以下から200以上に大逆転した'   },
-  { id:'jackpot_3',     icon:'🎆', name:'三冠王',             desc:'大当たりを累計3回達成した'           },
-  { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持10000ギヨウザを超えた'           },
   { id:'big_bet_win',   icon:'🃏', name:'大博打',             desc:'ベット1000以上で大当たりを達成した'  },
+  { id:'all_medium',    icon:'🏆', name:'全種制覇',           desc:'全9種の当たりを達成した'             },
 ];
 const LS_ACH    = 'giyouza_ach';
 const LS_MED    = 'giyouza_med';
@@ -1457,7 +1463,7 @@ function initGame() {
   isGameOver = false;
   pendingShoot = false;
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
-  _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
+  _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -1471,7 +1477,7 @@ function gameOverReset() {
   payoutPopups = [];
 
   pendingShoot = false;
-  _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
+  _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
@@ -1640,23 +1646,27 @@ function update() {
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
   if (shootGuard > 0) shootGuard--;
-  /* ── ビート自動減衰: idle/reach 中に2拍経過するたびにスコア0を追加 ──
-     2拍単位（152BPM→76/分に相当）にすることで、2拍おきに射つプレイヤーは
-     decay が発生せず syncRate を高く保てる。4拍以上あけると下がり始める。
+  /* ── ビート自動減衰: idle/reach 中に3拍経過するたびにスコア0.25を追加 ──
+     3拍単位にすることで6拍おきに射つプレイヤーまでdecayが発生しない。
+     アイドル時のペナルティ(0.25)は悪いタイミングでの射撃(0〜0.3)より軽く設定し
+     「何もしない」より「ヘタな射ち」のほうが痛くなるよう差別化する。
      done/shooting/tapestart/startup フェーズは対象外（プレイヤーの責任ではない）
      shootGuard > 0 の初期保護期間も除外 */
   if ((phase === 'idle' || phase === 'reach') && shootGuard <= 0 && BGM_BEAT > 0) {
-    const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2));
+    const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 3));
     if (_autoDecayBeatIdx >= 0 && _curBeat > _autoDecayBeatIdx) {
       /* フレーム落ち等で複数期間分まとめて来た場合は最大4件に制限 */
       const _missed = Math.min(_curBeat - _autoDecayBeatIdx, 4);
-      for (let _bi = 0; _bi < _missed; _bi++) _pushSyncScore(0);
+      for (let _bi = 0; _bi < _missed; _bi++) _pushSyncScore(0.25);
     }
     _autoDecayBeatIdx = _curBeat;
   }
   if (slowHandLockFrames > 0) slowHandLockFrames--;
   if (slowHandPopTimer  > 0) slowHandPopTimer--;
   if (syncJustTimer     > 0) syncJustTimer--;
+  /* syncRateDisp: VUメーター式（上昇は速く・下降はゆっくり） */
+  const _syncLerpK = syncRate > syncRateDisp ? 0.25 : 0.018;
+  syncRateDisp += (syncRate - syncRateDisp) * _syncLerpK;
   /* グレースケール視覚レートをlerpで追従（係数0.04≈1300ms収束、easeOut近似） */
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
   if (phase === 'startup') {
@@ -4031,14 +4041,14 @@ function drawEndScreen() {
       ctx.restore();
     }
 
-  /* ━━ ギザギザ 中当たり ━━ */
+  /* ━━ ギザギザ 小当たり ━━ */
   } else if (hitType === 'gizagiza') {
     const pulse=1+0.05*Math.sin(endTimer*0.10);
     ctx.save(); ctx.translate(W/2,cy); ctx.scale(pulse,pulse);
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#c0d8f0'; ctx.shadowBlur=50;
-    outText('中当たり！',0,0, '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10));
+    outText('小当たり！',0,0, '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10));
     ctx.shadowBlur=20;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギ ザ ギ ザ',0,_fy(78), '#e8f4ff', 'rgba(0,20,60,0.85)', _fs(7));
@@ -4056,7 +4066,7 @@ function drawEndScreen() {
     outText('ウ ヨ ウ ヨ',0,_fy(78), '#ccff88', 'rgba(0,40,0,0.85)', _fs(7));
     ctx.restore();
 
-  /* ━━ ウザウザ 中当たり ━━ */
+  /* ━━ ウザウザ 小当たり ━━ */
   } else if (hitType === 'uzauza') {
     ctx.save(); ctx.translate(W/2,cy);
     const wobbleX=Math.sin(endTimer*2.1)*4, wobbleY=Math.cos(endTimer*1.7)*3;
@@ -4064,7 +4074,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#ff6600'; ctx.shadowBlur=40;
-    outText('中当たり！',0,0, '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10));
+    outText('小当たり！',0,0, '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10));
     ctx.shadowBlur=15;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ウ ザ ウ ザ',0,_fy(78), '#ffcc44', 'rgba(60,0,0,0.85)', _fs(7));
@@ -4083,7 +4093,7 @@ function drawEndScreen() {
     outText('ギ ウ ギ ウ',0,_fy(78), '#fffde7', 'rgba(0,0,0,0.85)', _fs(7));
     ctx.restore();
 
-  /* ━━ ギギギギ 中当たり ━━ */
+  /* ━━ ギギギギ 小当たり ━━ */
   } else if (hitType === 'gigigigi') {
     /* ガタガタ揺れる */
     const jx = (Math.random()-0.5)*6, jy = (Math.random()-0.5)*4;
@@ -4091,7 +4101,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#aaddff'; ctx.shadowBlur=40;
-    outText('中当たり！',0,0, '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10));
+    outText('小当たり！',0,0, '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギ ギ ギ ギ',0,_fy(78), '#ffffff', 'rgba(0,0,20,0.88)', _fs(7));
@@ -4125,13 +4135,13 @@ function drawEndScreen() {
     outText('ウ ウ ウ ウ',0,_fy(78), '#e8f4ff', 'rgba(0,10,40,0.88)', _fs(7));
     ctx.restore();
 
-  /* ━━ ザザザザ 中当たり ━━ */
+  /* ━━ ザザザザ 小当たり ━━ */
   } else if (hitType === 'zazazaza') {
     ctx.save(); ctx.translate(W/2, cy);
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#66aaff'; ctx.shadowBlur=45;
-    outText('中当たり！',0,0, '#88ccff', 'rgba(0,10,40,0.92)', _fs(10));
+    outText('小当たり！',0,0, '#88ccff', 'rgba(0,10,40,0.92)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ザ ザ ザ ザ',0,_fy(78), '#bbddff', 'rgba(0,10,40,0.88)', _fs(7));
@@ -4228,7 +4238,7 @@ function drawSyncMeter() {
   if (phase === 'startup') return;
   if (syncRateAboveCount < SYNC_VISIBLE_THRESHOLD) return;
 
-  const pct     = syncRate;                         // 0-1
+  const pct     = syncRateDisp;                      // 0-1（VUメーター式表示値）
   const [fillC, glowC, glowStr] = _syncBarColor(pct);
   /* テキストキャッシュ: 値が変化した時のみ再生成（毎フレームのテンプレートリテラルを排除） */
   const pctRounded = Math.round(pct * 100);
