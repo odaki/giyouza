@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v1.95';
+const VERSION = 'v1.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4461,10 +4461,18 @@ function togglePause() {
   isPaused = !isPaused;
   if (isPaused) {
     cancelAnimationFrame(_rafId);
-    if (audioCtx) audioCtx.suspend();
+    /* audioCtx.suspend()は使わない: iOS SafariでAudioContextが復帰不能になる場合があるため。
+       masterGainを0にして無音化し、AudioContextは動かし続ける。 */
+    if (masterGain && audioCtx) {
+      masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      masterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    }
     draw(); // オーバーレイを即座に描画
   } else {
-    if (audioCtx) audioCtx.resume();
+    if (masterGain && audioCtx) {
+      masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
+    }
     _rafId = requestAnimationFrame(_gameLoop);
   }
 }
@@ -4683,7 +4691,7 @@ document.addEventListener('touchstart', e=>{
   e.preventDefault();
   /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
      state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
-  if (audioCtx && audioCtx.state === 'suspended' && !isPaused) audioCtx.resume();
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
