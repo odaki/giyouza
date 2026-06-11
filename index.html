@@ -2491,34 +2491,110 @@ function drawYoyoyoyo() {
 /* ════════════════ ウウウウ: 幽霊 ════════════════ */
 function initUuuu() { ghosts = []; }
 
-/* 幽霊ボディをオフスクリーンに事前レンダリングしてcreateRadialGradientの毎フレーム生成を排除 */
+/* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
+   ギヨウザ本体を青白グラデーション+半透明で描き、天使の輪と幽霊の尾を追加する */
 function _makeGhostCanvas(r) {
-  const sz  = Math.ceil(r * 3.4 + 4);
-  const oc  = document.createElement('canvas');
-  oc.width  = sz; oc.height = sz;
-  const c2  = oc.getContext('2d');
-  const cx  = sz / 2, cy = sz * 0.42; // 重心を上寄りに
+  /* キャンバスサイズ: ギヨウザ本体 + 上の天使の輪 + 下の幽霊の尾 を収める */
+  const bodyH  = r * 1.2;  // ギヨウザ縦半径
+  const haloH  = r * 0.9;  // 輪の上端までの余白
+  const tailH  = r * 1.0;  // 尾の長さ
+  const sz     = Math.ceil((bodyH + haloH + tailH) * 2 + r * 2.4);
+  const oc     = document.createElement('canvas');
+  oc.width = sz; oc.height = sz;
+  const c2     = oc.getContext('2d');
+  const cx     = sz / 2;
+  /* ギヨウザ中心 y（天使の輪分だけ下げる） */
+  const cy     = haloH + r * 0.6 + 4;
+
+  /* ── 幽霊の尾（ギヨウザ下から伸びる波状しっぽ） ── */
+  const tailTop = cy + bodyH * 0.55;
+  const tailBot = tailTop + tailH;
   c2.beginPath();
-  c2.arc(cx, cy, r, Math.PI, 0);
-  c2.lineTo(cx + r, cy + r * 0.6);
-  const segs = 5;
-  for (let i = segs-1; i >= 0; i--) {
-    const x1 = cx + r - (2*r/segs)*(segs-i-0.5);
-    const x2 = cx + r - (2*r/segs)*(segs-i);
-    c2.quadraticCurveTo(x1, cy + r*0.6 + (i%2===0?1:-1)*r*0.32, x2, cy + r*0.6);
-  }
+  c2.moveTo(cx - r * 0.38, tailTop);
+  /* 左右に波打つ3本の曲線で尾を形成 */
+  c2.quadraticCurveTo(cx - r * 0.6,  tailTop + tailH*0.3, cx - r*0.15, tailTop + tailH*0.55);
+  c2.quadraticCurveTo(cx + r * 0.15, tailTop + tailH*0.75, cx,          tailBot);
+  c2.quadraticCurveTo(cx - r * 0.15, tailTop + tailH*0.75, cx + r*0.15, tailTop + tailH*0.55);
+  c2.quadraticCurveTo(cx + r * 0.6,  tailTop + tailH*0.3, cx + r*0.38, tailTop);
   c2.closePath();
-  const grd = c2.createRadialGradient(cx, cy - r*0.2, 0, cx, cy, r*1.6);
-  grd.addColorStop(0,   'rgba(210,235,255,0.95)');
-  grd.addColorStop(0.6, 'rgba(160,200,255,0.7)');
-  grd.addColorStop(1,   'rgba(100,160,255,0.05)');
-  c2.fillStyle = grd; c2.fill();
-  c2.fillStyle = 'rgba(10,40,90,0.65)';
-  c2.beginPath(); c2.ellipse(cx-r*0.30, cy-r*0.08, r*0.14, r*0.20, 0, 0, Math.PI*2); c2.fill();
-  c2.beginPath(); c2.ellipse(cx+r*0.30, cy-r*0.08, r*0.14, r*0.20, 0, 0, Math.PI*2); c2.fill();
-  c2.beginPath(); c2.arc(cx, cy+r*0.15, r*0.15, 0.2, Math.PI-0.2);
-  c2.strokeStyle='rgba(10,40,90,0.5)'; c2.lineWidth=r*0.07; c2.stroke();
-  return { oc, sz, cy: cy }; // cy: キャンバス内での幽霊中心y
+  const tailGrd = c2.createLinearGradient(cx, tailTop, cx, tailBot);
+  tailGrd.addColorStop(0,   'rgba(160,210,255,0.55)');
+  tailGrd.addColorStop(1,   'rgba(160,210,255,0.0)');
+  c2.fillStyle = tailGrd; c2.fill();
+
+  /* ── ギヨウザ本体（通常カラー + 青白オーラ） ── */
+  /* オーラ: 本体楕円を青白 shadowBlur で先に描いてグロー層を作る */
+  c2.save();
+  c2.shadowColor = 'rgba(140,200,255,0.95)';
+  c2.shadowBlur  = r * 0.7;
+  c2.beginPath();
+  c2.ellipse(cx, cy + r*0.08, r*0.58, r*0.48, 0, 0, Math.PI*2);
+  c2.fillStyle = 'rgba(180,220,255,0.35)';
+  c2.fill();
+  c2.restore();
+
+  /* 本体楕円（通常の焼きギヨウザカラー） */
+  const bodyGrd = c2.createRadialGradient(cx - r*0.15, cy - r*0.3, 0, cx, cy + r*0.1, r * 1.1);
+  bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
+  bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
+  bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
+  c2.beginPath();
+  c2.ellipse(cx, cy + r*0.08, r*0.58, r*0.48, 0, 0, Math.PI*2);
+  c2.fillStyle = bodyGrd; c2.fill();
+  c2.strokeStyle = 'rgba(120,90,50,0.55)'; c2.lineWidth = 1.2; c2.stroke();
+
+  /* 蒸し焼き底面の焦げ色 */
+  c2.save();
+  c2.beginPath();
+  c2.ellipse(cx, cy + r*0.32, r*0.46, r*0.18, 0, 0, Math.PI*2);
+  c2.fillStyle = 'hsl(30,60%,52%)';
+  c2.globalAlpha = 0.45; c2.fill();
+  c2.restore();
+
+  /* 頂部の薄皮（クリーム色） */
+  c2.beginPath();
+  c2.ellipse(cx, cy - r*0.12, r*0.40, r*0.14, 0, 0, Math.PI*2);
+  c2.fillStyle = 'hsl(50,55%,88%)'; c2.fill();
+  c2.strokeStyle = 'rgba(120,90,50,0.4)'; c2.lineWidth = 0.8; c2.stroke();
+
+  /* ひだ（茶色） */
+  c2.strokeStyle = 'rgba(140,105,55,0.55)'; c2.lineWidth = 0.9;
+  c2.beginPath();
+  for (let i = -4; i <= 4; i++) {
+    const bx = cx + i * r * 0.095;
+    c2.moveTo(bx, cy - r*0.04);
+    c2.bezierCurveTo(bx - r*0.04, cy - r*0.22, bx + r*0.04, cy - r*0.22, bx + r*0.07, cy - r*0.04);
+  }
+  c2.stroke();
+
+
+  /* ハイライト */
+  c2.beginPath();
+  c2.ellipse(cx - r*0.18, cy - r*0.08, r*0.16, r*0.09, -0.4, 0, Math.PI*2);
+  c2.fillStyle = 'rgba(255,255,255,0.30)'; c2.fill();
+
+  /* ── 天使の輪（ギヨウザ上方に浮かぶ金色の楕円リング） ── */
+  const haloY  = cy - r * 0.72; // 頭上に浮かせる
+  const haloRx = r * 0.42;      // 横半径
+  const haloRy = r * 0.13;      // 縦半径（奥行き感）
+  /* 輪の後ろ半分（ギヨウザに隠れる側）を薄く */
+  c2.beginPath();
+  c2.ellipse(cx, haloY, haloRx, haloRy, 0, Math.PI, Math.PI*2);
+  c2.strokeStyle = 'rgba(255,220,80,0.35)'; c2.lineWidth = r * 0.13; c2.stroke();
+  /* 輪の前半分（手前側）を明るく */
+  c2.beginPath();
+  c2.ellipse(cx, haloY, haloRx, haloRy, 0, 0, Math.PI);
+  const haloGrd = c2.createLinearGradient(cx - haloRx, haloY, cx + haloRx, haloY);
+  haloGrd.addColorStop(0,   'rgba(255,240,120,0.9)');
+  haloGrd.addColorStop(0.5, 'rgba(255,200,50,1.0)');
+  haloGrd.addColorStop(1,   'rgba(255,240,120,0.9)');
+  c2.strokeStyle = haloGrd; c2.lineWidth = r * 0.13; c2.stroke();
+  /* 輪のグロー */
+  c2.beginPath();
+  c2.ellipse(cx, haloY, haloRx, haloRy, 0, 0, Math.PI*2);
+  c2.strokeStyle = 'rgba(255,240,100,0.18)'; c2.lineWidth = r * 0.30; c2.stroke();
+
+  return { oc, sz, cy }; // cy: キャンバス内でのギヨウザ中心y（drawImage時の基準）
 }
 
 function spawnGhost() {
@@ -2664,47 +2740,79 @@ function drawFish(f, t) {
   ctx.translate(f.x, f.y);
   ctx.rotate(angle);
 
-  /* 尾ひれ (揺れる) */
+  /* 尾ひれ（揺れる）— ギヨウザ後端に取り付け */
   const tailWag = Math.sin(t * 0.18 + f.phase) * 0.35;
   ctx.save();
-  ctx.translate(-s * 0.85, 0);
+  ctx.translate(-s * 0.72, s * 0.08); // ギヨウザ楕円の後端付近
   ctx.rotate(tailWag);
   ctx.beginPath();
   ctx.moveTo(0, 0);
-  ctx.lineTo(-s * 0.6,  s * 0.45);
-  ctx.lineTo(-s * 0.6, -s * 0.45);
+  ctx.lineTo(-s * 0.55,  s * 0.40);
+  ctx.lineTo(-s * 0.55, -s * 0.40);
   ctx.closePath();
   ctx.fillStyle = f.col;
   ctx.globalAlpha = 0.85;
   ctx.fill();
+  ctx.strokeStyle = 'rgba(80,50,20,0.4)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
   ctx.restore();
 
-  /* 胴体 */
+  /* ── ギヨウザ本体（drawOneGyoza と同じパス構成） ── */
+  /* 本体楕円（焼きギヨウザカラー） */
+  const bodyGrd = ctx.createRadialGradient(-s*0.15, -s*0.3, 0, 0, s*0.1, s*1.1);
+  bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
+  bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
+  bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
   ctx.beginPath();
-  ctx.ellipse(0, 0, s, s * 0.52, 0, 0, Math.PI * 2);
-  ctx.fillStyle = f.col;
-  ctx.globalAlpha = 0.95;
+  ctx.ellipse(0, s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
+  ctx.fillStyle = bodyGrd;
+  ctx.globalAlpha = 0.97;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(120,90,50,0.55)';
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
-  /* ウロコ線 */
-  ctx.globalAlpha = 0.22;
-  for (let k = 0; k < 3; k++) {
-    const ox = s * (0.1 - k * 0.35);
-    ctx.beginPath();
-    ctx.arc(ox, 0, s * (0.38 - k * 0.04), Math.PI * 0.55, Math.PI * 1.45);
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-
-  /* 目 (びっくり目) */
-  const ex = s * 0.38, ey = -s * 0.1;
+  /* 蒸し焼き底面の焦げ色 */
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(ex, ey, s * 0.27, 0, Math.PI * 2);
+  ctx.ellipse(0, s*0.32, s*0.46, s*0.18, 0, 0, Math.PI*2);
+  ctx.fillStyle = 'hsl(30,60%,52%)';
+  ctx.globalAlpha = 0.45;
+  ctx.fill();
+  ctx.restore();
+
+  /* 頂部の薄皮 */
+  ctx.beginPath();
+  ctx.ellipse(0, -s*0.12, s*0.40, s*0.14, 0, 0, Math.PI*2);
+  ctx.fillStyle = 'hsl(50,55%,88%)';
+  ctx.globalAlpha = 1;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(120,90,50,0.4)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  /* ひだ */
+  ctx.strokeStyle = 'rgba(140,105,55,0.55)';
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  for (let i = -4; i <= 4; i++) {
+    const bx = i * s * 0.095;
+    ctx.moveTo(bx, -s*0.04);
+    ctx.bezierCurveTo(bx - s*0.04, -s*0.22, bx + s*0.04, -s*0.22, bx + s*0.07, -s*0.04);
+  }
+  ctx.stroke();
+
+  /* ハイライト */
+  ctx.beginPath();
+  ctx.ellipse(-s*0.18, -s*0.08, s*0.16, s*0.09, -0.4, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.fill();
+
+  /* びっくり目（ひだの右寄りに配置） */
+  const ex = s * 0.30, ey = -s * 0.04;
+  ctx.beginPath();
+  ctx.arc(ex, ey, s * 0.22, 0, Math.PI * 2);
   ctx.fillStyle = '#fff';
   ctx.fill();
   ctx.strokeStyle = '#333';
@@ -2712,29 +2820,28 @@ function drawFish(f, t) {
   ctx.stroke();
   /* 瞳 */
   ctx.beginPath();
-  ctx.arc(ex + s * 0.06, ey, s * 0.13, 0, Math.PI * 2);
+  ctx.arc(ex + s * 0.05, ey, s * 0.11, 0, Math.PI * 2);
   ctx.fillStyle = '#111';
   ctx.fill();
   /* ハイライト */
   ctx.beginPath();
-  ctx.arc(ex + s * 0.10, ey - s * 0.08, s * 0.05, 0, Math.PI * 2);
+  ctx.arc(ex + s * 0.08, ey - s * 0.07, s * 0.04, 0, Math.PI * 2);
   ctx.fillStyle = '#fff';
   ctx.fill();
   /* 驚き線 */
   for (let k = 0; k < 6; k++) {
     const a2 = (k / 6) * Math.PI * 2;
-    const r1 = s * 0.32, r2 = s * 0.42;
     ctx.beginPath();
-    ctx.moveTo(ex + Math.cos(a2) * r1, ey + Math.sin(a2) * r1);
-    ctx.lineTo(ex + Math.cos(a2) * r2, ey + Math.sin(a2) * r2);
+    ctx.moveTo(ex + Math.cos(a2) * s*0.27, ey + Math.sin(a2) * s*0.27);
+    ctx.lineTo(ex + Math.cos(a2) * s*0.36, ey + Math.sin(a2) * s*0.36);
     ctx.strokeStyle = '#ffcc00';
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
 
-  /* 口 (O 形) */
+  /* 口（O形、ひだの右端付近） */
   ctx.beginPath();
-  ctx.arc(s * 0.72, s * 0.12, s * 0.1, 0, Math.PI * 2);
+  ctx.arc(s * 0.60, s * 0.10, s * 0.09, 0, Math.PI * 2);
   ctx.fillStyle = '#cc3300';
   ctx.fill();
 
@@ -2754,6 +2861,8 @@ function drawGyogyo() {
     f.x += f.vx;
     f.y += f.vy + Math.sin(t * 0.09 + f.phase) * 0.6;
     f.vx *= 0.998;
+    /* 最低横速度を保証: 減衰しきっても縦動きだけにならないようにする */
+    if (Math.abs(f.vx) < 1.2) f.vx = 1.2 * Math.sign(f.vx);
 
     /* 壁で反転 */
     const margin = f.size * 1.2;
@@ -2787,7 +2896,7 @@ function drawGyogyo() {
   }
 
   /* 「ギョギョ！」テキストを散らす */
-  const msgs = ['ギョ！', 'ギョギョ！', 'ΩΩΩ', '！！！', 'ギョッ'];
+  const msgs = ['ギョ！', 'ギョギョ！', 'ギョッ！', '！！！', 'ギョッ'];
   for (let k = 0; k < 5; k++) {
     const beat = Math.sin(t * 0.13 + k * 1.3);
     const scale2 = 0.7 + Math.abs(beat) * 0.5;
