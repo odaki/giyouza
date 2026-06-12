@@ -420,7 +420,7 @@ const ACHIEVEMENTS = [
   /* 矢数 */
   { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計1000本放った'                },
   /* コイン所持（小→大）前半（横画面: 左列下段） */
-  { id:'coins_200',     icon:'💰', name:'初めての倍増',       desc:'所持200ギヨウザを超えた'             },
+  { id:'coins_200',     icon:'💰', name:'はじめての倍増',     desc:'所持120ギヨウザを超えた'             },
   /* コイン所持（小→大）後半（横画面: 右列上段） */
   { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
   { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
@@ -1257,7 +1257,7 @@ function unlockAch(id) {
   playSE('ach'); // 実績解除音
 }
 function checkCoinsAch() {
-  if (coins >= 200)  unlockAch('coins_200');
+  if (coins >= 120)  unlockAch('coins_200');
   if (coins >= 1000)  unlockAch('coins_500');
   if (coins >= 5000)  unlockAch('coins_1000');
   if (coins >= 10000) unlockAch('coins_2000');
@@ -3983,9 +3983,9 @@ function drawEndScreen() {
 
   const cy=H/2-25;
   /* 縦画面(W=420)は横画面(W=1060)基準のフォントサイズをスケールダウン
-     「超大当たり！！」は7文字のため幅制約が厳しく個別に小さめのスケールを使用 */
+     「超大当たり」は7文字のため幅制約が厳しく個別に小さめのスケールを使用 */
   const _fsc  = IS_PORTRAIT ? 0.90 : 1.0; // 通常テキスト用
-  const _fscR = IS_PORTRAIT ? 0.68 : 1.0; // 超大当たり！！タイトル用（7文字）
+  const _fscR = IS_PORTRAIT ? 0.68 : 1.0; // 超大当たりタイトル用（7文字）
   const _fs   = s => Math.round(s * _fsc);
   const _fsR  = s => Math.round(s * _fscR);
   const _fy   = y => Math.round(y * _fsc);
@@ -4018,7 +4018,7 @@ function drawEndScreen() {
       grad.addColorStop(0.75,`hsl(${(hue+200)%360},100%,65%)`);
       grad.addColorStop(1,   `hsl(${(hue+300)%360},100%,65%)`);
       ctx.shadowColor = '#fff'; ctx.shadowBlur = 60;
-      outText('超大当たり！！',0,0, grad, 'rgba(0,0,0,0.92)', _fsR(13));
+      outText('超大当たり',0,0, grad, 'rgba(0,0,0,0.92)', _fsR(13));
       ctx.shadowBlur = 22;
       ctx.font = `bold ${_fs(36)}px 'Hiragino Mincho ProN',serif`;
       outText('リーチ達成！ ギ ヨ ウ ザ',0,_fy(92), '#ffffff', 'rgba(0,0,0,0.88)', _fs(8));
@@ -4034,7 +4034,7 @@ function drawEndScreen() {
       ctx.font=`bold ${_fs(88)}px 'Hiragino Mincho ProN',serif`;
       ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.shadowColor=Y; ctx.shadowBlur=55;
-      outText('大当たり！',0,0, Y, 'rgba(0,0,0,0.9)', _fs(11));
+      outText('大当たり',0,0, Y, 'rgba(0,0,0,0.9)', _fs(11));
       ctx.shadowBlur=20;
       ctx.font=`bold ${_fs(32)}px 'Hiragino Mincho ProN',serif`;
       outText('ギ ヨ ウ ザ 達成！',0,_fy(80), '#fffde7', 'rgba(0,0,0,0.85)', _fs(7));
@@ -4048,7 +4048,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#c0d8f0'; ctx.shadowBlur=50;
-    outText('小当たり！',0,0, '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10));
+    outText('小当たり',0,0, '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10));
     ctx.shadowBlur=20;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギ ザ ギ ザ',0,_fy(78), '#e8f4ff', 'rgba(0,20,60,0.85)', _fs(7));
@@ -4060,7 +4060,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#7ec850'; ctx.shadowBlur=50;
-    outText('中当たり！',0,0, '#aaee66', 'rgba(0,40,0,0.9)', _fs(10));
+    outText('中当たり',0,0, '#aaee66', 'rgba(0,40,0,0.9)', _fs(10));
     ctx.shadowBlur=20;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ウ ヨ ウ ヨ',0,_fy(78), '#ccff88', 'rgba(0,40,0,0.85)', _fs(7));
@@ -4074,7 +4074,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#ff6600'; ctx.shadowBlur=40;
-    outText('小当たり！',0,0, '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10));
+    outText('小当たり',0,0, '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10));
     ctx.shadowBlur=15;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ウ ザ ウ ザ',0,_fy(78), '#ffcc44', 'rgba(60,0,0,0.85)', _fs(7));
@@ -4087,7 +4087,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#f5d020'; ctx.shadowBlur=45;
-    outText('中当たり！',0,0, '#f5d020', 'rgba(0,0,0,0.9)', _fs(10));
+    outText('中当たり',0,0, '#f5d020', 'rgba(0,0,0,0.9)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギ ウ ギ ウ',0,_fy(78), '#fffde7', 'rgba(0,0,0,0.85)', _fs(7));
@@ -4101,7 +4101,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#aaddff'; ctx.shadowBlur=40;
-    outText('小当たり！',0,0, '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10));
+    outText('小当たり',0,0, '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギ ギ ギ ギ',0,_fy(78), '#ffffff', 'rgba(0,0,20,0.88)', _fs(7));
@@ -4115,7 +4115,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#44ddcc'; ctx.shadowBlur=45;
-    outText('中当たり！',0,0, '#55eedd', 'rgba(0,30,30,0.92)', _fs(10));
+    outText('中当たり',0,0, '#55eedd', 'rgba(0,30,30,0.92)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ヨ ヨ ヨ ヨ',0,_fy(78), '#aaffee', 'rgba(0,30,30,0.88)', _fs(7));
@@ -4129,7 +4129,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#aaccff'; ctx.shadowBlur=55;
-    outText('中当たり！',0,0, '#cce8ff', 'rgba(0,10,40,0.92)', _fs(10));
+    outText('中当たり',0,0, '#cce8ff', 'rgba(0,10,40,0.92)', _fs(10));
     ctx.shadowBlur=20;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ウ ウ ウ ウ',0,_fy(78), '#e8f4ff', 'rgba(0,10,40,0.88)', _fs(7));
@@ -4141,7 +4141,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#66aaff'; ctx.shadowBlur=45;
-    outText('小当たり！',0,0, '#88ccff', 'rgba(0,10,40,0.92)', _fs(10));
+    outText('小当たり',0,0, '#88ccff', 'rgba(0,10,40,0.92)', _fs(10));
     ctx.shadowBlur=18;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ザ ザ ザ ザ',0,_fy(78), '#bbddff', 'rgba(0,10,40,0.88)', _fs(7));
@@ -4156,7 +4156,7 @@ function drawEndScreen() {
     ctx.font=`bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.shadowColor='#ffcc00'; ctx.shadowBlur=55;
-    outText('中当たり！',0,0, '#ffee44', 'rgba(40,20,0,0.92)', _fs(10));
+    outText('中当たり',0,0, '#ffee44', 'rgba(40,20,0,0.92)', _fs(10));
     ctx.shadowBlur=20;
     ctx.font=`bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`;
     outText('ギョ ギョ ！',0,_fy(78), '#ffe066', 'rgba(40,20,0,0.88)', _fs(7));
