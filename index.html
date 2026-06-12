@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.04';
+const VERSION = 'v2.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -145,15 +145,18 @@ function _prebuildStaticLayers() {
 /* ── 文字列キャッシュ（coins/bet が変わった時だけ再計算） ──
    fmt() = toLocaleString('ja-JP') と measureText は毎フレーム呼ぶには重い。
    値が変わった時だけ更新する遅延キャッシュにする。              */
-let _cachedCoinsStr  = '';     // fmt(coins)
+let _cachedCoinsStr  = '';     // fmt(Math.round(coinsDisp))
 let _cachedBetStr    = '';     // fmt(bet)
 let _cachedBestStr   = '';     // `BEST ${fmt(bestCoins)}`
 let _cachedBetIdx    = -1;     // BET_OPTIONS.indexOf(bet)
 let _cachedBetNumW   = 0;      // measureText(fmt(bet)) の width
 let _cachedBetLabelW = 0;      // measureText('BET') の width — 起動後不変
-let _lastCoinsCached = -1;
+let _lastCoinsDispCached = -1; // coinsDisp の整数値キャッシュ判定用
 let _lastBetCached   = -1;
 let _lastBestCached  = -1;
+
+/* コイン表示アニメーション用（アニメーション追従値・GC不要な数値のみ） */
+let coinsDisp = 0; // 実値 coins に向けてeaseOut追従する表示用float
 
 /* BET ラベル幅（'BET' 文字列・フォント固定）を一度だけ計測して保存 */
 function _initBetLabelWidth() {
@@ -167,9 +170,11 @@ function _initBetLabelWidth() {
 
 /* drawBottomBar/drawCoinHeader の先頭で呼ぶ。変化がなければ即 return */
 function _updateDisplayCaches() {
-  if (coins !== _lastCoinsCached) {
-    _lastCoinsCached = coins;
-    _cachedCoinsStr  = fmt(coins);
+  /* coinsDisp の整数値が変化した時のみ文字列を再生成（毎フレーム fmt() を呼ばない） */
+  const _coinsDispInt = Math.round(coinsDisp);
+  if (_coinsDispInt !== _lastCoinsDispCached) {
+    _lastCoinsDispCached = _coinsDispInt;
+    _cachedCoinsStr      = fmt(_coinsDispInt);
   }
   if (bet !== _lastBetCached) {
     _lastBetCached  = bet;
@@ -1380,7 +1385,7 @@ _jingleDef.forEach(e => { JINGLE_MAP[e.at] = e; });
 [40, 44, 48, 52].forEach(s => { JINGLE_MAP[s] = { countIn: true }; });
 // 合計: ドーーー終わり(40) + カウントイン(16) - 2(詰め) + 4(余白) = 58
 // 最終ハイハット(step52)の1.5拍後(step58)でBGMイン
-const JINGLE_TOTAL_STEPS = 40 + 17; // 最終ハイハット(52)から5step=1.25拍後にBGMイン
+const JINGLE_TOTAL_STEPS = 40 + 18; // 最終ハイハット(52)から6step=1.5拍後にBGMイン
 
 function scheduleJingle(onEnd) {
   if (!audioCtx) { stopJingle(); onEnd && onEnd(); return; }
@@ -1460,6 +1465,7 @@ function initGame() {
   lsLoadStats(); // 統計カウンターをロード
   applyMuteGain(); // lsLoad()でaudioMutedが確定したのでmasterGainに反映
   if (!BET_OPTIONS.includes(bet)) bet = 1; // 未保存時のみデフォルト1
+  coinsDisp = coins; _lastCoinsDispCached = -1; // 起動時はアニメーションなしでスナップ
   isGameOver = false;
   pendingShoot = false;
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
@@ -1470,6 +1476,7 @@ function initGame() {
 
 function gameOverReset() {
   coins      = 60;
+  coinsDisp  = 0; _lastCoinsDispCached = -1; // tapestart中は0固定、idle移行後に0→60アニメーション
   bet        = 1;
   bestCoins  = Math.max(bestCoins ?? 0, 0); // best はそのまま
   isGameOver = false;
@@ -1667,6 +1674,18 @@ function update() {
   /* syncRateDisp: VUメーター式（上昇は速く・下降はゆっくり） */
   const _syncLerpK = syncRate > syncRateDisp ? 0.25 : 0.018;
   syncRateDisp += (syncRate - syncRateDisp) * _syncLerpK;
+  /* coinsDisp: coins に向けてeaseOut追従（差分×8%、上限2000/frame）
+     ホイール回転が w.speed * tapeRate で動くのと同様に、常に _getBgmRateJS() を速度係数とする。
+     これにより tapestart加速・スローハンド・通常速度がすべて同じ「世界の時間の流れ」で統一される。
+     bgmSource.playbackRate.value はiOS Safariで自動化中に誤値を返すため _getBgmRateJS() を使用。
+     audioCtxなし（MUTE無音起動）は rate=1 でフォールバック。 */
+  if (coinsDisp !== coins && phase !== 'startup') {
+    const _cd   = coins - coinsDisp;
+    const _rate = audioCtx ? _getBgmRateJS() : 1;
+    const _cs   = Math.min(Math.abs(_cd) * 0.08, 2000) * _rate;
+    if (_cs >= Math.abs(_cd)) { coinsDisp = coins; }
+    else { coinsDisp += _cd > 0 ? _cs : -_cs; }
+  }
   /* グレースケール視覚レートをlerpで追従（係数0.04≈1300ms収束、easeOut近似） */
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
   if (phase === 'startup') {
@@ -1753,8 +1772,8 @@ function update() {
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
         if (coins <= 0) {
           isGameOver = true;
+          grayRateTarget = 0.001; // オーディオ有無に関わらずグレーアウト開始
           stopBGMTape(); // テープが止まるような演出でBGMをフェードアウト
-
         }
         /* ハズレ判定 */
         if (!_isJackpot && !_isMedium) {
@@ -4632,6 +4651,7 @@ lsLoad();        // bet もここで復元される
 lsLoadAch();
 lsLoadStats();
 if (!BET_OPTIONS.includes(bet)) bet = 1; // 未保存時のみデフォルト1
+coinsDisp = coins; _lastCoinsDispCached = -1; // startup時はスナップ
 isGameOver = false;
 phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
