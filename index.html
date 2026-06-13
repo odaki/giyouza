@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.49';
+const VERSION = 'v2.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1647,8 +1647,7 @@ function init(fromStartup, fromGameOver) {
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
   /* ギヨウザはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
-  /* フィーバー終了バナーは次トライ開始時にクリア（done フェーズ中のみ表示） */
-  feverEndBannerTimer = 0; feverEndBannerReason = null;
+  /* フィーバー終了バナーはタイマーが切れるまで継続（入力に関係なく一定時間表示） */
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   for (const g of yoyos) g._dead = true;
@@ -1990,7 +1989,7 @@ function update() {
       return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
-    if (_jackpotInFever && !isGameOver && endTimer > (feverEndedReason === 'expired' ? 180 : 30)) {
+    if (_jackpotInFever && !isGameOver && endTimer > 30) {
       const fire = pendingShoot; init(); shootGuard = 0;
       if (fire) { pendingShoot = false; onShoot(); }
       return;
@@ -4552,8 +4551,8 @@ function drawSlowHandBadge() {
 
 /* ── フィーバー終了メッセージ ── */
 function drawFeverEndMessage() {
-  /* 実績バナーと同じパターン: フェードイン20f、フェードアウト最後30f */
-  const elapsed = 240 - feverEndBannerTimer; // 0→240
+  /* フェードイン20f、フェードアウト最後30f（総時間180f基準） */
+  const elapsed = 180 - feverEndBannerTimer; // 0→180
   const alpha = elapsed < 20  ? elapsed / 20
               : feverEndBannerTimer < 30 ? feverEndBannerTimer / 30
               : 1;
