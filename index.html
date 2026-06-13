@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.27';
+const VERSION = 'v2.28';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -384,6 +384,9 @@ let feverEndedReason = null; // 'miss' | 'expired' | null
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
+/* チートキー予約（当たり判定時に pending へ転写） */
+let _cheatFeverQueued = false; // Ctrl+F予約
+let _cheatSlowQueued  = null;  // Ctrl+T予約: null=なし / true=スロー / false=通常
 
 /* ── ギヨウザコイン ── */
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
@@ -1535,7 +1538,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1551,7 +1554,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1811,6 +1814,9 @@ function update() {
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
+        /* チートキー予約を当たり判定タイミングで確定（次トライのinit()が消費する） */
+        if (_cheatFeverQueued) { feverPending = true; _cheatFeverQueued = false; }
+        if (_cheatSlowQueued !== null) { _slowSpinPending = _cheatSlowQueued; _cheatSlowQueued = null; }
         /* HIT_TABLE を先頭から順に照合して最初にマッチした型を採用 */
         const res = wheels.map(w => w.result);
         const _hitEntry = HIT_TABLE.find(h => h.pat.every((c, i) => c === res[i]));
@@ -5081,10 +5087,10 @@ document.addEventListener('keydown', e=>{
     e.preventDefault();
     cheatShoot(CHEAT_MAP[e.code]);
   }
-  /* チート: Ctrl+F → 次トライでフィーバー発動 */
+  /* チート: Ctrl+F → 当たり判定時にフィーバーを予約 */
   if (e.code === 'KeyF' && e.ctrlKey) {
     e.preventDefault();
-    feverPending = true; feverJustChain = 0;
+    _cheatFeverQueued = true; feverJustChain = 0;
   }
   /* 隠しコマンド: Ctrl+C → localStorage全消去してリロード */
   if (e.code === 'KeyC' && e.ctrlKey) {
@@ -5092,12 +5098,14 @@ document.addEventListener('keydown', e=>{
     try { localStorage.clear(); } catch(err) {}
     location.reload();
   }
-  /* デバッグ: Ctrl+T → 次トライでスローハンドをトグル */
+  /* デバッグ: Ctrl+T → 当たり判定時にスローハンドを予約（2回押しでキャンセル） */
   if (e.code === 'KeyT' && e.ctrlKey) {
     e.preventDefault();
-    /* 現在のpending状態をトグル（2回押しでキャンセル） */
-    const current = _slowSpinPending !== null ? _slowSpinPending : isSlowSpin;
-    _slowSpinPending = !current;
+    if (_cheatSlowQueued !== null) {
+      _cheatSlowQueued = null; // 2回押しでキャンセル
+    } else {
+      _cheatSlowQueued = !isSlowSpin; // 現在の状態をトグル予約
+    }
   }
 });
 
