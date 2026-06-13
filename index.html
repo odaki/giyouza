@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.35';
+const VERSION = 'v2.36';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -397,6 +397,13 @@ const PAYOUT_RATE = {
   hitMed:       12,  // 中当たり（ギヨウザあり）
   hitSml:        6,  // 小当たり（ギヨウザなし）
 };
+/* ペイアウト倍率 → ギヨウザ降下数（対数スケール）
+   k=20, MAX=150: ×12→72, ×24→92, ×60→118 */
+const _GYOZA_BURST_K   = 20;
+const _GYOZA_BURST_MAX = 150;
+function _gyozaBurst(rate) {
+  return Math.min(_GYOZA_BURST_MAX, Math.round(Math.log2(rate) * _GYOZA_BURST_K));
+}
 
 /* 当たり判定テーブル:
    pat       = 4文字パターン
@@ -1843,18 +1850,18 @@ function update() {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
           if (_jackpotInFever) {
-            initGyozas(30, true); // 既存ギヨウザを保持しつつ追加（上限200）
+            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot), true); // 既存ギヨウザを保持しつつ追加（上限200）
             playSE('jackpot');
           } else if (isReach) {
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
-            initGyozas(100, true);
+            initGyozas(_gyozaBurst(PAYOUT_RATE.reachJackpot), true);
             unlockAch('reach_jackpot');
             playSE('reach_jackpot');
           } else {
             launchFireworks();
-            initGyozas(70, true);
+            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot), true);
             playSE('jackpot');
           }
           unlockAch('first_jackpot');
@@ -2441,7 +2448,7 @@ function initGiugiu() {
   for (const g of gyozas) g._dead = true;
   gyozas = [];
   /* 外周リングから中央へ向かって一斉に投下 */
-  const N = 20;
+  const N = _gyozaBurst(PAYOUT_RATE.hitMed);
   const R = Math.hypot(W, H) * 0.55;
   for (let i = 0; i < N; i++) {
     const angle = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
