@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.29';
+const VERSION = 'v2.30';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1990,7 +1990,7 @@ function update() {
 
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (_isJackpot && endTimer % 85 === 40) launchFireworks();
-    if (_isJackpot)                           updateGyozas();
+    if (gyozas.length > 0)                    updateGyozas();
     if (hitType === 'gizagiza' && endTimer % 120 === 60) launchGizaFireworks();
     if (_activeEffect?.update) _activeEffect.update();
   }
@@ -3344,8 +3344,8 @@ function draw() {
 
   /* 2. エフェクト面 */
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
-  /* フィーバー堆積ギヨウザ: doneフェーズ以外でも描画（done内は_activeEffectが担う） */
-  if (gyozas.length > 0 && phase !== 'done') drawGyozas();
+  /* フィーバー堆積ギヨウザ: _activeEffectがdrawGyozasを担う場合を除いて常時描画 */
+  if (gyozas.length > 0 && _activeEffect?.draw !== drawGyozas) drawGyozas();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
 
   /* 白フラッシュ (リーチ大当たり確定の瞬間) */
