@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.44';
+const VERSION = 'v2.45';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1845,7 +1845,7 @@ function update() {
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
               feverEndedReason = 'expired';
-              feverEndBannerTimer = 240; feverEndBannerReason = 'expired';
+              // バナーは自動リセット(init)後にセット — ここではセットしない（二重表示防止）
             }
           }
         }
@@ -1991,9 +1991,10 @@ function update() {
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
     if (_jackpotInFever && !isGameOver && endTimer > 30) {
-      const _savedBannerReason = feverEndBannerReason; // init()でクリアされる前に退避
+      const _savedEndedReason = feverEndedReason; // init()でクリアされる前に退避
       const fire = pendingShoot; init(); shootGuard = 0;
-      if (_savedBannerReason) { feverEndBannerTimer = 240; feverEndBannerReason = _savedBannerReason; }
+      // expiredの場合: ここで初めてバナーをセット（結果確定時はセットしない）
+      if (_savedEndedReason === 'expired') { feverEndBannerTimer = 240; feverEndBannerReason = 'expired'; }
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
