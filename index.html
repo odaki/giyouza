@@ -1061,11 +1061,24 @@ document.addEventListener('keydown',    _onFirstGesture, true);
 document.addEventListener('mousedown',  _onFirstGesture, true);
 document.addEventListener('touchstart', _onFirstGesture, true);
 
+/* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
+   visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && audioCtx && !audioMuted) {
+    audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
+  }
+});
+
 function toggleMute() {
   audioMuted = !audioMuted;
   try { localStorage.setItem(LS_MUTE, audioMuted ? '1' : '0'); } catch(e) {}
   /* ミュートは gain だけを制御する。BGMソースの起動・停止はしない。 */
   applyMuteGain();
+  /* ミュート解除時: iOS SafariでバックグラウンドからONになるとaudioCtxがsuspendedのままのことがある。
+     resume()完了後に再度 applyMuteGain() を呼んで gain を確実に反映させる。 */
+  if (!audioMuted && audioCtx && audioCtx.state !== 'running') {
+    audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
+  }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
      （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償） */
   if (!audioMuted && phase !== 'startup' && audioCtx && !bgmSource && !jingleScheduler) {
