@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.38';
+const VERSION = 'v2.39';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1983,16 +1983,19 @@ function update() {
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
-    /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし）
-       pendingShootを引き継いで次の発射バッファも消化する */
-    if (_jackpotInFever && !isGameOver && endTimer > 30) {
+    /* フィーバー中大当たり: 自動リセット（ギヨウザ落下のみ、入力待ちなし）
+       feverEndedReason がある（最終トライ）場合は終了メッセージ表示のため90f待つ */
+    const _feverAutoWait = feverEndedReason ? 90 : 30;
+    if (_jackpotInFever && !isGameOver && endTimer > _feverAutoWait) {
       const fire = pendingShoot; init(); shootGuard = 0;
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
     /* エフェクト終了後: canRestartをセット
+       feverEndedReason がある間は終了メッセージ表示のため90f待つ
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
-    if (!isGameOver && !_jackpotInFever && endTimer > minWait && allShown) canRestart = true;
+    const _canRestartWait = feverEndedReason ? 90 : minWait;
+    if (!isGameOver && !_jackpotInFever && endTimer > _canRestartWait && allShown) canRestart = true;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
@@ -3368,7 +3371,7 @@ function draw() {
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
   /* フィーバー終了メッセージ（ミス/期限切れ問わず常時描画） */
-  if (feverEndedReason && phase === 'done' && endTimer > 45) drawFeverEndMessage();
+  if (feverEndedReason && phase === 'done' && endTimer > 10) drawFeverEndMessage();
   if (phase==='reach')              drawReachText();
 
   /* スタートアップ画面 */
