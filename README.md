@@ -40,6 +40,44 @@
 - 剛体円衝突シミュレーション（ギヨウザ落下・堆積・崩落）
 - `index.html` 単一ファイル完結
 
+## 開発セットアップ
+
+### pre-commitフック（バージョン自動インクリメント）
+
+`index.html` 内の `VERSION` 定数はコミットのたびに自動でインクリメントされます。
+`git clone` 後や環境を変えた際は以下のコマンドでフックを設定してください。
+
+```sh
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+# pre-commit: index.html の VERSION 定数を自動インクリメントする
+# 例: 'v2.10' → 'v2.11'
+
+FILE="index.html"
+
+CURRENT=$(grep -o "const VERSION = 'v[0-9]*\.[0-9]*'" "$FILE" | grep -o "v[0-9]*\.[0-9]*")
+if [ -z "$CURRENT" ]; then
+  echo "pre-commit: VERSION定数が見つかりません。スキップします。" >&2
+  exit 0
+fi
+
+MAJOR=$(echo "$CURRENT" | sed "s/v\([0-9]*\)\..*/\1/")
+MINOR=$(echo "$CURRENT" | sed "s/v[0-9]*\.\([0-9]*\)/\1/")
+NEXT_MINOR=$((MINOR + 1))
+NEXT="v${MAJOR}.${NEXT_MINOR}"
+
+sed -i "" "s/const VERSION = '${CURRENT}'/const VERSION = '${NEXT}'/" "$FILE"
+
+git add "$FILE"
+
+echo "pre-commit: VERSION ${CURRENT} → ${NEXT}"
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+> **注意:** Windowsの場合、`sed -i ""` の代わりに `sed -i` を使用してください（GNU sed）。
+> Git for Windowsのbashであれば上記のまま動作する場合もあります。
+
 ## ライセンス
 
 MIT License
