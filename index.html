@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.45';
+const VERSION = 'v2.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5084,7 +5084,10 @@ function handleGameClick(inputAudioTime) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
-        init(); shootGuard = 0; pendingShoot = false; onShoot(inputAudioTime);
+        const _savedBanner = feverEndBannerReason;
+        init(); shootGuard = 0; pendingShoot = false;
+        if (_savedBanner) { feverEndBannerTimer = 240; feverEndBannerReason = _savedBanner; }
+        onShoot(inputAudioTime);
       }
       return;
     }
