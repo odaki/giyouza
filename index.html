@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.48';
+const VERSION = 'v2.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1839,13 +1839,13 @@ function update() {
           if (hitType !== 'jackpot') {
             isFever = false; feverTriesLeft = 0;
             feverEndedReason = 'miss';
-            // バナーはクリック後(init)後にセット — ここではセットしない（二重表示防止）
+            feverEndBannerTimer = 180; feverEndBannerReason = 'miss';
           } else {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
               feverEndedReason = 'expired';
-              // バナーは自動リセット(init)後にセット — ここではセットしない（二重表示防止）
+              feverEndBannerTimer = 180; feverEndBannerReason = 'expired';
             }
           }
         }
@@ -1990,11 +1990,8 @@ function update() {
       return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
-    if (_jackpotInFever && !isGameOver && endTimer > 30) {
-      const _savedEndedReason = feverEndedReason; // init()でクリアされる前に退避
+    if (_jackpotInFever && !isGameOver && endTimer > (feverEndedReason === 'expired' ? 180 : 30)) {
       const fire = pendingShoot; init(); shootGuard = 0;
-      // expiredの場合: ここで初めてバナーをセット（結果確定時はセットしない）
-      if (_savedEndedReason === 'expired') { feverEndBannerTimer = 240; feverEndBannerReason = 'expired'; }
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
@@ -2024,7 +2021,7 @@ function update() {
 
   /* フィーバー終了バナータイマー（フェーズ横断・当たりorゲームオーバーでクリア） */
   if (feverEndBannerTimer > 0) {
-    if (isGameOver || (phase === 'done' && hitType !== 'none' && !isFever && !feverEndedReason)) {
+    if (isGameOver) {
       feverEndBannerTimer = 0; feverEndBannerReason = null;
     } else {
       feverEndBannerTimer--;
@@ -5084,10 +5081,7 @@ function handleGameClick(inputAudioTime) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
-        const _savedEndedReason = feverEndedReason;
-        init(); shootGuard = 0; pendingShoot = false;
-        if (_savedEndedReason === 'miss') { feverEndBannerTimer = 240; feverEndBannerReason = 'miss'; }
-        onShoot(inputAudioTime);
+        init(); shootGuard = 0; pendingShoot = false; onShoot(inputAudioTime);
       }
       return;
     }
