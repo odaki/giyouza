@@ -4703,6 +4703,9 @@ function togglePause() {
       _pauseBgmRate = _bgmRateTo; // ランプ完了後のターゲットレートを保存
       _destroyBGMSource();
     }
+    /* ジングル中など bgmSource がない場合も含め masterGain を 0 にして無音化する。
+       jingleScheduler の setInterval は動き続けるが gain=0 で無音になる。 */
+    applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
     if (audioCtx) {
