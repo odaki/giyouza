@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.14';
+const VERSION = 'v2.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3525,14 +3525,23 @@ function drawWheel(i) {
   ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2);
   ctx.fillStyle=w.hubGrd; ctx.fill(); // キャッシュ済みグラジェントを使用
 
-  if(active||w.locked){ctx.shadowColor=w.locked?'#ff4422':Y;ctx.shadowBlur=18+bp*18;}
+  /* リーチ中: 第4的がまだアクティブでも未ロックでもない間、ポインター三角にパルスグローを追加 */
+  const _reachHL = isReach && i === 3 && !active && !w.locked;
+  const _reachPulse = _reachHL ? Math.min(1, reachTimer / 35) * (0.55 + 0.45 * Math.abs(Math.sin(reachTimer * 0.25))) : 0;
+  if (active || w.locked || _reachHL) {
+    ctx.shadowColor = w.locked ? '#ff4422' : Y;
+    ctx.shadowBlur  = _reachHL ? 12 + _reachPulse * 22 : 18 + bp * 18;
+  }
   /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き) */
   if (IS_PORTRAIT) {
     ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
   } else {
     ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
   }
-  ctx.fillStyle=w.locked?'#cc2200':(active?Y:YD); ctx.fill(); ctx.shadowBlur=0;
+  if (_reachHL) ctx.globalAlpha = 0.5 + 0.5 * _reachPulse;
+  ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : _reachHL ? Y : YD);
+  ctx.fill();
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
   if (w.result) {
     const pop=Math.max(0.01,easeOutBack(Math.min(1,w.resultPop)));
@@ -3943,16 +3952,6 @@ function drawReachText() {
     const msg = IS_TOUCH ? '[ タップ ] で矢を放て！' : '[ スペース ] で矢を放て！';
     outText(msg, W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
   }
-
-  /* 第4的の上に▼マーカー (注目を誘導) */
-  const markerAlpha = fadeIn * (0.5 + 0.5 * Math.abs(Math.sin(reachTimer * 0.25)));
-  ctx.globalAlpha = markerAlpha;
-  ctx.font = `bold 20px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.shadowColor = Y; ctx.shadowBlur = 15;
-  ctx.fillStyle = Y;
-  if (IS_PORTRAIT) ctx.fillText('◀', WXS[3] + WR + 52, WYS[3]); // 右側に◀
-  else             ctx.fillText('▼', WXS[3], WYS[3] - WR - 52);
 
   ctx.restore();
 }
