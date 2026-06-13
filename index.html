@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.51';
+const VERSION = 'v2.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -378,7 +378,6 @@ let reachFlash = 0; // 白フラッシュ用タイマー
 /* フィーバー状態 */
 let isFever          = false;
 let feverTriesLeft   = 0;
-let feverJustChain   = 0; // 連続JUST!カウンタ（フィーバー未発動時のみ加算）
 
 let feverEndedReason = null; // 'miss' | 'expired' | null
 let feverEndBannerTimer  = 0;    // バナー表示タイマー（フェーズ横断）
@@ -1547,7 +1546,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
+  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
   for (const g of gyozas) g._dead = true; gyozas = [];
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -1564,7 +1563,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
+  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
   for (const g of gyozas) g._dead = true; gyozas = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
@@ -1601,6 +1600,7 @@ function init(fromStartup, fromGameOver) {
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
     isFever = true; feverTriesLeft = 10; feverPending = false;
+    syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
@@ -5048,7 +5048,7 @@ function onShoot(_inputAudioTime){
     /* フィーバー発動カウンタ: フィーバー未発動・未ペンディング・スローハンドなし時のみJUST!を加算 */
     if (!isFever && !feverPending && !isSlowSpin) {
       if (syncChain >= 256) {
-        feverPending = true; feverJustChain = 0; // 次トライ開始時に発動
+        feverPending = true; // 次トライ開始時に発動
       }
     }
   }
@@ -5144,7 +5144,7 @@ document.addEventListener('keydown', e=>{
   /* チート: Ctrl+F → 当たり判定時にフィーバーを予約 */
   if (e.code === 'KeyF' && e.ctrlKey) {
     e.preventDefault();
-    _cheatFeverQueued = true; feverJustChain = 0;
+    _cheatFeverQueued = true;
   }
   /* 隠しコマンド: Ctrl+C → localStorage全消去してリロード */
   if (e.code === 'KeyC' && e.ctrlKey) {
