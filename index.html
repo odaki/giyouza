@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.23';
+const VERSION = 'v2.24';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1824,9 +1824,12 @@ function update() {
           }
         }
         if (_isJackpot) {
-          /* フィーバー中の大当たり: ギヨウザ落下のみ・自動リセット */
+          /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
-          if (isReach) {
+          if (_jackpotInFever) {
+            initGyozas(70);
+            playSE('jackpot');
+          } else if (isReach) {
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
@@ -1844,8 +1847,9 @@ function update() {
           if (bet >= 1000) unlockAch('big_bet_win');
           lsSaveStats();
         }
-        /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む） */
-        if (_isJackpot || _isMedium) pendingShoot = false;
+        /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
+           フィーバー大当たりは自動リセット時に発射するため破棄しない */
+        if ((_isJackpot || _isMedium) && !_jackpotInFever) pendingShoot = false;
         /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
         if (isSlowSpin && (_isJackpot || _isMedium)) {
           rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
@@ -1956,9 +1960,12 @@ function update() {
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
-    /* フィーバー中大当たり: 120f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
-    if (_jackpotInFever && !isGameOver && endTimer > 120) {
-      init(); shootGuard = 0; return;
+    /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし）
+       pendingShootを引き継いで次の発射バッファも消化する */
+    if (_jackpotInFever && !isGameOver && endTimer > 30) {
+      const fire = pendingShoot; init(); shootGuard = 0;
+      if (fire) { pendingShoot = false; onShoot(); }
+      return;
     }
     /* エフェクト終了後: canRestartをセット
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
@@ -4988,6 +4995,13 @@ function handleGameClick(inputAudioTime) {
       if (canRestart) {
         init(); shootGuard = 0; pendingShoot = false; onShoot(inputAudioTime);
       }
+      return;
+    }
+    /* フィーバー大当たり: クリックで即時リセット＋pendingShoot引き継ぎ */
+    if (_jackpotInFever) {
+      pendingShoot = true;
+      const fire = pendingShoot; init(); shootGuard = 0;
+      if (fire) { pendingShoot = false; onShoot(inputAudioTime); }
       return;
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
