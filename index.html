@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.15';
+const VERSION = 'v2.16';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3949,8 +3949,7 @@ function drawReachText() {
     ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
     ctx.textAlign = 'center';
     ctx.shadowColor = Y; ctx.shadowBlur = 18;
-    const msg = IS_TOUCH ? '[ タップ ] で矢を放て！' : '[ スペース ] で矢を放て！';
-    outText(msg, W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
+    outText('矢を放て！', W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
   }
 
   ctx.restore();
