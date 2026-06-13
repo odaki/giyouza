@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.31';
+const VERSION = 'v2.32';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -233,7 +233,7 @@ const _GYOZA_POOL_SIZE = 300;
 const _gyozaPool = [];
 for (let _i = 0; _i < _GYOZA_POOL_SIZE; _i++) {
   _gyozaPool.push({
-    x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0,
+    x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0,
     skinL:'', skinD:'', bodyGrd:null, _dead:true, _rotPhase:0,
     greens: [{dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
              {dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
@@ -2126,7 +2126,7 @@ function makeGyozaObj(x, y, vx, vy) {
   const g    = _gyozaAlloc();
   g._dead    = false;
   const size = 34 + Math.random() * 8;
-  g.x = x; g.y = y; g.vx = vx; g.vy = vy;
+  g.x = x; g.y = y; g.vx = vx; g.vy = vy; g.age = 0;
   g.rot      = Math.random() * Math.PI * 2;
   g.rotSpd   = (Math.random() - 0.5) * 0.14;
   g._rotPhase = Math.random() * Math.PI * 2;
@@ -2204,6 +2204,7 @@ function updateGyozas() {
 
   /* ① 積分: 重力適用・位置更新 */
   for (const g of gyozas) {
+    g.age++;
     g.vy        += GRAVITY;
     g.vx        *= 0.997;        // 空気抵抗
     g.x         += g.vx;
@@ -2231,10 +2232,13 @@ function updateGyozas() {
         g.rotSpd *= 0.78;
         if (Math.abs(g.rotSpd) < 0.003) g.rotSpd = 0;
         /* 着地後: 近い方の壁へ流れる
-           doneフェーズ: 緩やか（山積み演出）
-           それ以外(フィーバー継続idle等): 強め（速やかに画面外へ） */
+           doneフェーズ: age依存で緩やか→強め（山積み→崩落）
+           それ以外(idle等): age依存でゆっくり→速やかに画面外へ */
         if (g.vy === 0) {
-          const drift = phase === 'done' ? 0.012 : 0.08;
+          const t = Math.min(1, g.age / 300);   // 0→1 (約5秒)
+          const drift = phase === 'done'
+            ? 0.005 + t * 0.025               // done: 0.005〜0.030
+            : 0.01  + t * 0.12;               // idle等: 0.01〜0.13
           g.vx += (g.x < W / 2 ? -1 : 1) * drift;
         }
       }
