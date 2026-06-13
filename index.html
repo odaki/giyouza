@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.46';
+const VERSION = 'v2.47';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1839,7 +1839,7 @@ function update() {
           if (hitType !== 'jackpot') {
             isFever = false; feverTriesLeft = 0;
             feverEndedReason = 'miss';
-            feverEndBannerTimer = 240; feverEndBannerReason = 'miss';
+            // バナーはクリック後(init)後にセット — ここではセットしない（二重表示防止）
           } else {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
@@ -5084,9 +5084,9 @@ function handleGameClick(inputAudioTime) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
-        const _savedBanner = feverEndBannerReason;
+        const _savedEndedReason = feverEndedReason;
         init(); shootGuard = 0; pendingShoot = false;
-        if (_savedBanner) { feverEndBannerTimer = 240; feverEndBannerReason = _savedBanner; }
+        if (_savedEndedReason === 'miss') { feverEndBannerTimer = 240; feverEndBannerReason = 'miss'; }
         onShoot(inputAudioTime);
       }
       return;
