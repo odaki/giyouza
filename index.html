@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.34';
+const VERSION = 'v2.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -233,7 +233,7 @@ const _GYOZA_POOL_SIZE = 300;
 const _gyozaPool = [];
 for (let _i = 0; _i < _GYOZA_POOL_SIZE; _i++) {
   _gyozaPool.push({
-    x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0,
+    x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     skinL:'', skinD:'', bodyGrd:null, _dead:true, _rotPhase:0,
     greens: [{dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
              {dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
@@ -1836,6 +1836,9 @@ function update() {
             }
           }
         }
+        /* 残存ギヨウザがある場合: 当たりエフェクト発動前に地面スルーで退場させる
+           フィーバー中の連続大当たりは積み重ねたいため除外 */
+        if (gyozas.length > 0 && hitType !== 'none' && !_jackpotInFever) flushGyozas();
         if (_isJackpot) {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
@@ -2126,7 +2129,7 @@ function makeGyozaObj(x, y, vx, vy) {
   const g    = _gyozaAlloc();
   g._dead    = false;
   const size = 34 + Math.random() * 8;
-  g.x = x; g.y = y; g.vx = vx; g.vy = vy; g.age = 0;
+  g.x = x; g.y = y; g.vx = vx; g.vy = vy; g.age = 0; g._flush = false;
   g.rot      = Math.random() * Math.PI * 2;
   g.rotSpd   = (Math.random() - 0.5) * 0.14;
   g._rotPhase = Math.random() * Math.PI * 2;
@@ -2150,6 +2153,15 @@ function makeGyozaObj(x, y, vx, vy) {
     gr.color = `hsl(${108+Math.random()*24|0},${60+Math.random()*20|0}%,${35+Math.random()*15|0}%)`;
   }
   return g;
+}
+
+/* 残存ギヨウザを地面スルーで画面下へ落下させて退場させる */
+function flushGyozas() {
+  for (const g of gyozas) {
+    g._flush = true;
+    g.vy = 6 + Math.random() * 5;   // 強めの下向き初速
+    g.vx += (Math.random() - 0.5) * 2; // 少し左右にばらす
+  }
 }
 
 /* addOnly=true のとき既存ギヨウザを保持して追加（フィーバー連続大当たり用）。
@@ -2220,7 +2232,7 @@ function updateGyozas() {
     /* 地面 & 左右壁 */
     for (const g of gyozas) {
       const r = g.size * 0.52;
-      if (g.y + r > GROUND_Y) {
+      if (!g._flush && g.y + r > GROUND_Y) {
         g.y = GROUND_Y - r;
         g.inContact = true;
         if (g.vy > 0) {
