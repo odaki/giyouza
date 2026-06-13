@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.43';
+const VERSION = 'v2.44';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2023,7 +2023,7 @@ function update() {
 
   /* フィーバー終了バナータイマー（フェーズ横断・当たりorゲームオーバーでクリア） */
   if (feverEndBannerTimer > 0) {
-    if (isGameOver || (phase === 'done' && hitType !== 'none' && !isFever)) {
+    if (isGameOver || (phase === 'done' && hitType !== 'none' && !isFever && !feverEndedReason)) {
       feverEndBannerTimer = 0; feverEndBannerReason = null;
     } else {
       feverEndBannerTimer--;
