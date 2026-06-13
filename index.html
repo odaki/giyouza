@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.24';
+const VERSION = 'v2.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1561,6 +1561,9 @@ function gameOverReset() {
 }
 
 function init(fromStartup, fromGameOver) {
+  /* フィーバー継続中の大当たりからの遷移ならギヨウザを保持する。
+     _jackpotInFever / isFever は以降のリセットで書き換わるため先に評価する。 */
+  const _keepGyozas = _jackpotInFever && isFever;
   if (fromStartup) {
     /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音）
        resume() の Promise 解決を待たず同期的に開始する。iOS では resume() Promise が
@@ -1626,8 +1629,7 @@ function init(fromStartup, fromGameOver) {
   worms      = [];
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
-  for (const g of gyozas)     g._dead = true;
-  gyozas     = [];
+  if (!_keepGyozas) { for (const g of gyozas) g._dead = true; gyozas = []; }
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   for (const g of yoyos) g._dead = true;
@@ -1827,7 +1829,7 @@ function update() {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
           if (_jackpotInFever) {
-            initGyozas(70);
+            initGyozas(70, true); // 既存ギヨウザを保持しつつ追加（上限200）
             playSE('jackpot');
           } else if (isReach) {
             isReachJackpot = true;
@@ -1988,6 +1990,8 @@ function update() {
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
+  /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
+  if (gyozas.length > 0 && phase !== 'done') updateGyozas();
 
   /* 実績バナータイマー（phaseに関係なく常時更新） */
   if (achBannerTimer > 0) {
@@ -2137,11 +2141,17 @@ function makeGyozaObj(x, y, vx, vy) {
   return g;
 }
 
-function initGyozas(burst = 70) {
-  for (const g of gyozas) g._dead = true; // 既存をプールに返却
-  gyozas = [];
+/* addOnly=true のとき既存ギヨウザを保持して追加（フィーバー連続大当たり用）。
+   上限200を超えないようキャップする。 */
+function initGyozas(burst = 70, addOnly = false) {
+  if (!addOnly) {
+    for (const g of gyozas) g._dead = true; // 既存をプールに返却
+    gyozas = [];
+  }
   /* 最初に中央からどさっとまとめて投下 */
-  for (let i = 0; i < burst; i++) {
+  const FEVER_MAX = 200;
+  const toAdd = addOnly ? Math.min(burst, FEVER_MAX - gyozas.length) : burst;
+  for (let i = 0; i < toAdd; i++) {
     const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
     const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
     const vx   = (Math.random()-0.5) * 5;
@@ -3318,6 +3328,8 @@ function draw() {
 
   /* 2. エフェクト面 */
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
+  /* フィーバー堆積ギヨウザ: doneフェーズ以外でも描画（done内は_activeEffectが担う） */
+  if (gyozas.length > 0 && phase !== 'done') drawGyozas();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
 
   /* 白フラッシュ (リーチ大当たり確定の瞬間) */
