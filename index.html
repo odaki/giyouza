@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.13';
+const VERSION = 'v2.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1368,7 +1368,6 @@ const CLOUDS = IS_PORTRAIT ? [
 let jingleScheduler = null;
 let jingleStep = 0;
 let jingleNextTime = 0;
-let _jinglePendingStart = false; // iOS: resume()のPromise未解決でジングル開始が保留中
 
 const JINGLE_BPM    = BGM_BPM;             // BGMと同じ152BPM
 const JINGLE_BEAT   = 60 / JINGLE_BPM;     // ~0.395s
@@ -1454,14 +1453,14 @@ function scheduleJingle(onEnd) {
 
 function stopJingle() {
   if (jingleScheduler) { clearInterval(jingleScheduler); jingleScheduler = null; }
-  _jinglePendingStart = false;
 }
 
 function playStartJingle(onEnd) {
   /* audioMuted はチェックしない: gain=0 で無音のままジングルが完了し BGM に繋がる */
-  if (!audioCtx || audioCtx.state !== 'running') {
-    onEnd && onEnd(); return;
-  }
+  /* state !== 'running' でもスケジューリングは可能: suspended 状態でも音符を未来時刻に
+     予約でき、resume() 完了後に正しく再生される。iOS で resume() Promise が次の
+     ユーザージェスチャーまで解決しない場合でも即座にジングルを開始するため state チェック不要。 */
+  if (!audioCtx) { onEnd && onEnd(); return; }
   /* bgmSource がすでに存在する場合: ensureAudioRunning の非同期コールバックが
      ゲームオーバー→リセット後に遅れて届いた可能性がある（競合状態）。
      BGM はすでに起動済みなのでジングルを再生しない。 */
@@ -1490,7 +1489,6 @@ function initGame() {
 }
 
 function gameOverReset() {
-  _jinglePendingStart = false;
   coins      = 60;
   coinsDisp  = 0; _lastCoinsDispCached = -1; // tapestart中は0固定、idle移行後に0→60アニメーション
   bet        = 1;
@@ -1514,17 +1512,12 @@ function gameOverReset() {
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音）
-       AudioContext がここで初めて生成された場合に備え、gain を正しい値に設定してから起動する */
-    _jinglePendingStart = true;
-    ensureAudioRunning(() => {
-      applyMuteGain();
-      if (audioCtx && audioCtx.state === 'running') {
-        _jinglePendingStart = false;
-        playStartJingle(() => startBGM());
-      }
-      /* state が running でない場合は _jinglePendingStart を true のままにして
-         次の touchstart で再試行する（iOS: resume() Promise が次のジェスチャーまで解決しない問題） */
-    });
+       resume() の Promise 解決を待たず同期的に開始する。iOS では resume() Promise が
+       次のユーザージェスチャーまで解決しないことがあるが、suspended 状態でも音符は
+       未来時刻にスケジュール可能で、コンテキスト起動後に正しく再生される。 */
+    getAudioCtx().resume().catch(() => {});
+    applyMuteGain();
+    playStartJingle(() => startBGM());
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
@@ -4963,22 +4956,8 @@ document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
   /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
-     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ。
-     _jinglePendingStart が true の場合: resume() のPromiseが次のジェスチャーまで解決しなかった
-     ケース（orientation change後など）。resume完了後またはすでに running ならジングルを再試行。 */
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume().then(() => {
-      if (_jinglePendingStart) {
-        _jinglePendingStart = false;
-        applyMuteGain();
-        playStartJingle(() => startBGM());
-      }
-    }).catch(() => {});
-  } else if (_jinglePendingStart && audioCtx && audioCtx.state === 'running') {
-    _jinglePendingStart = false;
-    applyMuteGain();
-    playStartJingle(() => startBGM());
-  }
+     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
