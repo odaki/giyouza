@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.20';
+const VERSION = 'v2.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -375,6 +375,12 @@ let endTimer, canRestart;
 /* リーチ演出 */
 let isReach, reachTimer, isReachJackpot;
 let reachFlash = 0; // 白フラッシュ用タイマー
+/* フィーバー状態 */
+let isFever          = false;
+let feverTriesLeft   = 0;
+let feverJustChain   = 0; // 連続JUST!カウンタ（フィーバー未発動時のみ加算）
+let feverFlash       = 0; // フィーバー発動時のオレンジフラッシュ
+let feverEndedReason = null; // 'miss' | 'expired' | null
 
 /* ── ギヨウザコイン ── */
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
@@ -1526,6 +1532,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1541,6 +1548,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null;
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1568,7 +1576,7 @@ function init(fromStartup, fromGameOver) {
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
   const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
   isSlowSpin = Math.random() < slowProb;
-  wheels     = WXS.map((x, i) => createWheel(x, WYS[i]));
+  wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
   phase      = 'idle';
   arrowProgress = 0;
@@ -1586,6 +1594,7 @@ function init(fromStartup, fromGameOver) {
   reachTimer    = 0;
   isReachJackpot = false;
   reachFlash    = 0;
+  feverEndedReason = null; // フィーバー終了メッセージをトライごとにクリア
   canRestart  = false;
   betLocked   = false;
   shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
@@ -1663,9 +1672,12 @@ function calcPayout() {
   return entry ? bet * PAYOUT_RATE[entry.payout] : 0;
 }
 
-function createWheel(x, y) {
+function createWheel(x, y, feverChar) {
   const chars   = [...CHARS].sort(() => Math.random() - 0.5);
-  const weights = chars.map(() => Math.random() * 0.65 + 0.25);
+  /* フィーバー中: 対象文字97%、他3文字各1%の極端な偏りを設定 */
+  const weights = feverChar
+    ? chars.map(c => c === feverChar ? 97 : 1)
+    : chars.map(() => Math.random() * 0.65 + 0.25);
   const sum     = weights.reduce((a, b) => a + b, 0);
   let angle = 0;
   const segs = chars.map((c, i) => {
@@ -1791,6 +1803,19 @@ function update() {
         _activeEffect = _hitEntry ?? null;
         const _isJackpot = hitType === 'jackpot';
         const _isMedium  = hitType !== 'none' && !_isJackpot;
+        /* フィーバー終了判定: 大当たり以外またはトライ上限到達で終了 */
+        if (isFever) {
+          if (hitType !== 'jackpot') {
+            isFever = false; feverTriesLeft = 0;
+            feverEndedReason = 'miss';
+          } else {
+            feverTriesLeft--;
+            if (feverTriesLeft <= 0) {
+              isFever = false; feverTriesLeft = 0;
+              feverEndedReason = 'expired';
+            }
+          }
+        }
         if (_isJackpot) {
           if (isReach) {
             isReachJackpot = true;
@@ -1916,7 +1941,7 @@ function update() {
     /* 4文字目の結果が完全に表示されてからリセット */
     const allShown = wheels.every(_predWheelShown);
     /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
-    if (!isGameOver && isMissResult && endTimer > minWait && allShown && onBeatGrid()) {
+    if (!isGameOver && isMissResult && !feverEndedReason && endTimer > minWait && allShown && onBeatGrid()) {
       const fire = pendingShoot; init();
       shootGuard = 0;
       if (fire) { pendingShoot = false; onShoot(); }
@@ -1927,7 +1952,8 @@ function update() {
     if (!isGameOver && endTimer > minWait && allShown) canRestart = true;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
-    if (reachFlash > 0) reachFlash = Math.max(0, reachFlash - 0.045);
+    if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
+    if (feverFlash  > 0) feverFlash  = Math.max(0, feverFlash  - 0.04);
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (_isJackpot && endTimer % 85 === 40) launchFireworks();
     if (_isJackpot)                           updateGyozas();
@@ -3282,12 +3308,22 @@ function draw() {
     ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
+  /* オレンジフラッシュ（フィーバー発動の瞬間） */
+  if (feverFlash > 0) {
+    ctx.save();
+    ctx.globalAlpha = feverFlash * 0.6;
+    ctx.fillStyle = '#ff8800';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
   /* 3. テキスト最前面 */
   if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)) drawEndScreen();
   /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
+  /* フィーバー終了メッセージ（ミス/期限切れ問わず常時描画） */
+  if (feverEndedReason && phase === 'done' && endTimer > 45) drawFeverEndMessage();
   if (phase==='reach')              drawReachText();
 
   /* スタートアップ画面 */
@@ -3297,8 +3333,9 @@ function draw() {
   drawSyncMeter();
   drawSyncJust();
 
-  /* スローハンドバッジ（最前面・上部中央） */
+  /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
   drawSlowHandBadge();
+  drawFeverBadge();
 
   /* 実績バナー・オーバーレイ（最前面） */
   drawAchBanner();
@@ -4454,6 +4491,73 @@ function drawSlowHandBadge() {
   ctx.restore();
 }
 
+/* ── フィーバー終了メッセージ ── */
+function drawFeverEndMessage() {
+  const alpha = Math.min(1, (endTimer - 45) / 35);
+  if (alpha < 0.05) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${IS_PORTRAIT ? 18 : 22}px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const y = H / 2 + (IS_PORTRAIT ? 120 : 130);
+  if (feverEndedReason === 'miss') {
+    outText('フィーバー終了…', W / 2, y, '#ff4444', 'rgba(0,0,0,0.85)', 5);
+  } else {
+    outText('フィーバー終了！  お疲れ様でした', W / 2, y, Y, 'rgba(0,0,0,0.85)', 5);
+  }
+  ctx.restore();
+}
+
+/* ── フィーバーバッジ（スローハンドバッジの下） ── */
+function drawFeverBadge() {
+  if (phase === 'startup') return;
+  if (phase === 'tapestart') return;
+  if (isGameOver) return;
+  if (!isFever) return;
+
+  const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 120);
+  ctx.save();
+  ctx.globalAlpha = pulse;
+
+  const text = '🔥  F E V E R  残り ' + feverTriesLeft + ' 回';
+  const fs   = IS_PORTRAIT ? 13 : 14;
+  ctx.font   = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  const tw   = ctx.measureText(text).width;
+  const padX = 18, padY = 7;
+  const bw   = tw + padX * 2;
+  const bh   = fs + padY * 2;
+  const bx   = (W - bw) / 2;
+  /* スローハンドバッジ(by=8~10, bh≈28)の下に配置 */
+  const slowBh = fs + padY * 2; // スローハンドバッジとほぼ同サイズ
+  const by   = (IS_PORTRAIT ? 10 : 8) + slowBh + 4;
+
+  /* 背景ピル */
+  ctx.beginPath();
+  const r = bh / 2;
+  ctx.moveTo(bx + r, by);
+  ctx.lineTo(bx + bw - r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.lineTo(bx + bw, by + bh - r);
+  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
+  ctx.lineTo(bx + r, by + bh);
+  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
+  ctx.lineTo(bx, by + r);
+  ctx.arcTo(bx, by, bx + r, by, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(80,20,0,0.88)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,160,0,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = '#ffe0a0';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, W / 2, by + bh / 2);
+
+  ctx.restore();
+}
+
 /* ── 実績バナー（右下にフェードイン/アウト） ── */
 function drawAchBanner() {
   if (!achBannerCurrent || achBannerTimer <= 0) return;
@@ -4834,6 +4938,17 @@ function onShoot(_inputAudioTime){
     } else {
       syncJustLabel = ''; syncChain = 0;
     }
+    /* フィーバー発動カウンタ: フィーバー未発動中のみJUST!を加算 */
+    if (!isFever) {
+      if (syncJustLabel === 'JUST!') {
+        feverJustChain++;
+        if (feverJustChain >= 60) {
+          isFever = true; feverTriesLeft = 10; feverJustChain = 0; feverFlash = 1.0;
+        }
+      } else {
+        feverJustChain = 0;
+      }
+    }
   }
   arrowProgress=0;
   if (IS_PORTRAIT) {
@@ -4916,6 +5031,11 @@ document.addEventListener('keydown', e=>{
   if (CHEAT_MAP[e.code] && phase==='idle' && curIdx<4) {
     e.preventDefault();
     cheatShoot(CHEAT_MAP[e.code]);
+  }
+  /* チート: Ctrl+F → フィーバー即時発動 */
+  if (e.code === 'KeyF' && e.ctrlKey) {
+    e.preventDefault();
+    isFever = true; feverTriesLeft = 10; feverJustChain = 0; feverFlash = 1.0;
   }
   /* 隠しコマンド: Ctrl+C → localStorage全消去してリロード */
   if (e.code === 'KeyC' && e.ctrlKey) {
