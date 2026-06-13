@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.17';
+const VERSION = 'v2.18';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3525,12 +3525,9 @@ function drawWheel(i) {
   ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2);
   ctx.fillStyle=w.hubGrd; ctx.fill(); // キャッシュ済みグラジェントを使用
 
-  /* リーチ中: 第4的がまだアクティブでも未ロックでもない間、ポインター三角にパルスグローを追加 */
-  const _reachHL = isReach && i === 3 && curIdx < 3 && !w.locked;
-  const _reachPulse = _reachHL ? Math.min(1, reachTimer / 35) * (0.55 + 0.45 * Math.abs(Math.sin(reachTimer * 0.25))) : 0;
-  if (active || w.locked || _reachHL) {
+  if (active || w.locked) {
     ctx.shadowColor = w.locked ? '#ff4422' : Y;
-    ctx.shadowBlur  = _reachHL ? 12 + _reachPulse * 22 : 18 + bp * 18;
+    ctx.shadowBlur  = 18 + bp * 18;
   }
   /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き) */
   if (IS_PORTRAIT) {
@@ -3538,10 +3535,9 @@ function drawWheel(i) {
   } else {
     ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
   }
-  if (_reachHL) ctx.globalAlpha = 0.5 + 0.5 * _reachPulse;
-  ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : _reachHL ? Y : YD);
+  ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : YD);
   ctx.fill();
-  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  ctx.shadowBlur = 0;
 
   if (w.result) {
     const pop=Math.max(0.01,easeOutBack(Math.min(1,w.resultPop)));
