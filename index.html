@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.40';
+const VERSION = 'v2.41';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -381,6 +381,8 @@ let feverTriesLeft   = 0;
 let feverJustChain   = 0; // 連続JUST!カウンタ（フィーバー未発動時のみ加算）
 
 let feverEndedReason = null; // 'miss' | 'expired' | null
+let feverEndBannerTimer  = 0;    // バナー表示タイマー（フェーズ横断）
+let feverEndBannerReason = null; // バナー用 reason のコピー（表示中は維持）
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
@@ -1545,7 +1547,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
   for (const g of gyozas) g._dead = true; gyozas = [];
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -1562,7 +1564,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
   for (const g of gyozas) g._dead = true; gyozas = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
@@ -1835,11 +1837,13 @@ function update() {
           if (hitType !== 'jackpot') {
             isFever = false; feverTriesLeft = 0;
             feverEndedReason = 'miss';
+            feverEndBannerTimer = 240; feverEndBannerReason = 'miss';
           } else {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
               feverEndedReason = 'expired';
+              feverEndBannerTimer = 240; feverEndBannerReason = 'expired';
             }
           }
         }
@@ -1983,19 +1987,15 @@ function update() {
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
-    /* フィーバー中大当たり: 自動リセット（ギヨウザ落下のみ、入力待ちなし）
-       feverEndedReason がある（最終トライ）場合は終了メッセージ表示のため150f待つ */
-    const _feverAutoWait = feverEndedReason ? 150 : 30;
-    if (_jackpotInFever && !isGameOver && endTimer > _feverAutoWait) {
+    /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
+    if (_jackpotInFever && !isGameOver && endTimer > 30) {
       const fire = pendingShoot; init(); shootGuard = 0;
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
     /* エフェクト終了後: canRestartをセット
-       feverEndedReason がある間は終了メッセージ表示のため90f待つ
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
-    const _canRestartWait = feverEndedReason ? 90 : minWait;
-    if (!isGameOver && !_jackpotInFever && endTimer > _canRestartWait && allShown) canRestart = true;
+    if (!isGameOver && !_jackpotInFever && endTimer > minWait && allShown) canRestart = true;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
@@ -2017,6 +2017,15 @@ function update() {
   /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
   if (gyozas.length > 0 && phase !== 'done') updateGyozas();
 
+  /* フィーバー終了バナータイマー（フェーズ横断・当たりorゲームオーバーでクリア） */
+  if (feverEndBannerTimer > 0) {
+    if (isGameOver || (phase === 'done' && hitType !== 'none' && !isFever)) {
+      feverEndBannerTimer = 0; feverEndBannerReason = null;
+    } else {
+      feverEndBannerTimer--;
+      if (feverEndBannerTimer === 0) feverEndBannerReason = null;
+    }
+  }
   /* 実績バナータイマー（phaseに関係なく常時更新） */
   if (achBannerTimer > 0) {
     achBannerTimer--;
@@ -3371,7 +3380,7 @@ function draw() {
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
   /* フィーバー終了メッセージ（ミス/期限切れ問わず常時描画） */
-  if (feverEndedReason && phase === 'done' && endTimer > 10) drawFeverEndMessage();
+  if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverEndMessage();
   if (phase==='reach')              drawReachText();
 
   /* スタートアップ画面 */
@@ -4541,13 +4550,14 @@ function drawSlowHandBadge() {
 
 /* ── フィーバー終了メッセージ ── */
 function drawFeverEndMessage() {
-  const t = endTimer - 45;
-  if (t < 0) return;
-  /* フェードイン(0→1, 20f) + スケール(0.6→1.0, 20f) */
-  const alpha = Math.min(1, t / 20);
+  /* 実績バナーと同じパターン: フェードイン20f、フェードアウト最後30f */
+  const elapsed = 240 - feverEndBannerTimer; // 0→240
+  const alpha = elapsed < 20  ? elapsed / 20
+              : feverEndBannerTimer < 30 ? feverEndBannerTimer / 30
+              : 1;
   if (alpha < 0.02) return;
-  const scale = 0.6 + 0.4 * Math.min(1, t / 20);
-  const isMiss = feverEndedReason === 'miss';
+  const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
+  const isMiss = feverEndBannerReason === 'miss';
 
   ctx.save();
   ctx.globalAlpha = alpha * 0.55;
