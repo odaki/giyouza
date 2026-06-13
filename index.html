@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.33';
+const VERSION = 'v2.34';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1637,12 +1637,7 @@ function init(fromStartup, fromGameOver) {
   worms      = [];
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
-  /* ギヨウザはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア
-     doneフェーズ中の壁バウンスで vx が内向きになっている場合は 0 にリセットして逆走を防ぐ */
-  for (const g of gyozas) {
-    const outward = g.x < W / 2 ? -1 : 1;
-    if (g.vx * outward < 0) g.vx = 0;
-  }
+  /* ギヨウザはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   for (const g of yoyos) g._dead = true;
@@ -2185,7 +2180,7 @@ function spawnGyoza() {
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
-const WALL_RELEASE = 220;      // この endTimer を超えると左右壁を撤廃して崩落開始
+
 
 /* ────────────────────────────────────────────────────────────
    完全物理シミュレーション:
@@ -2245,24 +2240,6 @@ function updateGyozas() {
             ? 0.005 + t * 0.025               // done: 0.005〜0.030
             : 0.01  + t * 0.12;               // idle等: 0.01〜0.13
           g.vx += (g.x < W / 2 ? -1 : 1) * drift;
-        }
-      }
-      /* 左右壁: doneフェーズかつ崩落開始前のみ有効
-         それ以外(フィーバーidle等)は壁なし → 画面外に流れ出す */
-      if (phase === 'done' && endTimer < WALL_RELEASE) {
-        if (g.x - r < 0)  { g.x = r;     g.vx =  Math.abs(g.vx) * RESTITUTION; }
-        if (g.x + r > W)  { g.x = W - r; g.vx = -Math.abs(g.vx) * RESTITUTION; }
-      }
-    }
-
-    /* 壁開放の瞬間: 上位ギヨウザに横向きの初速を与えて崩落を誘発 */
-    if (endTimer === WALL_RELEASE) {
-      let pileTop = Infinity;
-      for (const g of gyozas) if (g.y < pileTop) pileTop = g.y; // map+spreadを回避してGCゼロ
-      for (const g of gyozas) {
-        if (g.y < pileTop + 80) {
-          g.vx += (Math.random() - 0.5) * 3.5;
-          g.vy -= Math.random() * 0.5;
         }
       }
     }
