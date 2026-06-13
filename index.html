@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.16';
+const VERSION = 'v2.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3526,7 +3526,7 @@ function drawWheel(i) {
   ctx.fillStyle=w.hubGrd; ctx.fill(); // キャッシュ済みグラジェントを使用
 
   /* リーチ中: 第4的がまだアクティブでも未ロックでもない間、ポインター三角にパルスグローを追加 */
-  const _reachHL = isReach && i === 3 && !active && !w.locked;
+  const _reachHL = isReach && i === 3 && curIdx < 3 && !w.locked;
   const _reachPulse = _reachHL ? Math.min(1, reachTimer / 35) * (0.55 + 0.45 * Math.abs(Math.sin(reachTimer * 0.25))) : 0;
   if (active || w.locked || _reachHL) {
     ctx.shadowColor = w.locked ? '#ff4422' : Y;
