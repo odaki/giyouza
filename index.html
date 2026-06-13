@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.11';
+const VERSION = 'v2.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4658,6 +4658,11 @@ function drawStartup() {
 }
 
 /* ════════════════ Loop / Input ════════════════ */
+/* orientationchange → location.reload() 後、iOS が回転操作の touchstart を新ページに
+   引き継いで発火させることがある。そのタッチが STARTUP_BTN に重なると意図せず
+   initGame() が呼ばれるため、ページロード直後 500ms は START を受け付けない。 */
+const _startupGuardUntil = Date.now() + 500;
+
 /* startup フェーズ: lsLoad/lsLoadAch だけ行い、画面は startup のままにする */
 lsCheckSchema(); // スキーマ不一致なら全データクリア（lsLoad/lsLoadAch の前に必ず実行）
 lsLoad();        // bet もここで復元される
@@ -4912,7 +4917,7 @@ canvas.addEventListener('mousedown', e=>{
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
     if (showAchievements) { showAchievements = false; return; }
-    if (hitTest(STARTUP_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); initGame(); return; }
+    if (hitTest(STARTUP_BTN, cx, cy) && Date.now() >= _startupGuardUntil) { if (!audioCtx) getAudioCtx(); initGame(); return; }
     return;
   }
   if (hitTest(PAUSE_BTN, cx, cy)) { togglePause(); return; }
@@ -4956,7 +4961,7 @@ document.addEventListener('touchstart', e=>{
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
     if (showAchievements) { showAchievements = false; return; }
-    if (hitTest(STARTUP_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); initGame(); return; }
+    if (hitTest(STARTUP_BTN, pt.x, pt.y) && Date.now() >= _startupGuardUntil) { if (!audioCtx) getAudioCtx(); initGame(); return; }
     return;
   }
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
