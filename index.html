@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.36';
+const VERSION = 'v2.37';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4538,18 +4538,66 @@ function drawSlowHandBadge() {
 
 /* ── フィーバー終了メッセージ ── */
 function drawFeverEndMessage() {
-  const alpha = Math.min(1, (endTimer - 45) / 35);
-  if (alpha < 0.05) return;
+  const t = endTimer - 45;
+  if (t < 0) return;
+  /* フェードイン(0→1, 20f) + スケール(0.6→1.0, 20f) */
+  const alpha = Math.min(1, t / 20);
+  if (alpha < 0.02) return;
+  const scale = 0.6 + 0.4 * Math.min(1, t / 20);
+  const isMiss = feverEndedReason === 'miss';
+
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+
+  const cx = W / 2, cy = H / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.font = `bold ${IS_PORTRAIT ? 18 : 22}px 'Hiragino Mincho ProN',serif`;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  /* バナー背景 */
+  const fs1 = IS_PORTRAIT ? 32 : 42;
+  const fs2 = IS_PORTRAIT ? 15 : 18;
+  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
+  const bw  = W * 0.88;
+  const br  = bh / 2;
+  ctx.beginPath();
+  ctx.moveTo(-bw/2 + br, -bh/2);
+  ctx.arcTo( bw/2, -bh/2,  bw/2, bh/2, br);
+  ctx.arcTo( bw/2,  bh/2, -bw/2+br, bh/2, br);
+  ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, br);
+  ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, br);
+  ctx.closePath();
+  ctx.fillStyle   = isMiss ? 'rgba(60,0,0,0.92)' : 'rgba(20,30,60,0.92)';
+  ctx.fill();
+  ctx.strokeStyle = isMiss ? '#ff6060' : '#ffe080';
+  ctx.lineWidth   = IS_PORTRAIT ? 2 : 3;
+  ctx.stroke();
+
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const y = H / 2 + (IS_PORTRAIT ? 120 : 130);
-  if (feverEndedReason === 'miss') {
-    outText('フィーバー終了…', W / 2, y, '#ff4444', 'rgba(0,0,0,0.85)', 5);
-  } else {
-    outText('フィーバー終了！  お疲れ様でした', W / 2, y, Y, 'rgba(0,0,0,0.85)', 5);
+
+  /* 1行目: 大文字 */
+  const line1 = isMiss ? 'FEVER OVER…' : 'FEVER COMPLETE!';
+  const col1  = isMiss ? '#ff7070' : '#ffe870';
+  ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
+  /* 影 */
+  for (const [ox,oy] of [[-2,-2],[2,-2],[-2,2],[2,2]]) {
+    ctx.fillStyle = isMiss ? 'rgba(120,0,0,0.8)' : 'rgba(0,0,80,0.8)';
+    ctx.fillText(line1, ox, -bh/2 + fs1/2 + (IS_PORTRAIT?14:18) + oy);
   }
+  ctx.fillStyle = col1;
+  ctx.fillText(line1, 0, -bh/2 + fs1/2 + (IS_PORTRAIT ? 14 : 18));
+
+  /* 2行目: サブテキスト */
+  const line2 = isMiss ? 'ミスでフィーバー終了' : '全トライ消化！お疲れ様でした';
+  ctx.font = `bold ${fs2}px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = isMiss ? '#ffaaaa' : '#ffffc8';
+  ctx.fillText(line2, 0, bh/2 - fs2/2 - (IS_PORTRAIT ? 12 : 16));
+
   ctx.restore();
 }
 
