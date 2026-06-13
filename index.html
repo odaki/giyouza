@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.25';
+const VERSION = 'v2.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1829,7 +1829,7 @@ function update() {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
           if (_jackpotInFever) {
-            initGyozas(70, true); // 既存ギヨウザを保持しつつ追加（上限200）
+            initGyozas(30, true); // 既存ギヨウザを保持しつつ追加（上限200）
             playSE('jackpot');
           } else if (isReach) {
             isReachJackpot = true;
@@ -2219,13 +2219,17 @@ function updateGyozas() {
         /* 地面摩擦で回転を減衰 */
         g.rotSpd *= 0.78;
         if (Math.abs(g.rotSpd) < 0.003) g.rotSpd = 0;
-        /* 着地後: 近い方の壁へ僅かに流れる */
+        /* 着地後: 近い方の壁へ流れる
+           doneフェーズ: 緩やか（山積み演出）
+           それ以外(フィーバー継続idle等): 強め（速やかに画面外へ） */
         if (g.vy === 0) {
-          g.vx += (g.x < W / 2 ? -1 : 1) * 0.012;
+          const drift = phase === 'done' ? 0.012 : 0.08;
+          g.vx += (g.x < W / 2 ? -1 : 1) * drift;
         }
       }
-      /* 左右壁: 崩落開始前のみ有効 */
-      if (endTimer < WALL_RELEASE) {
+      /* 左右壁: doneフェーズかつ崩落開始前のみ有効
+         それ以外(フィーバーidle等)は壁なし → 画面外に流れ出す */
+      if (phase === 'done' && endTimer < WALL_RELEASE) {
         if (g.x - r < 0)  { g.x = r;     g.vx =  Math.abs(g.vx) * RESTITUTION; }
         if (g.x + r > W)  { g.x = W - r; g.vx = -Math.abs(g.vx) * RESTITUTION; }
       }
