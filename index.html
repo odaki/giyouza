@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.26';
+const VERSION = 'v2.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -383,6 +383,7 @@ let feverFlash       = 0; // フィーバー発動時のオレンジフラッシ
 let feverEndedReason = null; // 'miss' | 'expired' | null
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
+let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
 
 /* ── ギヨウザコイン ── */
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
@@ -1534,7 +1535,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1550,7 +1551,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null;
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1580,7 +1581,12 @@ function init(fromStartup, fromGameOver) {
   const prevSlowSpin = isSlowSpin;
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
   const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
-  isSlowSpin = Math.random() < slowProb;
+  if (_slowSpinPending !== null) {
+    isSlowSpin = _slowSpinPending; // Ctrl+Tチートによる次トライ強制
+    _slowSpinPending = null;
+  } else {
+    isSlowSpin = Math.random() < slowProb;
+  }
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
     isFever = true; feverTriesLeft = 10; feverPending = false; feverFlash = 1.0;
@@ -5075,10 +5081,10 @@ document.addEventListener('keydown', e=>{
     e.preventDefault();
     cheatShoot(CHEAT_MAP[e.code]);
   }
-  /* チート: Ctrl+F → フィーバー即時発動 */
+  /* チート: Ctrl+F → 次トライでフィーバー発動 */
   if (e.code === 'KeyF' && e.ctrlKey) {
     e.preventDefault();
-    isFever = true; feverTriesLeft = 10; feverJustChain = 0; feverFlash = 1.0;
+    feverPending = true; feverJustChain = 0;
   }
   /* 隠しコマンド: Ctrl+C → localStorage全消去してリロード */
   if (e.code === 'KeyC' && e.ctrlKey) {
@@ -5086,22 +5092,12 @@ document.addEventListener('keydown', e=>{
     try { localStorage.clear(); } catch(err) {}
     location.reload();
   }
-  /* デバッグ: Ctrl+T → スローイベント強制トグル */
+  /* デバッグ: Ctrl+T → 次トライでスローハンドをトグル */
   if (e.code === 'KeyT' && e.ctrlKey) {
     e.preventDefault();
-    const prev = isSlowSpin;
-    isSlowSpin = !isSlowSpin;
-    if (isSlowSpin && !prev) {
-      rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // Ctrl+T: BET対応速度、ランプ中は入力ブロック
-      slowHandLockFrames = 60; // 約1秒の入力ロック
-      slowHandPopTimer   = 25; // バッジポップアニメーション開始
-      playSE('slow_hand');     // 発動SE
-    } else if (!isSlowSpin && prev) {
-      rampBGMRate(1.0, 1200, 'easeIn',  true); // Ctrl+T: ランプ中は入力ブロック
-    }
-    /* ホイール速度も即時反映（BET対応レートで倍率計算） */
-    const _rate = _slowHandRate(bet);
-    for (const w of wheels) w.speed *= isSlowSpin ? _rate : (1 / _rate);
+    /* 現在のpending状態をトグル（2回押しでキャンセル） */
+    const current = _slowSpinPending !== null ? _slowSpinPending : isSlowSpin;
+    _slowSpinPending = !current;
   }
 });
 
