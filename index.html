@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.42';
+const VERSION = 'v2.43';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1991,7 +1991,9 @@ function update() {
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
     if (_jackpotInFever && !isGameOver && endTimer > 30) {
+      const _savedBannerReason = feverEndBannerReason; // init()でクリアされる前に退避
       const fire = pendingShoot; init(); shootGuard = 0;
+      if (_savedBannerReason) { feverEndBannerTimer = 240; feverEndBannerReason = _savedBannerReason; }
       if (fire) { pendingShoot = false; onShoot(); }
       return;
     }
