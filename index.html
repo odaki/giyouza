@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.21';
+const VERSION = 'v2.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -381,6 +381,7 @@ let feverTriesLeft   = 0;
 let feverJustChain   = 0; // 連続JUST!カウンタ（フィーバー未発動時のみ加算）
 let feverFlash       = 0; // フィーバー発動時のオレンジフラッシュ
 let feverEndedReason = null; // 'miss' | 'expired' | null
+let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 
 /* ── ギヨウザコイン ── */
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
@@ -1532,7 +1533,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1548,7 +1549,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false;
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1576,6 +1577,10 @@ function init(fromStartup, fromGameOver) {
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
   const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
   isSlowSpin = Math.random() < slowProb;
+  /* ペンディング中かつスローハンドでなければフィーバーを起動 */
+  if (feverPending && !isSlowSpin) {
+    isFever = true; feverTriesLeft = 10; feverPending = false; feverFlash = 1.0;
+  }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
   phase      = 'idle';
@@ -4938,12 +4943,12 @@ function onShoot(_inputAudioTime){
     } else {
       syncJustLabel = ''; syncChain = 0;
     }
-    /* フィーバー発動カウンタ: フィーバー未発動中のみJUST!を加算 */
-    if (!isFever) {
+    /* フィーバー発動カウンタ: フィーバー未発動・未ペンディング・スローハンドなし時のみJUST!を加算 */
+    if (!isFever && !feverPending && !isSlowSpin) {
       if (syncJustLabel === 'JUST!') {
         feverJustChain++;
         if (feverJustChain >= 60) {
-          isFever = true; feverTriesLeft = 10; feverJustChain = 0; feverFlash = 1.0;
+          feverPending = true; feverJustChain = 0; // 次トライ開始時に発動
         }
       } else {
         feverJustChain = 0;
