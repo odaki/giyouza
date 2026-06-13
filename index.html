@@ -82,7 +82,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.12';
+const VERSION = 'v2.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1368,6 +1368,7 @@ const CLOUDS = IS_PORTRAIT ? [
 let jingleScheduler = null;
 let jingleStep = 0;
 let jingleNextTime = 0;
+let _jinglePendingStart = false; // iOS: resume()のPromise未解決でジングル開始が保留中
 
 const JINGLE_BPM    = BGM_BPM;             // BGMと同じ152BPM
 const JINGLE_BEAT   = 60 / JINGLE_BPM;     // ~0.395s
@@ -1453,6 +1454,7 @@ function scheduleJingle(onEnd) {
 
 function stopJingle() {
   if (jingleScheduler) { clearInterval(jingleScheduler); jingleScheduler = null; }
+  _jinglePendingStart = false;
 }
 
 function playStartJingle(onEnd) {
@@ -1488,6 +1490,7 @@ function initGame() {
 }
 
 function gameOverReset() {
+  _jinglePendingStart = false;
   coins      = 60;
   coinsDisp  = 0; _lastCoinsDispCached = -1; // tapestart中は0固定、idle移行後に0→60アニメーション
   bet        = 1;
@@ -1512,7 +1515,16 @@ function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音）
        AudioContext がここで初めて生成された場合に備え、gain を正しい値に設定してから起動する */
-    ensureAudioRunning(() => { applyMuteGain(); playStartJingle(() => startBGM()); });
+    _jinglePendingStart = true;
+    ensureAudioRunning(() => {
+      applyMuteGain();
+      if (audioCtx && audioCtx.state === 'running') {
+        _jinglePendingStart = false;
+        playStartJingle(() => startBGM());
+      }
+      /* state が running でない場合は _jinglePendingStart を true のままにして
+         次の touchstart で再試行する（iOS: resume() Promise が次のジェスチャーまで解決しない問題） */
+    });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
@@ -4951,8 +4963,22 @@ document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
   /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
-     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ。
+     _jinglePendingStart が true の場合: resume() のPromiseが次のジェスチャーまで解決しなかった
+     ケース（orientation change後など）。resume完了後またはすでに running ならジングルを再試行。 */
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => {
+      if (_jinglePendingStart) {
+        _jinglePendingStart = false;
+        applyMuteGain();
+        playStartJingle(() => startBGM());
+      }
+    }).catch(() => {});
+  } else if (_jinglePendingStart && audioCtx && audioCtx.state === 'running') {
+    _jinglePendingStart = false;
+    applyMuteGain();
+    playStartJingle(() => startBGM());
+  }
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
