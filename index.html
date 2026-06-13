@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.30';
+const VERSION = 'v2.31';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1539,6 +1539,7 @@ function initGame() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  for (const g of gyozas) g._dead = true; gyozas = [];
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1555,6 +1556,7 @@ function gameOverReset() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
   feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  for (const g of gyozas) g._dead = true; gyozas = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1565,9 +1567,6 @@ function gameOverReset() {
 }
 
 function init(fromStartup, fromGameOver) {
-  /* フィーバー継続中の大当たりからの遷移ならギヨウザを保持する。
-     _jackpotInFever / isFever は以降のリセットで書き換わるため先に評価する。 */
-  const _keepGyozas = _jackpotInFever && isFever;
   if (fromStartup) {
     /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音）
        resume() の Promise 解決を待たず同期的に開始する。iOS では resume() Promise が
@@ -1638,7 +1637,7 @@ function init(fromStartup, fromGameOver) {
   worms      = [];
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
-  if (!_keepGyozas) { for (const g of gyozas) g._dead = true; gyozas = []; }
+  /* ギヨウザはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
   for (const g of yoyos) g._dead = true;
@@ -1847,12 +1846,12 @@ function update() {
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
-            initGyozas(100);
+            initGyozas(100, true);
             unlockAch('reach_jackpot');
             playSE('reach_jackpot');
           } else {
             launchFireworks();
-            initGyozas(70);
+            initGyozas(70, true);
             playSE('jackpot');
           }
           unlockAch('first_jackpot');
