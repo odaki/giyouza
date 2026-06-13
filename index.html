@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.50';
+const VERSION = 'v2.51';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5047,13 +5047,8 @@ function onShoot(_inputAudioTime){
     }
     /* フィーバー発動カウンタ: フィーバー未発動・未ペンディング・スローハンドなし時のみJUST!を加算 */
     if (!isFever && !feverPending && !isSlowSpin) {
-      if (syncJustLabel === 'JUST!') {
-        feverJustChain++;
-        if (feverJustChain >= 60) {
-          feverPending = true; feverJustChain = 0; // 次トライ開始時に発動
-        }
-      } else {
-        feverJustChain = 0;
+      if (syncChain >= 256) {
+        feverPending = true; feverJustChain = 0; // 次トライ開始時に発動
       }
     }
   }
