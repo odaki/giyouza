@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.28';
+const VERSION = 'v2.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -379,7 +379,7 @@ let reachFlash = 0; // 白フラッシュ用タイマー
 let isFever          = false;
 let feverTriesLeft   = 0;
 let feverJustChain   = 0; // 連続JUST!カウンタ（フィーバー未発動時のみ加算）
-let feverFlash       = 0; // フィーバー発動時のオレンジフラッシュ
+
 let feverEndedReason = null; // 'miss' | 'expired' | null
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
@@ -1538,7 +1538,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
 
@@ -1554,7 +1554,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverFlash = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  feverJustChain = 0; isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1592,7 +1592,7 @@ function init(fromStartup, fromGameOver) {
   }
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
-    isFever = true; feverTriesLeft = 10; feverPending = false; feverFlash = 1.0;
+    isFever = true; feverTriesLeft = 10; feverPending = false;
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
@@ -1987,7 +1987,7 @@ function update() {
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
-    if (feverFlash  > 0) feverFlash  = Math.max(0, feverFlash  - 0.04);
+
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (_isJackpot && endTimer % 85 === 40) launchFireworks();
     if (_isJackpot)                           updateGyozas();
@@ -3356,14 +3356,7 @@ function draw() {
     ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
-  /* オレンジフラッシュ（フィーバー発動の瞬間） */
-  if (feverFlash > 0) {
-    ctx.save();
-    ctx.globalAlpha = feverFlash * 0.6;
-    ctx.fillStyle = '#ff8800';
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
+
 
   /* 3. テキスト最前面 */
   if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotInFever) drawEndScreen();
