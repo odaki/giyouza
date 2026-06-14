@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.68';
+const VERSION = 'v2.69';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3604,6 +3604,19 @@ function draw() {
       ctx.fillRect(-6, -8, 4, 16);
       ctx.fillRect( 2, -8, 4, 16);
     }
+    ctx.restore();
+  }
+
+  /* ── フィーバー内枠エフェクト: HSL色サイクル＋呼吸パルス ── */
+  if (isFever && phase !== 'startup') {
+    const t   = performance.now();
+    const hue = (t / 20) % 360;                        // 色相サイクル（約7秒で一周）
+    const pulse = 0.7 + 0.3 * Math.sin(t / 260);     // 呼吸（約1.6秒周期、min0.4〜max1.0）
+    const lw  = IS_PORTRAIT ? 5 : 7;
+    ctx.save();
+    ctx.strokeStyle = `hsla(${hue}, 100%, 62%, ${pulse})`;
+    ctx.lineWidth   = lw;
+    ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
     ctx.restore();
   }
 
