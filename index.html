@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.56';
+const VERSION = 'v2.57';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -382,6 +382,7 @@ let feverTriesLeft   = 0;
 let feverEndedReason = null; // 'miss' | 'expired' | null
 let feverEndBannerTimer  = 0;    // バナー表示タイマー（フェーズ横断）
 let feverEndBannerReason = null; // バナー用 reason のコピー（表示中は維持）
+let feverStartBannerTimer = 0;   // フィーバー開始バナータイマー
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
 let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
@@ -1546,7 +1547,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
+  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
   for (const g of gyozas) g._dead = true; gyozas = [];
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -1563,7 +1564,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null;
+  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
   for (const g of gyozas) g._dead = true; gyozas = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
@@ -1602,6 +1603,7 @@ function init(fromStartup, fromGameOver) {
     isFever = true; feverTriesLeft = 20; feverPending = false;
     syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
     if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
+    feverStartBannerTimer = 180; // フィーバー開始バナー表示
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
@@ -1841,12 +1843,14 @@ function update() {
             isFever = false; feverTriesLeft = 0;
             feverEndedReason = 'miss';
             feverEndBannerTimer = 180; feverEndBannerReason = 'miss';
+            feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
           } else {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
               feverEndedReason = 'expired';
               feverEndBannerTimer = 180; feverEndBannerReason = 'expired';
+              feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
             }
           }
         }
@@ -2020,10 +2024,18 @@ function update() {
   /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
   if (gyozas.length > 0 && phase !== 'done') updateGyozas();
 
+  /* フィーバー開始バナータイマー */
+  if (feverStartBannerTimer > 0) {
+    if (isGameOver) {
+      feverStartBannerTimer = 0;
+    } else {
+      feverStartBannerTimer--;
+    }
+  }
   /* フィーバー終了バナータイマー（フェーズ横断・当たりorゲームオーバーでクリア） */
   if (feverEndBannerTimer > 0) {
     if (isGameOver) {
-      feverEndBannerTimer = 0; feverEndBannerReason = null;
+      feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
     } else {
       feverEndBannerTimer--;
       if (feverEndBannerTimer === 0) feverEndBannerReason = null;
@@ -3388,6 +3400,7 @@ function draw() {
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
   /* フィーバー終了メッセージ（ミス/期限切れ問わず常時描画） */
+  if (feverStartBannerTimer > 0) drawFeverStartMessage();
   if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverEndMessage();
   if (phase==='reach')              drawReachText();
 
@@ -4552,6 +4565,61 @@ function drawSlowHandBadge() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, W / 2, by + bh / 2);
+
+  ctx.restore();
+}
+
+/* ── フィーバー開始メッセージ ── */
+function drawFeverStartMessage() {
+  const elapsed = 180 - feverStartBannerTimer; // 0→180
+  const alpha = elapsed < 20  ? elapsed / 20
+              : feverStartBannerTimer < 30 ? feverStartBannerTimer / 30
+              : 1;
+  if (alpha < 0.02) return;
+  const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
+
+  const cx = W / 2, cy = H / 2;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  /* バナー背景 */
+  const fs1 = IS_PORTRAIT ? 32 : 42;
+  const fs2 = IS_PORTRAIT ? 15 : 18;
+  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
+  const bw  = W * 0.88;
+  const br  = bh / 2;
+  ctx.beginPath();
+  ctx.moveTo(-bw/2 + br, -bh/2);
+  ctx.arcTo( bw/2, -bh/2,  bw/2, bh/2, br);
+  ctx.arcTo( bw/2,  bh/2, -bw/2+br, bh/2, br);
+  ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, br);
+  ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, br);
+  ctx.closePath();
+  ctx.fillStyle   = 'rgba(60,40,0,0.92)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth   = IS_PORTRAIT ? 2 : 3;
+  ctx.stroke();
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+  /* 1行目: 大文字 */
+  const fs1px = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = fs1px;
+  ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
+  ctx.fillText('FEVER START!', 2, -fs2 / 2 - 4 + 2);
+  ctx.fillStyle = '#ffdd00';
+  ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 10;
+  ctx.fillText('FEVER START!', 0, -fs2 / 2 - 4);
+
+  /* 2行目: サブテキスト */
+  const fs2px = `${fs2}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = fs2px;
+  ctx.shadowColor = 'transparent';
+  ctx.fillStyle = '#fff8d0';
+  ctx.fillText('大当たりを狙え！', 0, fs1 / 2 + 4);
 
   ctx.restore();
 }
