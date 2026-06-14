@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.60';
+const VERSION = 'v2.61';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -379,7 +379,7 @@ let reachFlash = 0; // 白フラッシュ用タイマー
 let isFever          = false;
 let feverTriesLeft   = 0;
 
-let feverEndedReason = null; // 'miss' | 'expired' | null
+let feverEndedReason = null; // 'miss' | 'complete' | null
 let feverEndBannerTimer  = 0;    // バナー表示タイマー（フェーズ横断）
 let feverEndBannerReason = null; // バナー用 reason のコピー（表示中は維持）
 let feverStartBannerTimer = 0;   // フィーバー開始バナータイマー
@@ -1700,7 +1700,8 @@ function changeBet(dir) {
 function calcPayout() {
   if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot;
   const entry = HIT_TABLE.find(h => h.type === hitType);
-  return entry ? bet * PAYOUT_RATE[entry.payout] : 0;
+  const base = entry ? bet * PAYOUT_RATE[entry.payout] : 0;
+  return feverEndedReason === 'complete' ? base * 2 : base;
 }
 
 function createWheel(x, y, feverChar) {
@@ -1848,8 +1849,8 @@ function update() {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
-              feverEndedReason = 'expired';
-              feverEndBannerTimer = 180; feverEndBannerReason = 'expired';
+              feverEndedReason = 'complete';
+              feverEndBannerTimer = 180; feverEndBannerReason = 'complete';
               feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
             }
           }
@@ -1859,9 +1860,11 @@ function update() {
         if (gyozas.length > 0 && hitType !== 'none' && !_jackpotInFever) flushGyozas();
         if (_isJackpot) {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
-          if (isFever || feverEndedReason === 'expired') _jackpotInFever = true;
+          if (isFever || feverEndedReason === 'complete') _jackpotInFever = true;
           if (_jackpotInFever) {
-            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot), true); // 既存ギヨウザを保持しつつ追加（上限200）
+            const _isComplete = feverEndedReason === 'complete';
+            /* フル連チャン達成時: ギヨウザ倍増（上限300）・配当は calcPayout で×2 */
+            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
             playSE('jackpot');
           } else if (isReach) {
             isReachJackpot = true;
@@ -2200,13 +2203,13 @@ function flushGyozas() {
 
 /* addOnly=true のとき既存ギヨウザを保持して追加（フィーバー連続大当たり用）。
    上限200を超えないようキャップする。 */
-function initGyozas(burst = 70, addOnly = false) {
+function initGyozas(burst = 70, addOnly = false, max = 200) {
   if (!addOnly) {
     for (const g of gyozas) g._dead = true; // 既存をプールに返却
     gyozas = [];
   }
   /* 最初に中央からどさっとまとめて投下 */
-  const FEVER_MAX = 200;
+  const FEVER_MAX = max;
   const toAdd = addOnly ? Math.min(burst, FEVER_MAX - gyozas.length) : burst;
   for (let i = 0; i < toAdd; i++) {
     const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
