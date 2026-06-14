@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.69';
+const VERSION = 'v2.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1386,7 +1386,8 @@ function lsLoad() {
     coins = 60; bestCoins = 60;
   }
 }
-const REACH_DECEL_FRAMES = 180; // この間スピードを減衰させる
+const REACH_DECEL_FRAMES   = 180; // この間スピードを減衰させる
+const FEVER_BANNER_FRAMES  = 180; // フィーバーバナー表示総フレーム数（フェードイン20f＋本体＋フェードアウト30f）
 const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
 let worms = [], uzaTexts = [], gyozas = [];
@@ -1531,6 +1532,23 @@ function playStartJingle(onEnd) {
 }
 
 /* ════════════════ Init ════════════════ */
+
+/* トライ自動リセット共通処理（ハズレ自動送り・フィーバー大当たり自動送り・クリック即時送りで使用）
+   inputAudioTime: undefined のときは onShoot が currentTime で代替 */
+function _doAutoReset(inputAudioTime) {
+  const fire = pendingShoot;
+  init();
+  shootGuard = 0;
+  if (fire) { pendingShoot = false; onShoot(inputAudioTime); }
+}
+
+/* フィーバー関連状態を一括リセット（initGame / gameOverReset 共通） */
+function _resetFeverState() {
+  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false;
+  _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+}
+
 /* ゲーム全体リセット（コイン初期化込み） */
 function initGame() {
   lsLoad();      // 保存済みコイン・betを復元（audioMutedもここで確定する）
@@ -1544,7 +1562,7 @@ function initGame() {
   grayRateCur = 1.0; grayRateTarget = 1.0; // グレースケール初期化
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
-  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+  _resetFeverState();
   for (const g of gyozas) g._dead = true; gyozas = [];
   init(true); // true = スタートアップからの起動（ジングル再生）
 }
@@ -1561,7 +1579,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
-  isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false; _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null; feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+  _resetFeverState();
   for (const g of gyozas) g._dead = true; gyozas = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
@@ -1600,7 +1618,7 @@ function init(fromStartup, fromGameOver) {
     isFever = true; feverTriesLeft = 10; feverPending = false;
     syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
     if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
-    feverStartBannerTimer = 180; // フィーバー開始バナー表示
+    feverStartBannerTimer = FEVER_BANNER_FRAMES;
     unlockAch('first_fever');
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
@@ -1841,14 +1859,14 @@ function update() {
           if (hitType !== 'jackpot') {
             isFever = false; feverTriesLeft = 0;
             feverEndedReason = 'miss';
-            feverEndBannerTimer = 180; feverEndBannerReason = 'miss';
+            feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'miss';
             feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
           } else {
             feverTriesLeft--;
             if (feverTriesLeft <= 0) {
               isFever = false; feverTriesLeft = 0;
               feverEndedReason = 'complete';
-              feverEndBannerTimer = 180; feverEndBannerReason = 'complete';
+              feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'complete';
               feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
               unlockAch('fever_complete');
             }
@@ -1990,16 +2008,11 @@ function update() {
     const allShown = wheels.every(_predWheelShown);
     /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
     if (!isGameOver && isMissResult && !feverEndedReason && endTimer > minWait && allShown && onBeatGrid()) {
-      const fire = pendingShoot; init();
-      shootGuard = 0;
-      if (fire) { pendingShoot = false; onShoot(); }
-      return;
+      _doAutoReset(); return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
     if (_jackpotInFever && !isGameOver && endTimer > 30) {
-      const fire = pendingShoot; init(); shootGuard = 0;
-      if (fire) { pendingShoot = false; onShoot(); }
-      return;
+      _doAutoReset(); return;
     }
     /* エフェクト終了後: canRestartをセット
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
@@ -3400,9 +3413,9 @@ function draw() {
   /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
-  /* フィーバー終了メッセージ（ミス/期限切れ問わず常時描画） */
-  if (feverStartBannerTimer > 0) drawFeverStartMessage();
-  if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverEndMessage();
+  /* フィーバーバナー（開始/終了とも drawFeverBanner で統合） */
+  if (feverStartBannerTimer > 0) drawFeverBanner(feverStartBannerTimer, null);
+  if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverBanner(feverEndBannerTimer, feverEndBannerReason);
   if (phase==='reach')              drawReachText();
 
   /* スタートアップ画面 */
@@ -4584,117 +4597,79 @@ function drawSlowHandBadge() {
   ctx.restore();
 }
 
-/* ── フィーバー開始メッセージ ── */
-function drawFeverStartMessage() {
-  const elapsed = 180 - feverStartBannerTimer; // 0→180
-  const alpha = elapsed < 20  ? elapsed / 20
-              : feverStartBannerTimer < 30 ? feverStartBannerTimer / 30
+/* ── フィーバーバナー共通描画
+   reason: null='start'（開始）/ 'miss'（FEVER OVER）/ 'complete'（FEVER COMPLETE）
+   フェードイン20f、フェードアウト最後30f（総時間 FEVER_BANNER_FRAMES 基準） */
+function drawFeverBanner(timer, reason) {
+  const elapsed = FEVER_BANNER_FRAMES - timer; // 0 → FEVER_BANNER_FRAMES
+  const alpha = elapsed < 20 ? elapsed / 20
+              : timer   < 30 ? timer   / 30
               : 1;
   if (alpha < 0.02) return;
-  const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
+  const scale   = 0.6 + 0.4 * Math.min(1, elapsed / 20);
+  const isStart = reason === null;
+  const isMiss  = reason === 'miss';
 
-  const cx = W / 2, cy = H / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
+  ctx.translate(W / 2, H / 2);
   ctx.scale(scale, scale);
 
-  /* バナー背景 */
+  /* バナー寸法 */
   const fs1 = IS_PORTRAIT ? 32 : 42;
   const fs2 = IS_PORTRAIT ? 15 : 18;
   const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
   const bw  = W * 0.88;
   const br  = bh / 2;
+
+  /* バナー背景（角丸矩形） */
   ctx.beginPath();
   ctx.moveTo(-bw/2 + br, -bh/2);
-  ctx.arcTo( bw/2, -bh/2,  bw/2, bh/2, br);
-  ctx.arcTo( bw/2,  bh/2, -bw/2+br, bh/2, br);
+  ctx.arcTo( bw/2, -bh/2,  bw/2,  bh/2, br);
+  ctx.arcTo( bw/2,  bh/2, -bw/2 + br, bh/2, br);
   ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, br);
   ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, br);
   ctx.closePath();
-  ctx.fillStyle   = 'rgba(60,40,0,0.92)';
+  ctx.fillStyle   = isStart ? 'rgba(60,40,0,0.92)' : isMiss ? 'rgba(60,0,0,0.92)' : 'rgba(20,30,60,0.92)';
   ctx.fill();
-  ctx.strokeStyle = '#ffcc00';
+  ctx.strokeStyle = isStart ? '#ffcc00' : isMiss ? '#ff6060' : '#ffe080';
   ctx.lineWidth   = IS_PORTRAIT ? 2 : 3;
   ctx.stroke();
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
-  /* 1行目: 大文字 */
-  const fs1px = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
-  ctx.font = fs1px;
-  ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
-  ctx.fillText('FEVER START!', 2, -fs2 / 2 - 4 + 2);
-  ctx.fillStyle = '#ffdd00';
-  ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 10;
-  ctx.fillText('FEVER START!', 0, -fs2 / 2 - 4);
+  if (isStart) {
+    /* FEVER START: ドロップシャドウ＋ゴールド文字 */
+    ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
+    ctx.fillText('FEVER START!', 2, -fs2 / 2 - 4 + 2);
+    ctx.fillStyle = '#ffdd00'; ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 10;
+    ctx.fillText('FEVER START!', 0, -fs2 / 2 - 4);
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+    ctx.font = `${fs2}px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = '#fff8d0';
+    ctx.fillText('連チャンスタート！！', 0, fs1 / 2 + 4);
+  } else {
+    /* FEVER OVER / FEVER COMPLETE: 4隅アウトライン＋カラー文字 */
+    const line1  = isMiss ? 'FEVER OVER…'     : 'FEVER COMPLETE!';
+    const col1   = isMiss ? '#ff7070'          : '#ffe870';
+    const shade1 = isMiss ? 'rgba(120,0,0,0.8)' : 'rgba(0,0,80,0.8)';
+    const line1y = -bh / 2 + fs1 / 2 + (IS_PORTRAIT ? 14 : 18);
+    ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+    ctx.shadowColor = 'transparent';
+    for (const [ox, oy] of [[-2,-2],[2,-2],[-2,2],[2,2]]) {
+      ctx.fillStyle = shade1;
+      ctx.fillText(line1, ox, line1y + oy);
+    }
+    ctx.fillStyle = col1;
+    ctx.fillText(line1, 0, line1y);
 
-  /* 2行目: サブテキスト */
-  const fs2px = `${fs2}px 'Hiragino Mincho ProN',serif`;
-  ctx.font = fs2px;
-  ctx.shadowColor = 'transparent';
-  ctx.fillStyle = '#fff8d0';
-  ctx.fillText('連チャンスタート！！', 0, fs1 / 2 + 4);
-
-  ctx.restore();
-}
-
-/* ── フィーバー終了メッセージ ── */
-function drawFeverEndMessage() {
-  /* フェードイン20f、フェードアウト最後30f（総時間180f基準） */
-  const elapsed = 180 - feverEndBannerTimer; // 0→180
-  const alpha = elapsed < 20  ? elapsed / 20
-              : feverEndBannerTimer < 30 ? feverEndBannerTimer / 30
-              : 1;
-  if (alpha < 0.02) return;
-  const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
-  const isMiss = feverEndBannerReason === 'miss';
-
-  const cx = W / 2, cy = H / 2;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
-  ctx.scale(scale, scale);
-
-  /* バナー背景 */
-  const fs1 = IS_PORTRAIT ? 32 : 42;
-  const fs2 = IS_PORTRAIT ? 15 : 18;
-  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
-  const bw  = W * 0.88;
-  const br  = bh / 2;
-  ctx.beginPath();
-  ctx.moveTo(-bw/2 + br, -bh/2);
-  ctx.arcTo( bw/2, -bh/2,  bw/2, bh/2, br);
-  ctx.arcTo( bw/2,  bh/2, -bw/2+br, bh/2, br);
-  ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, br);
-  ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, br);
-  ctx.closePath();
-  ctx.fillStyle   = isMiss ? 'rgba(60,0,0,0.92)' : 'rgba(20,30,60,0.92)';
-  ctx.fill();
-  ctx.strokeStyle = isMiss ? '#ff6060' : '#ffe080';
-  ctx.lineWidth   = IS_PORTRAIT ? 2 : 3;
-  ctx.stroke();
-
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-
-  /* 1行目: 大文字 */
-  const line1 = isMiss ? 'FEVER OVER…' : 'FEVER COMPLETE!';
-  const col1  = isMiss ? '#ff7070' : '#ffe870';
-  ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
-  /* 影 */
-  for (const [ox,oy] of [[-2,-2],[2,-2],[-2,2],[2,2]]) {
-    ctx.fillStyle = isMiss ? 'rgba(120,0,0,0.8)' : 'rgba(0,0,80,0.8)';
-    ctx.fillText(line1, ox, -bh/2 + fs1/2 + (IS_PORTRAIT?14:18) + oy);
+    const line2  = isMiss ? 'ミスでフィーバー終了' : 'フル連チャン達成！！';
+    const line2y = bh / 2 - fs2 / 2 - (IS_PORTRAIT ? 12 : 16);
+    ctx.font = `bold ${fs2}px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = isMiss ? '#ffaaaa' : '#ffffc8';
+    ctx.fillText(line2, 0, line2y);
   }
-  ctx.fillStyle = col1;
-  ctx.fillText(line1, 0, -bh/2 + fs1/2 + (IS_PORTRAIT ? 14 : 18));
-
-  /* 2行目: サブテキスト */
-  const line2 = isMiss ? 'ミスでフィーバー終了' : 'フル連チャン達成！！';
-  ctx.font = `bold ${fs2}px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = isMiss ? '#ffaaaa' : '#ffffc8';
-  ctx.fillText(line2, 0, bh/2 - fs2/2 - (IS_PORTRAIT ? 12 : 16));
 
   ctx.restore();
 }
@@ -5214,9 +5189,7 @@ function handleGameClick(inputAudioTime) {
     /* フィーバー大当たり: クリックで即時リセット＋pendingShoot引き継ぎ */
     if (_jackpotInFever) {
       pendingShoot = true;
-      const fire = pendingShoot; init(); shootGuard = 0;
-      if (fire) { pendingShoot = false; onShoot(inputAudioTime); }
-      return;
+      _doAutoReset(inputAudioTime); return;
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
