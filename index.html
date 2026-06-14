@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.71';
+const VERSION = 'v2.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1108,12 +1108,15 @@ function _onFirstGesture() {
   document.removeEventListener('mousedown',  _onFirstGesture, true);
   document.removeEventListener('touchstart', _onFirstGesture, true);
   const ctx = getAudioCtx();
-  ctx.resume().then(() => {
-    /* iOS Safari unlock: 無音バッファを1サンプル再生して audio system を活性化 */
+  /* iOS Safari unlock: ユーザージェスチャー内で同期的に無音バッファを start() して
+     audio session を活性化する。.then() 内では iOS がユーザージェスチャーと認識しない
+     場合があり、特にリロード直前まで音声が再生されていた場合に音が出なくなる。 */
+  try {
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
     const src = ctx.createBufferSource();
     src.buffer = buf; src.connect(ctx.destination); src.start(0);
-  }).catch(() => {});
+  } catch(e) {}
+  ctx.resume().catch(() => {});
 }
 document.addEventListener('keydown',    _onFirstGesture, true);
 document.addEventListener('mousedown',  _onFirstGesture, true);
