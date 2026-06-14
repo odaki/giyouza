@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.54';
+const VERSION = 'v2.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1599,8 +1599,9 @@ function init(fromStartup, fromGameOver) {
   }
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
-    isFever = true; feverTriesLeft = 10; feverPending = false;
+    isFever = true; feverTriesLeft = 20; feverPending = false;
     syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
+    if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
@@ -1671,6 +1672,7 @@ function fmt(n) { return n.toLocaleString('ja-JP'); }
 
 function changeBet(dir) {
   /* dir: +1=上げる, -1=下げる */
+  if (isFever && dir > 0) return; // フィーバー中はBET引き上げ不可
   const idx  = BET_OPTIONS.indexOf(bet);
   const prev = bet;
   let next = idx + dir;
