@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.75';
+const VERSION = 'v2.76';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1791,6 +1791,13 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
+  /* iOS Safari: statechange イベントが信頼できないため毎フレームポーリングする。
+     AudioContext が running になった時点で保留中のゲーム初期化を実行する（~16ms 以内）。 */
+  if (_pendingInitFromStartup && audioCtx && audioCtx.state === 'running') {
+    _pendingInitFromStartup = false;
+    init(true);
+    return; // init(true) が phase を変更するため残り処理をスキップ
+  }
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
