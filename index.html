@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.76';
+const VERSION = 'v2.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1104,21 +1104,22 @@ function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockI
 
 /* 最初のユーザー操作で AudioContext を作成・resume・unlock する
    ジェスチャー内で行わないと iOS Safari 等で suspended のまま音が出ない */
+/* マウス・キーボード用: 初回ジェスチャーで AudioContext を生成・resume（デスクトップ向け）
+   iOS touch は capture フェーズが non-capture より先に走るため別扱いすると
+   iOS がユーザージェスチャーと認識できない場合がある。touchstart は除外し
+   メインの touchstart ハンドラ内で直接処理する。 */
 function _onFirstGesture() {
-  document.removeEventListener('keydown',    _onFirstGesture, true);
-  document.removeEventListener('mousedown',  _onFirstGesture, true);
-  document.removeEventListener('touchstart', _onFirstGesture, true);
+  document.removeEventListener('keydown',   _onFirstGesture, true);
+  document.removeEventListener('mousedown', _onFirstGesture, true);
   const ctx = getAudioCtx();
   ctx.resume().then(() => {
-    /* iOS Safari unlock: 無音バッファを1サンプル再生して audio system を活性化 */
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
     const src = ctx.createBufferSource();
     src.buffer = buf; src.connect(ctx.destination); src.start(0);
   }).catch(() => {});
 }
-document.addEventListener('keydown',    _onFirstGesture, true);
-document.addEventListener('mousedown',  _onFirstGesture, true);
-document.addEventListener('touchstart', _onFirstGesture, true);
+document.addEventListener('keydown',   _onFirstGesture, true);
+document.addEventListener('mousedown', _onFirstGesture, true);
 
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
@@ -5338,9 +5339,19 @@ canvas.addEventListener('mousedown', e=>{
 document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
-  /* iOS Safari: バックグラウンド復帰後に suspended になった AudioContext をタップで resume
-     state チェックは string 比較のみ（アロケーションなし）、suspended 時のみ resume() を呼ぶ */
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  /* iOS Safari 音声アンロック: capture フェーズを使わず non-capture のこのハンドラ内で
+     AudioContext の生成・resume・無音バッファ再生をすべて同期的に行う。
+     capture フェーズ(_onFirstGesture)からの resume() は iOS がユーザージェスチャーと
+     認識しない場合があり初回タップで音が出ない原因になるため touchstart は除外した。 */
+  if (!audioCtx) {
+    getAudioCtx();
+    try {
+      const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+      const _s = audioCtx.createBufferSource();
+      _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
+    } catch(_e) {}
+  }
+  if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
