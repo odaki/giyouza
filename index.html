@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.70';
+const VERSION = 'v2.71';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -384,7 +384,7 @@ let feverEndBannerTimer  = 0;    // バナー表示タイマー（フェーズ�
 let feverEndBannerReason = null; // バナー用 reason のコピー（表示中は維持）
 let feverStartBannerTimer = 0;   // フィーバー開始バナータイマー
 let feverPending     = false; // 次トライ開始時にフィーバーへ移行するフラグ
-let _jackpotInFever  = false; // フィーバー中の大当たりフラグ（自動リセット制御）
+let _jackpotAutoReset = false; // フィーバー中（または完走）の大当たり → ユーザー入力なし自動リセット対象
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
 /* チートキー予約（当たり判定時に pending へ転写） */
 let _cheatFeverQueued = false; // Ctrl+F予約
@@ -1545,7 +1545,7 @@ function _doAutoReset(inputAudioTime) {
 /* フィーバー関連状態を一括リセット（initGame / gameOverReset 共通） */
 function _resetFeverState() {
   isFever = false; feverTriesLeft = 0; feverEndedReason = null; feverPending = false;
-  _jackpotInFever = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
+  _jackpotAutoReset = false; _slowSpinPending = null; _cheatFeverQueued = false; _cheatSlowQueued = null;
   feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
 }
 
@@ -1640,7 +1640,7 @@ function init(fromStartup, fromGameOver) {
   isReachJackpot = false;
   reachFlash    = 0;
   feverEndedReason = null; // フィーバー終了メッセージをトライごとにクリア
-  _jackpotInFever  = false;
+  _jackpotAutoReset  = false;
   canRestart  = false;
   betLocked   = false;
   shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
@@ -1874,11 +1874,11 @@ function update() {
         }
         /* 残存ギヨウザがある場合: 当たりエフェクト発動前に地面スルーで退場させる
            フィーバー中の連続大当たりは積み重ねたいため除外 */
-        if (gyozas.length > 0 && hitType !== 'none' && !_jackpotInFever) flushGyozas();
+        if (gyozas.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushGyozas();
         if (_isJackpot) {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
-          if (isFever || feverEndedReason === 'complete') _jackpotInFever = true;
-          if (_jackpotInFever) {
+          if (isFever || feverEndedReason === 'complete') _jackpotAutoReset = true;
+          if (_jackpotAutoReset) {
             const _isComplete = feverEndedReason === 'complete';
             /* フル連チャン達成時: ギヨウザ倍増（上限300）・配当は calcPayout で×2 */
             initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
@@ -1902,7 +1902,7 @@ function update() {
         }
         /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
            フィーバー大当たりは自動リセット時に発射するため破棄しない */
-        if ((_isJackpot || _isMedium) && !_jackpotInFever) pendingShoot = false;
+        if ((_isJackpot || _isMedium) && !_jackpotAutoReset) pendingShoot = false;
         /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
         if (isSlowSpin && (_isJackpot || _isMedium)) {
           rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
@@ -2011,12 +2011,12 @@ function update() {
       _doAutoReset(); return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
-    if (_jackpotInFever && !isGameOver && endTimer > 30) {
+    if (_jackpotAutoReset && !isGameOver && endTimer > 30) {
       _doAutoReset(); return;
     }
     /* エフェクト終了後: canRestartをセット
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
-    if (!isGameOver && !_jackpotInFever && endTimer > minWait && allShown) canRestart = true;
+    if (!isGameOver && !_jackpotAutoReset && endTimer > minWait && allShown) canRestart = true;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
@@ -2038,18 +2038,15 @@ function update() {
   /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
   if (gyozas.length > 0 && phase !== 'done') updateGyozas();
 
-  /* フィーバー開始バナータイマー */
+  /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
   if (feverStartBannerTimer > 0) {
-    if (isGameOver) {
-      feverStartBannerTimer = 0;
-    } else {
-      feverStartBannerTimer--;
-    }
+    if (isGameOver) feverStartBannerTimer = 0;
+    else            feverStartBannerTimer--;
   }
-  /* フィーバー終了バナータイマー（フェーズ横断・当たりorゲームオーバーでクリア） */
+  /* フィーバー終了バナータイマー（reason は期限切れ・ゲームオーバー時に null へ） */
   if (feverEndBannerTimer > 0) {
     if (isGameOver) {
-      feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+      feverEndBannerTimer = 0; feverEndBannerReason = null;
     } else {
       feverEndBannerTimer--;
       if (feverEndBannerTimer === 0) feverEndBannerReason = null;
@@ -3409,7 +3406,7 @@ function draw() {
 
 
   /* 3. テキスト最前面 */
-  if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotInFever) drawEndScreen();
+  if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotAutoReset) drawEndScreen();
   /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
   if (missPopups.length > 0)   drawMissPopup();
   if (payoutPopups.length > 0) drawPayoutPopup();
@@ -5187,7 +5184,7 @@ function handleGameClick(inputAudioTime) {
       return;
     }
     /* フィーバー大当たり: クリックで即時リセット＋pendingShoot引き継ぎ */
-    if (_jackpotInFever) {
+    if (_jackpotAutoReset) {
       pendingShoot = true;
       _doAutoReset(inputAudioTime); return;
     }
