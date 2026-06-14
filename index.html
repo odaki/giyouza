@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.77';
+const VERSION = 'v2.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -522,7 +522,6 @@ function lsCheckSchema() {
   } catch(e) { return false; }
 }
 let unlockedAch = {}, medAchieved = {};
-let _pendingInitFromStartup = false; // AudioContext未runningのままinitGame()が呼ばれた場合のフラグ
 /* 統計カウンター（永続保存） */
 let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
@@ -1566,28 +1565,7 @@ function initGame() {
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   _resetFeverState();
   for (const g of gyozas) g._dead = true; gyozas = [];
-  /* AudioContext が running であれば即座に開始。suspended のままの場合（iOS Safari で
-     リロード直後に resume() が解決しないケース）はフラグを立て、statechange で延期起動する。
-     正常時は resume() Promise がマイクロタスクで即解決するため体感上の遅延はない。 */
-  const _actx = getAudioCtx();
-  if (_actx.state === 'running') {
-    _pendingInitFromStartup = false;
-    init(true);
-  } else {
-    /* iOS Safari: _onFirstGesture の resume() が statechange を発火させるタイミングは
-       initGame() より前（capture フェーズ）になる場合があるため、フラグ設定の後に
-       リスナーを追加して競合を防ぐ。running になった時点でゲームを開始する。 */
-    _pendingInitFromStartup = true;
-    const _onAudioRun = () => {
-      if (_actx.state === 'running' && _pendingInitFromStartup) {
-        _actx.removeEventListener('statechange', _onAudioRun);
-        _pendingInitFromStartup = false;
-        init(true);
-      }
-    };
-    _actx.addEventListener('statechange', _onAudioRun);
-    _actx.resume().catch(() => {});
-  }
+  init(true);
 }
 
 function gameOverReset() {
@@ -1792,13 +1770,6 @@ function hitResult(w) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
-  /* iOS Safari: statechange イベントが信頼できないため毎フレームポーリングする。
-     AudioContext が running になった時点で保留中のゲーム初期化を実行する（~16ms 以内）。 */
-  if (_pendingInitFromStartup && audioCtx && audioCtx.state === 'running') {
-    _pendingInitFromStartup = false;
-    init(true);
-    return; // init(true) が phase を変更するため残り処理をスキップ
-  }
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
