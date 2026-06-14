@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.63';
+const VERSION = 'v2.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4581,17 +4581,17 @@ function drawFeverStartMessage() {
   if (alpha < 0.02) return;
   const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
 
-  /* バナー寸法を先に確定してから上端基準で配置（スローハンドバッジと同じ上部配置） */
-  const fs1 = IS_PORTRAIT ? 32 : 42;
-  const fs2 = IS_PORTRAIT ? 15 : 18;
-  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
-  const bw  = W * 0.88;
-  const top = IS_PORTRAIT ? 10 : 8;
-  const cx  = W / 2, cy = top + bh / 2;
+  const cx = W / 2, cy = H / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
+
+  /* バナー背景 */
+  const fs1 = IS_PORTRAIT ? 32 : 42;
+  const fs2 = IS_PORTRAIT ? 15 : 18;
+  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
+  const bw  = W * 0.88;
   const br  = bh / 2;
   ctx.beginPath();
   ctx.moveTo(-bw/2 + br, -bh/2);
@@ -4638,17 +4638,17 @@ function drawFeverEndMessage() {
   const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
   const isMiss = feverEndBannerReason === 'miss';
 
-  /* バナー寸法を先に確定してから上端基準で配置（スローハンドバッジと同じ上部配置） */
-  const fs1 = IS_PORTRAIT ? 32 : 42;
-  const fs2 = IS_PORTRAIT ? 15 : 18;
-  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
-  const bw  = W * 0.88;
-  const top = IS_PORTRAIT ? 10 : 8;
-  const cx  = W / 2, cy = top + bh / 2;
+  const cx = W / 2, cy = H / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
+
+  /* バナー背景 */
+  const fs1 = IS_PORTRAIT ? 32 : 42;
+  const fs2 = IS_PORTRAIT ? 15 : 18;
+  const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
+  const bw  = W * 0.88;
   const br  = bh / 2;
   ctx.beginPath();
   ctx.moveTo(-bw/2 + br, -bh/2);
@@ -4706,9 +4706,8 @@ function drawFeverBadge() {
   const bw   = tw + padX * 2;
   const bh   = fs + padY * 2;
   const bx   = (W - bw) / 2;
-  /* スローハンドバッジ(by=8~10, bh≈28)の下に配置 */
-  const slowBh = fs + padY * 2; // スローハンドバッジとほぼ同サイズ
-  const by   = (IS_PORTRAIT ? 10 : 8) + slowBh + 4;
+  /* スローハンドバッジと同じ上端位置（フィーバー中はスローハンド非発動） */
+  const by   = IS_PORTRAIT ? 10 : 8;
 
   /* 背景ピル */
   ctx.beginPath();
