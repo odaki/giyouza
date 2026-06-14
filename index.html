@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.66';
+const VERSION = 'v2.67';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -478,13 +478,12 @@ const ACHIEVEMENTS = [
   { id:'first_jackpot', icon:'🎊', name:'初大当たり',         desc:'大当たりを初めて達成した'            },
   { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験',   desc:'リーチ経由大当たりを達成した'        },
   { id:'first_fever',  icon:'🌡️', name:'フィーバー初体験',   desc:'フィーバーを初めて発動した'           },
+  { id:'fever_complete',icon:'🔥', name:'フル連チャン達成',   desc:'フィーバーを全て大当たりで完走した'   },
   /* プレイ回数（小→大） */
   { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'100回プレイした'                     },
   { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'500回プレイした'                     },
   /* 矢数 */
   { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計1000本放った'                },
-  /* フィーバー（横画面: 左列下段） */
-  { id:'fever_complete',icon:'🔥', name:'フル連チャン達成',   desc:'フィーバーを全て大当たりで完走した'   },
   /* コイン所持（小→大）後半（横画面: 右列上段） */
   { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
   { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
