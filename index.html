@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.65';
+const VERSION = 'v2.66';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -483,8 +483,8 @@ const ACHIEVEMENTS = [
   { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'500回プレイした'                     },
   /* 矢数 */
   { id:'shot_100',      icon:'🏹', name:'弓の達人',           desc:'矢を累計1000本放った'                },
-  /* コイン所持（小→大）前半（横画面: 左列下段） */
-  { id:'coins_200',     icon:'💰', name:'はじめての倍増',     desc:'所持120ギヨウザを超えた'             },
+  /* フィーバー（横画面: 左列下段） */
+  { id:'fever_complete',icon:'🔥', name:'フル連チャン達成',   desc:'フィーバーを全て大当たりで完走した'   },
   /* コイン所持（小→大）後半（横画面: 右列上段） */
   { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
   { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
@@ -1336,7 +1336,6 @@ function unlockAch(id) {
   playSE('ach'); // 実績解除音
 }
 function checkCoinsAch() {
-  if (coins >= 120)  unlockAch('coins_200');
   if (coins >= 1000)  unlockAch('coins_500');
   if (coins >= 5000)  unlockAch('coins_1000');
   if (coins >= 10000) unlockAch('coins_2000');
@@ -1852,6 +1851,7 @@ function update() {
               feverEndedReason = 'complete';
               feverEndBannerTimer = 180; feverEndBannerReason = 'complete';
               feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
+              unlockAch('fever_complete');
             }
           }
         }
