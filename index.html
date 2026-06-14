@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.59';
+const VERSION = 'v2.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4676,7 +4676,7 @@ function drawFeverEndMessage() {
   ctx.fillText(line1, 0, -bh/2 + fs1/2 + (IS_PORTRAIT ? 14 : 18));
 
   /* 2行目: サブテキスト */
-  const line2 = isMiss ? 'ミスでフィーバー終了' : '全トライ消化！';
+  const line2 = isMiss ? 'ミスでフィーバー終了' : 'フル連チャン達成！！';
   ctx.font = `bold ${fs2}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = isMiss ? '#ffaaaa' : '#ffffc8';
   ctx.fillText(line2, 0, bh/2 - fs2/2 - (IS_PORTRAIT ? 12 : 16));
