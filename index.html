@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.61';
+const VERSION = 'v2.62';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1600,7 +1600,7 @@ function init(fromStartup, fromGameOver) {
   }
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
-    isFever = true; feverTriesLeft = 20; feverPending = false;
+    isFever = true; feverTriesLeft = 10; feverPending = false;
     syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
     if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
     feverStartBannerTimer = 180; // フィーバー開始バナー表示
