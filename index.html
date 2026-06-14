@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.55';
+const VERSION = 'v2.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4566,12 +4566,6 @@ function drawFeverEndMessage() {
   if (alpha < 0.02) return;
   const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
   const isMiss = feverEndBannerReason === 'miss';
-
-  ctx.save();
-  ctx.globalAlpha = alpha * 0.55;
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
 
   const cx = W / 2, cy = H / 2;
   ctx.save();
