@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.62';
+const VERSION = 'v2.63';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4581,17 +4581,17 @@ function drawFeverStartMessage() {
   if (alpha < 0.02) return;
   const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
 
-  const cx = W / 2, cy = H / 2;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
-  ctx.scale(scale, scale);
-
-  /* バナー背景 */
+  /* バナー寸法を先に確定してから上端基準で配置（スローハンドバッジと同じ上部配置） */
   const fs1 = IS_PORTRAIT ? 32 : 42;
   const fs2 = IS_PORTRAIT ? 15 : 18;
   const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
   const bw  = W * 0.88;
+  const top = IS_PORTRAIT ? 10 : 8;
+  const cx  = W / 2, cy = top + bh / 2;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
   const br  = bh / 2;
   ctx.beginPath();
   ctx.moveTo(-bw/2 + br, -bh/2);
@@ -4638,17 +4638,17 @@ function drawFeverEndMessage() {
   const scale = 0.6 + 0.4 * Math.min(1, elapsed / 20);
   const isMiss = feverEndBannerReason === 'miss';
 
-  const cx = W / 2, cy = H / 2;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
-  ctx.scale(scale, scale);
-
-  /* バナー背景 */
+  /* バナー寸法を先に確定してから上端基準で配置（スローハンドバッジと同じ上部配置） */
   const fs1 = IS_PORTRAIT ? 32 : 42;
   const fs2 = IS_PORTRAIT ? 15 : 18;
   const bh  = fs1 + fs2 + (IS_PORTRAIT ? 40 : 52);
   const bw  = W * 0.88;
+  const top = IS_PORTRAIT ? 10 : 8;
+  const cx  = W / 2, cy = top + bh / 2;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
   const br  = bh / 2;
   ctx.beginPath();
   ctx.moveTo(-bw/2 + br, -bh/2);
