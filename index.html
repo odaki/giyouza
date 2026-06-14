@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.64';
+const VERSION = 'v2.65';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -477,6 +477,7 @@ const ACHIEVEMENTS = [
   { id:'first_medium',  icon:'⭐', name:'初中当たり',         desc:'中当たりを初めて達成した'            },
   { id:'first_jackpot', icon:'🎊', name:'初大当たり',         desc:'大当たりを初めて達成した'            },
   { id:'reach_jackpot', icon:'💥', name:'超大当たり初体験',   desc:'リーチ経由大当たりを達成した'        },
+  { id:'first_fever',  icon:'🌡️', name:'フィーバー初体験',   desc:'フィーバーを初めて発動した'           },
   /* プレイ回数（小→大） */
   { id:'play_10',       icon:'🎮', name:'ベテランプレイヤー', desc:'100回プレイした'                     },
   { id:'play_50',       icon:'🕹️', name:'常連客',             desc:'500回プレイした'                     },
@@ -488,8 +489,6 @@ const ACHIEVEMENTS = [
   { id:'coins_500',     icon:'🤑', name:'大富豪',             desc:'所持1000ギヨウザを超えた'            },
   { id:'coins_1000',    icon:'👑', name:'ギヨウザ王',         desc:'所持5000ギヨウザを超えた'            },
   { id:'coins_2000',    icon:'🌟', name:'ギヨウザ大富豪',     desc:'所持10000ギヨウザを超えた'           },
-  /* 大当たり回数 */
-  { id:'jackpot_3',     icon:'🎆', name:'三冠王',             desc:'大当たりを累計3回達成した'           },
   /* 特殊（易→難）（横画面: 右列下段） */
   { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット100でプレイした'               },
   { id:'poor',          icon:'💸', name:'文無し',             desc:'所持コインが一桁になった'            },
@@ -1604,6 +1603,7 @@ function init(fromStartup, fromGameOver) {
     syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
     if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
     feverStartBannerTimer = 180; // フィーバー開始バナー表示
+    unlockAch('first_fever');
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
@@ -1880,7 +1880,6 @@ function update() {
           }
           unlockAch('first_jackpot');
           jackpotCount++;
-          if (jackpotCount >= 3) unlockAch('jackpot_3');
           if (bet >= 1000) unlockAch('big_bet_win');
           lsSaveStats();
         }
