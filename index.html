@@ -1,3 +1,4 @@
+<!-- © 2026 Michiyasu ODAKI -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -112,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.78';
+const VERSION = 'v2.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3489,6 +3490,9 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('PAUSED', W/2, H/2);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(245,208,32,0.55)';
+    ctx.fillText('© 2026 Michiyasu ODAKI', W/2, H/2 + 30);
     /* ── レイテンシ診断（右下隅） ── */
     if (audioCtx) {
       const outL = audioCtx.outputLatency ?? 0;
