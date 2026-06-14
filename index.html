@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.52';
+const VERSION = 'v2.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2279,12 +2279,15 @@ function updateGyozas() {
     /* ギヨウザ同士の円衝突 */
     for (let i = 0; i < gyozas.length; i++) {
       const a = gyozas[i];
+      if (a._flush) continue; // 落下中は衝突スキップ
       const ra = a.size * 0.52;
       for (let j = i + 1; j < gyozas.length; j++) {
         const b  = gyozas[j];
+        if (b._flush) continue;
         const rb = b.size * 0.52;
         const minD = ra + rb;
         const dx = b.x - a.x, dy = b.y - a.y;
+        if (Math.abs(dx) >= minD || Math.abs(dy) >= minD) continue; // 安価な事前チェック
         const d2 = dx*dx + dy*dy;
         if (d2 >= minD*minD || d2 < 0.001) continue;
 
@@ -2535,6 +2538,7 @@ function updateGiugiu() {
         const b  = gyozas[j], rb = b.size * 0.52;
         const minD = ra + rb;
         const dx = b.x - a.x, dy = b.y - a.y;
+        if (Math.abs(dx) >= minD || Math.abs(dy) >= minD) continue;
         const d2 = dx*dx + dy*dy;
         if (d2 >= minD*minD || d2 < 0.001) continue;
         const dist = Math.sqrt(d2);
