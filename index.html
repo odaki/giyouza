@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.74';
+const VERSION = 'v2.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -794,14 +794,6 @@ function getAudioCtx() {
     _buildNoiseBuffer();
     /* ループ量子化ドリフト補正用: sampleRate確定後に実ループ長を計算 */
     _updateBgmQuantizedLoopDur();
-    /* iOS Safari: リロード直後など resume() が次のジェスチャーまで解決しない場合に備え、
-       running になった時点で保留中のゲーム初期化を実行する */
-    audioCtx.addEventListener('statechange', () => {
-      if (audioCtx.state === 'running' && _pendingInitFromStartup) {
-        _pendingInitFromStartup = false;
-        init(true);
-      }
-    });
   }
   return audioCtx;
 }
@@ -1581,7 +1573,19 @@ function initGame() {
     _pendingInitFromStartup = false;
     init(true);
   } else {
+    /* iOS Safari: _onFirstGesture の resume() が statechange を発火させるタイミングは
+       initGame() より前（capture フェーズ）になる場合があるため、フラグ設定の後に
+       リスナーを追加して競合を防ぐ。running になった時点でゲームを開始する。 */
     _pendingInitFromStartup = true;
+    const _onAudioRun = () => {
+      if (_actx.state === 'running' && _pendingInitFromStartup) {
+        _actx.removeEventListener('statechange', _onAudioRun);
+        _pendingInitFromStartup = false;
+        init(true);
+      }
+    };
+    _actx.addEventListener('statechange', _onAudioRun);
+    _actx.resume().catch(() => {});
   }
 }
 
