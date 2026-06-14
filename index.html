@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.53';
+const VERSION = 'v2.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2268,9 +2268,10 @@ function updateGyozas() {
            それ以外(idle等): age依存でゆっくり→速やかに画面外へ */
         if (g.vy === 0) {
           const t = Math.min(1, g.age / 300);   // 0→1 (約5秒)
-          const drift = phase === 'done'
-            ? 0.005 + t * 0.025               // done: 0.005〜0.030
-            : 0.01  + t * 0.12;               // idle等: 0.01〜0.13
+          /* ハズレ done は山積み演出なしのため idle と同じ速度で退場 */
+          const drift = (phase === 'done' && !isMissResult)
+            ? 0.005 + t * 0.025               // done(当たり): 山積み → 崩落
+            : 0.01  + t * 0.12;               // idle/ハズレ: 速やかに画面外へ
           g.vx += (g.x < W / 2 ? -1 : 1) * drift;
         }
       }
