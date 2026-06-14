@@ -112,7 +112,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.73';
+const VERSION = 'v2.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -522,6 +522,7 @@ function lsCheckSchema() {
   } catch(e) { return false; }
 }
 let unlockedAch = {}, medAchieved = {};
+let _pendingInitFromStartup = false; // AudioContext未runningのままinitGame()が呼ばれた場合のフラグ
 /* 統計カウンター（永続保存） */
 let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
@@ -793,6 +794,14 @@ function getAudioCtx() {
     _buildNoiseBuffer();
     /* ループ量子化ドリフト補正用: sampleRate確定後に実ループ長を計算 */
     _updateBgmQuantizedLoopDur();
+    /* iOS Safari: リロード直後など resume() が次のジェスチャーまで解決しない場合に備え、
+       running になった時点で保留中のゲーム初期化を実行する */
+    audioCtx.addEventListener('statechange', () => {
+      if (audioCtx.state === 'running' && _pendingInitFromStartup) {
+        _pendingInitFromStartup = false;
+        init(true);
+      }
+    });
   }
   return audioCtx;
 }
@@ -1564,7 +1573,16 @@ function initGame() {
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   _resetFeverState();
   for (const g of gyozas) g._dead = true; gyozas = [];
-  init(true); // true = スタートアップからの起動（ジングル再生）
+  /* AudioContext が running であれば即座に開始。suspended のままの場合（iOS Safari で
+     リロード直後に resume() が解決しないケース）はフラグを立て、statechange で延期起動する。
+     正常時は resume() Promise がマイクロタスクで即解決するため体感上の遅延はない。 */
+  const _actx = getAudioCtx();
+  if (_actx.state === 'running') {
+    _pendingInitFromStartup = false;
+    init(true);
+  } else {
+    _pendingInitFromStartup = true;
+  }
 }
 
 function gameOverReset() {
