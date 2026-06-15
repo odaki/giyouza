@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.03';
+const VERSION = 'v3.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3501,8 +3501,8 @@ function draw() {
     ctx.font = '11px sans-serif';
     ctx.fillStyle = 'rgba(245,208,32,0.4)';
     ctx.fillText('© 2026 Michiyasu ODAKI', W/2, H - 24);
-    /* ── レイテンシ診断（右下隅） ── */
-    if (audioCtx) {
+    /* ── レイテンシ診断・フレームグラフ（右下・左下）: _lat() でトグル ── */
+    if (audioCtx && window._dbgLatency) {
       const outL = audioCtx.outputLatency ?? 0;
       const baseL = audioCtx.baseLatency ?? 0;
       const total = _hwLatency;
@@ -5063,8 +5063,10 @@ _rafId = requestAnimationFrame(_gameLoop);
 
 /* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
 const _dbgLog = [];
-/* Web Inspector コンソールから _dbg() で表示/非表示を切り替え */
+/* Web Inspector コンソールから _dbg() / _lat() で表示/非表示を切り替え */
 window._dbg = () => { const el = document.getElementById('dbg'); if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none'; };
+window._dbgLatency = false;
+window._lat = () => { window._dbgLatency = !window._dbgLatency; };
 function _dbgSnap(label) {
   const t = audioCtx ? audioCtx.currentTime.toFixed(2) : '-';
   _dbgLog.push(
