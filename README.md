@@ -104,10 +104,12 @@ fi
 
 MAJOR=$(echo "$CURRENT" | sed "s/v\([0-9]*\)\..*/\1/")
 MINOR=$(echo "$CURRENT" | sed "s/v[0-9]*\.\([0-9]*\)/\1/")
-if [ "$MINOR" -ge 99 ]; then
-  NEXT="v$((MAJOR + 1)).00"
+# 10# プレフィックスで強制10進数評価（08,09 が8進数エラーになるのを防ぐ）
+MINOR_DEC=$((10#$MINOR))
+if [ "$MINOR_DEC" -ge 99 ]; then
+  NEXT="v$((10#$MAJOR + 1)).00"
 else
-  NEXT="v${MAJOR}.$(printf "%02d" $((MINOR + 1)))"
+  NEXT="v${MAJOR}.$(printf "%02d" $((MINOR_DEC + 1)))"
 fi
 
 sed -i "" "s/const VERSION = '${CURRENT}'/const VERSION = '${NEXT}'/" "$FILE"
