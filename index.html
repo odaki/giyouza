@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.05';
+const VERSION = 'v3.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1601,13 +1601,13 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: ジングル再生 → 完了後に BGM 開始（ミュート中でもソースは起動、gain=0で無音）
-       resume() の Promise 解決を待たず同期的に開始する。iOS では resume() Promise が
-       次のユーザージェスチャーまで解決しないことがあるが、suspended 状態でも音符は
-       未来時刻にスケジュール可能で、コンテキスト起動後に正しく再生される。 */
-    getAudioCtx().resume().catch(() => {});
+    /* スタート時: resume() の解決を待ってからジングルをスケジュールする。
+       解決前に audioCtx.currentTime が進んでいないため、先にスケジュールすると
+       resume 後に音符が過去時刻になって無音になる。
+       resume() は STARTボタンの touchstart 内で呼ばれるので iOS でも確実に動く。 */
     applyMuteGain();
-    playStartJingle(() => startBGM());
+    const _startAudio = () => { playStartJingle(() => startBGM()); };
+    getAudioCtx().resume().then(() => setTimeout(_startAudio, 0)).catch(_startAudio);
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
