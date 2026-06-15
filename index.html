@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.97';
+const VERSION = 'v2.98';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1126,6 +1126,7 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
 document.addEventListener('visibilitychange', () => {
+  _dbgSnap('visib-' + (document.hidden ? 'H' : 'V'));
   if (document.hidden) {
     if (!isPaused && phase !== 'startup') togglePause();
   } else {
@@ -5093,7 +5094,7 @@ function togglePause() {
       _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
       _destroyBGMSource();
     }
-    _dbgSnap('PAUSE');
+    _dbgSnap('PAUSE[' + (document.hidden ? 'H' : 'V') + ']');
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
