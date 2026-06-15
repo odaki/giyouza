@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.86';
+const VERSION = 'v2.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1124,8 +1124,10 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && audioCtx && !audioMuted) {
-    audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
+  if (document.hidden) {
+    if (!isPaused && phase !== 'startup') togglePause();
+  } else {
+    if (audioCtx && !audioMuted) audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
   }
 });
 
