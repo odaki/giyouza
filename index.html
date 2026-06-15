@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.08';
+const VERSION = 'v3.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5398,9 +5398,11 @@ document.addEventListener('touchstart', e=>{
   if (audioCtx.state !== 'running') {
     audioCtx.resume().catch(() => {});
     try {
+      /* masterGain 経由で再生して BGM パス全体を確実にアクティブ化する。
+         destination 直結では AVAudioSession が開通しないことがある（iOS Safari）。 */
       const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
       const _s = audioCtx.createBufferSource();
-      _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
+      _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
     } catch(_e) {}
   }
   /* 入力物理発生時刻をオーディオ時刻に換算 */
