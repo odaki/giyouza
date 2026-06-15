@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.96';
+const VERSION = 'v2.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5130,7 +5130,11 @@ function togglePause() {
         _dbgSnap('doResumeBGM-done');
       };
       _dbgSnap('UNPAUSE-resume');
-      audioCtx.resume().then(_doResumeBGM).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
+      audioCtx.resume().then(() => {
+        /* iOS Safari では resume().then() のマイクロタスク内では Audio Session が
+           まだ完全にアクティブでないことがある。setTimeout(0) で次の task に回す。 */
+        setTimeout(_doResumeBGM, 0);
+      }).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
     }
   }
 }
