@@ -65,7 +65,7 @@ canvas {
 <div id="canvas-wrap">
   <canvas id="c"></canvas>
   <button id="fs-btn" aria-label="全画面切替"></button>
-  <div id="dbg" style="position:fixed;top:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
+  <div id="dbg" style="position:fixed;bottom:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
 </div>
 
 <script>
@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.94';
+const VERSION = 'v2.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5018,23 +5018,7 @@ function drawStartup() {
 
   ctx.restore();
 
-  /* ── DEBUG OVERLAY (remove before release) ── */
-  { const _dbg = document.getElementById('dbg');
-    if (_dbg) _dbg.textContent = [
-      `ctx.state: ${audioCtx ? audioCtx.state : 'null'}`,
-      `bgmSrc: ${bgmSource ? 'SET' : 'null'}`,
-      `bgmBuf: ${bgmBuffer ? 'SET' : 'null'}`,
-      `mGain: ${masterGain ? masterGain.gain.value.toFixed(2) : '-'}`,
-      `bGain: ${bgmGain ? bgmGain.gain.value.toFixed(2) : '-'}`,
-      `phaseRef: ${bgmPhaseRef !== null ? bgmPhaseRef.toFixed(2) : 'null'}`,
-      `accWall: ${_bgmAccumLastWall !== null ? _bgmAccumLastWall.toFixed(2) : 'null'}`,
-      `accTime: ${_bgmAccumAudioTime.toFixed(2)}`,
-      `pausePos: ${_pauseBgmPos.toFixed(2)}`,
-      `jingle: ${jingleScheduler ? 'RUN' : 'null'}`,
-      `isPaused: ${isPaused}`,
-      `phase: ${phase}`,
-    ].join('\n');
-  }
+  /* ── DEBUG OVERLAY: setInterval で独立更新 (remove before release) ── */
 }
 
 /* ════════════════ Loop / Input ════════════════ */
@@ -5074,6 +5058,21 @@ function _gameLoop(t) {
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
+/* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
+const _dbgLog = [];
+function _dbgSnap(label) {
+  const t = audioCtx ? audioCtx.currentTime.toFixed(2) : '-';
+  _dbgLog.push(
+    `[${label}] t=${t}`,
+    ` ctx:${audioCtx ? audioCtx.state : 'null'} src:${bgmSource ? 'SET' : 'null'}`,
+    ` mG:${masterGain ? masterGain.gain.value.toFixed(2) : '-'} bG:${bgmGain ? bgmGain.gain.value.toFixed(2) : '-'}`,
+    ` wall:${_bgmAccumLastWall !== null ? _bgmAccumLastWall.toFixed(2) : 'null'} pos:${_pauseBgmPos.toFixed(2)}`,
+  );
+  if (_dbgLog.length > 40) _dbgLog.splice(0, 4);
+  const el = document.getElementById('dbg');
+  if (el) el.textContent = _dbgLog.join('\n');
+}
+
 function togglePause() {
   if (phase === 'startup') return;
   isPaused = !isPaused;
@@ -5094,33 +5093,26 @@ function togglePause() {
       _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
       _destroyBGMSource();
     }
+    _dbgSnap('PAUSE');
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
-    /* shooting 中にポーズしていた場合: _arrowStartWallTime を現在時刻から逆算して再設定。
-       performance.now() はバックグラウンド中も進み続けるため、そのまま使うと
-       復帰後の最初のフレームで arrowProgress=1 に飛んで即 done 遷移してしまう。 */
+    _dbgSnap('UNPAUSE-start');
     if (_arrowProgressAtPause >= 0 && phase === 'shooting') {
       _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
       _arrowProgressAtPause = -1;
     }
-    /* 描画ループは即座に再開する（音声は resume() 解決後に始動） */
     _rafId = requestAnimationFrame(_gameLoop);
     if (audioCtx) {
       const _doResumeBGM = () => {
-        /* iOS: resume() 解決直後にサイレントバッファを再生して audio output をジェスチャーに
-           紐付ける。これにより直後の BGM start() が確実に再生される。 */
+        _dbgSnap('doResumeBGM-enter');
         try {
           const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
           const _s = audioCtx.createBufferSource();
           _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
-        } catch(_e) {}
-        /* BGMをポーズ位置から再起動。
-           !bgmSource チェックをしない: ポーズ中にサスペンド状態のコンテキストで
-           startBGM()が呼ばれていた場合、そのソースは正常に再生されない可能性があるため
-           常に破棄して再作成する。 */
+        } catch(_e) { _dbgSnap('silentBuf-ERR'); }
         if (bgmBuffer) {
-          _destroyBGMSource(); // サスペンド中に作られた不確かなソースを確実に破棄
+          _destroyBGMSource();
           const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
           const offset  = _pauseBgmPos % loopDur;
           const src     = _createBGMSource(_pauseBgmRate);
@@ -5130,22 +5122,19 @@ function togglePause() {
             _bgmAccumLastWall = audioCtx.currentTime;
             bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
             bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
-          }
-        }
+          } else { _dbgSnap('createSrc-NULL'); }
+        } else { _dbgSnap('bgmBuf-NULL'); }
         masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
         masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
-        /* beat pulse キャッシュを強制リセット: _bgmAccumLastWall が更新されたので
-           次フレームで getBeatPulse() が再計算されsyncアニメーションが即座に復活する */
         _beatPulseCacheFrame = -1;
+        _dbgSnap('doResumeBGM-done');
       };
-      /* iOS はバックグラウンド移行で AudioContext を強制サスペンドする。
-         suspended 状態のまま src.start() や gain 操作をしても音が出ないため、
-         resume() の解決を待ってから音声処理を実行する。
-         通常の PAUSE/UNPAUSE では state === 'running' なので即実行される。 */
       if (audioCtx.state === 'running') {
+        _dbgSnap('UNPAUSE-sync');
         _doResumeBGM();
       } else {
-        audioCtx.resume().then(_doResumeBGM).catch(_doResumeBGM);
+        _dbgSnap('UNPAUSE-async');
+        audioCtx.resume().then(_doResumeBGM).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
       }
     }
   }
