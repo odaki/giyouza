@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.83';
+const VERSION = 'v2.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1606,6 +1606,14 @@ function init(fromStartup, fromGameOver) {
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
     if (audioCtx && !bgmSource && !jingleScheduler) startBGM();
   }
+  /* feverPending を isSlowSpin より先に処理（isFever=true になることでスローハンド抽選を正しく抑制） */
+  if (feverPending) {
+    isFever = true; feverTriesLeft = 10; feverPending = false;
+    syncChain = 0;
+    if (bet > 10) { bet = 10; lsSave(); }
+    feverStartBannerTimer = FEVER_BANNER_FRAMES;
+    unlockAch('first_fever');
+  }
   const prevSlowSpin = isSlowSpin;
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
   const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
@@ -1614,14 +1622,6 @@ function init(fromStartup, fromGameOver) {
     _slowSpinPending = null;
   } else {
     isSlowSpin = !isFever && Math.random() < slowProb;
-  }
-  /* ペンディング中かつスローハンドでなければフィーバーを起動 */
-  if (feverPending && !isSlowSpin) {
-    isFever = true; feverTriesLeft = 10; feverPending = false;
-    syncChain = 0; // フィーバー開始時にリセット（終了後の即再発動防止）
-    if (bet > 10) { bet = 10; lsSave(); } // フィーバー中はBET上限10
-    feverStartBannerTimer = FEVER_BANNER_FRAMES;
-    unlockAch('first_fever');
   }
   wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   curIdx     = 0;
