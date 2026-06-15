@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.07';
+const VERSION = 'v3.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1623,13 +1623,16 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: resume() の解決を待ってからジングルをスケジュールする。
-       解決前に audioCtx.currentTime が進んでいないため、先にスケジュールすると
-       resume 後に音符が過去時刻になって無音になる。
-       resume() は STARTボタンの touchstart 内で呼ばれるので iOS でも確実に動く。 */
+    /* スタート時: STARTボタンのタッチイベント内で resume() を同期的に呼んで
+       iOS の Audio Session をアンロックし、そのまま即座にジングルをスケジュールする。
+       resume() の Promise 解決を待たずに playStartJingle() を呼んでよい理由:
+       ジングルは setInterval で少し先の時刻にノートをスケジュールし続けるため、
+       resume() が数十ms 後に解決した時点でも大半のノートはまだ未来にある。
+       then() や setTimeout で非同期に回すとタッチイベントのコンテキストから外れ
+       iOS に「ユーザー操作なし」と判断されるリスクがある。 */
     applyMuteGain();
-    const _startAudio = () => { playStartJingle(() => startBGM()); };
-    getAudioCtx().resume().then(() => setTimeout(_startAudio, 0)).catch(_startAudio);
+    getAudioCtx().resume().catch(() => {});
+    playStartJingle(() => startBGM());
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
