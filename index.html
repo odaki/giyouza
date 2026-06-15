@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.11';
+const VERSION = 'v3.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -570,6 +570,7 @@ const P_BET_INC_BTN = IS_PORTRAIT ? { x:P_BAR_X+P_BAR_W-P_BAR_H+1, y:P_BAR_Y+1, 
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
+let _pendingInitGame = false; // touchstart で START ボタンを検出し touchend で initGame() するためのフラグ
 let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
@@ -819,11 +820,14 @@ function _recreateAudioGraph() {
    suspended/running は resume() で対応。
    ※ 必ずタッチイベントハンドラの同期コード内で呼ぶこと（iOS ユーザーアクティベーション要件）。 */
 function _resumeAudioCtx(callback) {
+  _dbgSnap('_rCtx:' + audioCtx.state);
   if (audioCtx.state === 'interrupted') {
     _recreateAudioGraph();
     setTimeout(callback, 0);
   } else {
-    audioCtx.resume().then(() => setTimeout(callback, 0)).catch(callback);
+    audioCtx.resume()
+      .then(() => { _dbgSnap('_rCtx-ok:' + audioCtx.state); setTimeout(callback, 0); })
+      .catch(() => { _dbgSnap('_rCtx-err:' + audioCtx.state); callback(); });
   }
 }
 
@@ -1557,6 +1561,7 @@ function playStartJingle(onEnd) {
      BGM はすでに起動済みなのでジングルを再生しない。 */
   if (bgmSource) { return; }
   stopJingle();
+  _dbgSnap('jingle-start:' + audioCtx.state);
   jingleStep    = 0;
   jingleNextTime = audioCtx.currentTime + 0.10;
   jingleScheduler = setInterval(() => scheduleJingle(onEnd), 80);
@@ -1623,12 +1628,13 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: AudioContext は事前生成済み（suspended）なので、
-       このジェスチャーで resume() だけを行えば iOS が確実に unlock する。
-       ジングルの開始は _resumeAudioCtx 経由で resume() 完了後に行う。
-       これにより "audioCtx 生成 + resume" の二重作業を避け、
-       PAUSE→UNPAUSE と同じ信頼性でオーディオを開始できる。 */
+    /* スタート時: initGame() は touchend から呼ばれる。
+       touchstart で resume() + サイレントバッファを発行済みなので、
+       touchend の時点では AudioContext が running になっているはず。
+       _resumeAudioCtx 経由で確認し、まだ suspended なら touchend ジェスチャーで
+       再度 resume() して確実に unlock してからジングルを開始する。 */
     applyMuteGain();
+    _dbgSnap('init-fromStartup:' + audioCtx.state);
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
@@ -5418,7 +5424,14 @@ document.addEventListener('touchstart', e=>{
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
     if (showAchievements) { showAchievements = false; return; }
-    if (hitTest(STARTUP_BTN, pt.x, pt.y) && Date.now() >= _startupGuardUntil) { if (!audioCtx) getAudioCtx(); initGame(); return; }
+    if (hitTest(STARTUP_BTN, pt.x, pt.y) && Date.now() >= _startupGuardUntil) {
+      /* touchstart では resume() + サイレントバッファ（ハンドラ冒頭）だけ行い、
+         initGame() は touchend で呼ぶ。指を離す瞬間（touchend）も iOS のユーザー
+         ジェスチャーとして認定されるため、resume() が確実に完了した状態で
+         playStartJingle() を実行できる。 */
+      _pendingInitGame = true;
+      return;
+    }
     return;
   }
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
@@ -5450,6 +5463,18 @@ document.addEventListener('touchstart', e=>{
   }
 
   handleGameClick(inputAudioTime);
+}, { passive: false });
+
+/* touchend ハンドラ: START ボタンのゲーム開始処理
+   touchstart で resume() + サイレントバッファを発行し、
+   指を離す touchend で initGame() を呼ぶことで、iOS Safari が
+   AudioContext を確実に running にしてからジングルを開始できる。
+   touchend も iOS ユーザーアクティベーションとして認定される。 */
+document.addEventListener('touchend', e => {
+  if (!_pendingInitGame) return;
+  _pendingInitGame = false;
+  e.preventDefault();
+  initGame();
 }, { passive: false });
 
 /* ════════════════ キャンバス初期化 ════════════════ */
