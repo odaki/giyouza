@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.98';
+const VERSION = 'v2.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5107,28 +5107,34 @@ function togglePause() {
     if (audioCtx) {
       const _doResumeBGM = () => {
         _dbgSnap('doResumeBGM-enter');
+        /* iOS Safari: masterGain経由でサイレントバッファを再生してAVAudioSessionを確実にアクティブ化。
+           destination直結ではなくmasterGain経由にすることでBGMと同じパスを通す。 */
         try {
           const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
           const _s = audioCtx.createBufferSource();
-          _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
+          _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
         } catch(_e) { _dbgSnap('silentBuf-ERR'); }
-        if (bgmBuffer) {
+        masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
+        _beatPulseCacheFrame = -1;
+        if (!bgmBuffer) { _dbgSnap('bgmBuf-NULL'); _dbgSnap('doResumeBGM-done'); return; }
+        /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
+        setTimeout(() => {
+          if (isPaused) return; // その間にPAUSEされた場合は中止
           _destroyBGMSource();
           const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
           const offset  = _pauseBgmPos % loopDur;
           const src     = _createBGMSource(_pauseBgmRate);
           if (src) {
-            src.start(audioCtx.currentTime, offset);
-            bgmPhaseRef = audioCtx.currentTime - _pauseBgmPos;
-            _bgmAccumLastWall = audioCtx.currentTime;
-            bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-            bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+            const t = audioCtx.currentTime;
+            src.start(t, offset);
+            bgmPhaseRef = t - _pauseBgmPos;
+            _bgmAccumLastWall = t;
+            bgmGain.gain.cancelScheduledValues(t);
+            bgmGain.gain.setValueAtTime(1, t);
           } else { _dbgSnap('createSrc-NULL'); }
-        } else { _dbgSnap('bgmBuf-NULL'); }
-        masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
-        masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
-        _beatPulseCacheFrame = -1;
-        _dbgSnap('doResumeBGM-done');
+          _dbgSnap('doResumeBGM-done');
+        }, 100);
       };
       _dbgSnap('UNPAUSE-resume');
       audioCtx.resume().then(() => {
