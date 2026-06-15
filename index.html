@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.80';
+const VERSION = 'v2.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1610,10 +1610,10 @@ function init(fromStartup, fromGameOver) {
   /* 基本1%、高シンクロ時は最大5%まで上昇 */
   const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
   if (_slowSpinPending !== null) {
-    isSlowSpin = _slowSpinPending; // Ctrl+Tチートによる次トライ強制
+    isSlowSpin = !isFever && _slowSpinPending; // Ctrl+Tチートによる次トライ強制
     _slowSpinPending = null;
   } else {
-    isSlowSpin = Math.random() < slowProb;
+    isSlowSpin = !isFever && Math.random() < slowProb;
   }
   /* ペンディング中かつスローハンドでなければフィーバーを起動 */
   if (feverPending && !isSlowSpin) {
@@ -1892,6 +1892,7 @@ function update() {
             initGyozas(_gyozaBurst(PAYOUT_RATE.reachJackpot), true);
             unlockAch('reach_jackpot');
             playSE('reach_jackpot');
+            if (!feverPending && Math.random() < 0.30) feverPending = true;
           } else {
             launchFireworks();
             initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot), true);
