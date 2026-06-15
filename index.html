@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.12';
+const VERSION = 'v3.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5088,14 +5088,6 @@ function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
 }
 _rafId = requestAnimationFrame(_gameLoop);
-
-/* AudioContext をページ読み込み時に事前生成する。
-   iOS Safari は suspended 状態での生成はジェスチャーなしで許可する。
-   これにより最初のタッチでは「生成 + resume」ではなく「resume のみ」になり、
-   iOS がジェスチャーを確実に audio unlock に使えるようになる。
-   renderBGMBuffer() もここで開始するため、START 押下時には BGM バッファが
-   既に完成している可能性が高い。 */
-getAudioCtx();
 
 /* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
 const _dbgLog = [];
