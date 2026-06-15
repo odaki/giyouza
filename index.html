@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.89';
+const VERSION = 'v2.90';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5063,17 +5063,18 @@ function togglePause() {
     /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
        逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
     _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
-    /* BGMソースを停止して再生位置を記録する。
+    /* BGM・ジングル・restartタイマーを一括停止し再生位置を記録する。
        AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
-       ポーズ中にaudioCtx.currentTimeが進んでもBGM位置は凍結されるため、
-       解除後は _pauseBgmPos から再開でき、描画と音のズレが生じない。 */
-    if (audioCtx && bgmSource) {
-      _pauseBgmPos  = _bgmAccumAudioTime;
-      _pauseBgmRate = _bgmRateTo; // ランプ完了後のターゲットレートを保存
+       ジングル中(bgmSource=null)でもここで止めることで、サスペンド状態のコンテキストで
+       ジングルが完了してstartBGM()が呼ばれる競合を防ぐ。 */
+    if (audioCtx) {
+      if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
+      stopJingle(); // ジングル中ポーズ: バックグラウンドで走り続けてstartBGMを呼ぶのを防ぐ
+      /* bgmSource があれば現在位置を保存、なければ先頭(0)から再開 */
+      _pauseBgmPos  = bgmSource ? _bgmAccumAudioTime : 0;
+      _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
       _destroyBGMSource();
     }
-    /* ジングル中など bgmSource がない場合も含め masterGain を 0 にして無音化する。
-       jingleScheduler の setInterval は動き続けるが gain=0 で無音になる。 */
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
@@ -5095,19 +5096,19 @@ function togglePause() {
           const _s = audioCtx.createBufferSource();
           _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
         } catch(_e) {}
-        /* BGMをポーズ位置から再起動 */
-        if (!bgmSource && bgmBuffer) {
+        /* BGMをポーズ位置から再起動。
+           !bgmSource チェックをしない: ポーズ中にサスペンド状態のコンテキストで
+           startBGM()が呼ばれていた場合、そのソースは正常に再生されない可能性があるため
+           常に破棄して再作成する。 */
+        if (bgmBuffer) {
+          _destroyBGMSource(); // サスペンド中に作られた不確かなソースを確実に破棄
           const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
           const offset  = _pauseBgmPos % loopDur;
           const src     = _createBGMSource(_pauseBgmRate);
           if (src) {
             src.start(audioCtx.currentTime, offset);
-            /* bgmPhaseRefを調整: nextBeatQuantTime等の壁時計計算が再開後も正確になるよう
-               (audioCtx.currentTime - bgmPhaseRef) = _pauseBgmPos となるように設定 */
             bgmPhaseRef = audioCtx.currentTime - _pauseBgmPos;
-            /* アキュムレータのwall時刻をリセット: 次回_bgmAccumStepのdtが0になり、位置が飛ばない */
             _bgmAccumLastWall = audioCtx.currentTime;
-            /* bgmGainを確実に1に戻す（stopBGMが呼ばれていた場合に備えて） */
             bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
             bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
           }
