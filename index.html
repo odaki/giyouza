@@ -65,7 +65,6 @@ canvas {
 <div id="canvas-wrap">
   <canvas id="c"></canvas>
   <button id="fs-btn" aria-label="全画面切替"></button>
-  <div id="dbg" style="display:none;position:fixed;bottom:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
 </div>
 
 <script>
@@ -114,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.13';
+const VERSION = 'v3.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -820,14 +819,11 @@ function _recreateAudioGraph() {
    suspended/running は resume() で対応。
    ※ 必ずタッチイベントハンドラの同期コード内で呼ぶこと（iOS ユーザーアクティベーション要件）。 */
 function _resumeAudioCtx(callback) {
-  _dbgSnap('_rCtx:' + audioCtx.state);
   if (audioCtx.state === 'interrupted') {
     _recreateAudioGraph();
     setTimeout(callback, 0);
   } else {
-    audioCtx.resume()
-      .then(() => { _dbgSnap('_rCtx-ok:' + audioCtx.state); setTimeout(callback, 0); })
-      .catch(() => { _dbgSnap('_rCtx-err:' + audioCtx.state); callback(); });
+    audioCtx.resume().then(() => setTimeout(callback, 0)).catch(callback);
   }
 }
 
@@ -1152,7 +1148,6 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
 document.addEventListener('visibilitychange', () => {
-  _dbgSnap('visib-' + (document.hidden ? 'H' : 'V') + ':' + (audioCtx ? audioCtx.state : 'null'));
   if (document.hidden) {
     if (!isPaused && phase !== 'startup') togglePause();
   }
@@ -1561,7 +1556,6 @@ function playStartJingle(onEnd) {
      BGM はすでに起動済みなのでジングルを再生しない。 */
   if (bgmSource) { return; }
   stopJingle();
-  _dbgSnap('jingle-start:' + audioCtx.state);
   jingleStep    = 0;
   jingleNextTime = audioCtx.currentTime + 0.10;
   jingleScheduler = setInterval(() => scheduleJingle(onEnd), 80);
@@ -1634,7 +1628,6 @@ function init(fromStartup, fromGameOver) {
        _resumeAudioCtx 経由で確認し、まだ suspended なら touchend ジェスチャーで
        再度 resume() して確実に unlock してからジングルを開始する。 */
     applyMuteGain();
-    _dbgSnap('init-fromStartup:' + audioCtx.state);
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
@@ -3529,67 +3522,6 @@ function draw() {
     ctx.font = '11px sans-serif';
     ctx.fillStyle = 'rgba(245,208,32,0.4)';
     ctx.fillText('© 2026 Michiyasu ODAKI', W/2, H - 24);
-    /* ── レイテンシ診断・フレームグラフ（右下・左下）: _lat() でトグル ── */
-    if (audioCtx && window._dbgLatency) {
-      const outL = audioCtx.outputLatency ?? 0;
-      const baseL = audioCtx.baseLatency ?? 0;
-      const total = _hwLatency;
-      const lines = [
-        `outputLatency : ${(outL  *1000).toFixed(1)} ms`,
-        `baseLatency   : ${(baseL *1000).toFixed(1)} ms`,
-        `total hw      : ${(total *1000).toFixed(1)} ms`,
-        `BEAT_ADVANCE  : ${(_BEAT_DISPLAY_ADVANCE*1000).toFixed(1)} ms`,
-        `hw+adv (→${(_BEAT_ADVANCE_TARGET*1000).toFixed(0)}ms): ${((total+_BEAT_DISPLAY_ADVANCE)*1000).toFixed(1)} ms`,
-      ];
-      ctx.font = '11px monospace';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'bottom';
-      const lh = 15, px = W - 10, py = H - 10;
-      lines.slice().reverse().forEach((l, i) => {
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(px - ctx.measureText(l).width - 4, py - i*lh - 13, ctx.measureText(l).width + 8, lh);
-        ctx.fillStyle = 'rgba(245,208,32,0.9)';
-        ctx.fillText(l, px, py - i*lh);
-      });
-      /* ── フレーム時間グラフ（左下隅） ── */
-      {
-        const gw = 160, gh = 60, gx = 10, gy = H - gh - 10;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(gx, gy, gw, gh);
-        /* 16ms / 33ms ガイドライン */
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 0.5;
-        [16.7, 33].forEach(ms => {
-          const y = gy + gh - (ms / 50) * gh;
-          ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx + gw, y); ctx.stroke();
-        });
-        const barW = gw / _FRAME_BUF_SIZE;
-        let maxFt = 0, sumFt = 0, maxWt = 0, sumWt = 0, n = 0;
-        for (let i = 0; i < _FRAME_BUF_SIZE; i++) {
-          const idx = (_frameTimesIdx - _FRAME_BUF_SIZE + i + _FRAME_BUF_SIZE) % _FRAME_BUF_SIZE;
-          const ft = _frameTimes[idx];
-          const wt = _frameWorkTimes[idx];
-          if (ft === 0) continue;
-          n++;
-          maxFt = Math.max(maxFt, ft); sumFt += ft;
-          maxWt = Math.max(maxWt, wt); sumWt += wt;
-          /* rAF間隔バー（背景・薄め） */
-          const barH = Math.min(gh, (ft / 50) * gh);
-          ctx.fillStyle = ft > 33 ? 'rgba(255,80,80,0.4)' : 'rgba(80,180,80,0.35)';
-          ctx.fillRect(gx + i * barW, gy + gh - barH, Math.max(1, barW - 0.5), barH);
-          /* 処理時間バー（前面・明るめ） */
-          const wbarH = Math.min(gh, (wt / 50) * gh);
-          ctx.fillStyle = wt > 13 ? 'rgba(255,120,0,0.95)' : 'rgba(80,220,255,0.9)';
-          ctx.fillRect(gx + i * barW, gy + gh - wbarH, Math.max(1, barW - 0.5), wbarH);
-        }
-        const avgFt = n > 0 ? sumFt / n : 0;
-        const avgWt = n > 0 ? sumWt / n : 0;
-        ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-        ctx.fillStyle = 'rgba(80,220,255,0.9)';
-        ctx.fillText(`work avg:${avgWt.toFixed(1)} max:${maxWt.toFixed(1)}ms`, gx + 2, gy + 2);
-        ctx.fillStyle = 'rgba(180,255,180,0.8)';
-        ctx.fillText(`raf  avg:${avgFt.toFixed(1)} max:${maxFt.toFixed(1)}ms`, gx + 2, gy + 13);
-      }
-    }
     ctx.restore();
   }
 
@@ -5049,7 +4981,6 @@ function drawStartup() {
 
   ctx.restore();
 
-  /* ── DEBUG OVERLAY: setInterval で独立更新 (remove before release) ── */
 }
 
 /* ════════════════ Loop / Input ════════════════ */
@@ -5089,24 +5020,6 @@ function _gameLoop(t) {
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
-/* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
-const _dbgLog = [];
-/* Web Inspector コンソールから _dbg() / _lat() で表示/非表示を切り替え */
-window._dbg = () => { const el = document.getElementById('dbg'); if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none'; };
-window._dbgLatency = false;
-window._lat = () => { window._dbgLatency = !window._dbgLatency; };
-function _dbgSnap(label) {
-  const t = audioCtx ? audioCtx.currentTime.toFixed(2) : '-';
-  _dbgLog.push(
-    `[${label}] t=${t}`,
-    ` ctx:${audioCtx ? audioCtx.state : 'null'} src:${bgmSource ? 'SET' : 'null'}`,
-    ` mG:${masterGain ? masterGain.gain.value.toFixed(2) : '-'} bG:${bgmGain ? bgmGain.gain.value.toFixed(2) : '-'}`,
-    ` wall:${_bgmAccumLastWall !== null ? _bgmAccumLastWall.toFixed(2) : 'null'} pos:${_pauseBgmPos.toFixed(2)}`,
-  );
-  if (_dbgLog.length > 40) _dbgLog.splice(0, 4);
-  const el = document.getElementById('dbg');
-  if (el) el.textContent = _dbgLog.join('\n');
-}
 
 function togglePause() {
   if (phase === 'startup') return;
@@ -5128,11 +5041,9 @@ function togglePause() {
       _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
       _destroyBGMSource();
     }
-    _dbgSnap('PAUSE[' + (document.hidden ? 'H' : 'V') + ']');
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
-    _dbgSnap('UNPAUSE-start');
     if (_arrowProgressAtPause >= 0 && phase === 'shooting') {
       _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
       _arrowProgressAtPause = -1;
@@ -5140,16 +5051,15 @@ function togglePause() {
     _rafId = requestAnimationFrame(_gameLoop);
     if (audioCtx) {
       const _doResumeBGM = () => {
-        _dbgSnap('doResumeBGM-enter');
         /* masterGain 経由でサイレントバッファを再生して AVAudioSession をアクティブ化する */
         try {
           const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
           const _s = audioCtx.createBufferSource();
           _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
-        } catch(_e) { _dbgSnap('silentBuf-ERR'); }
+        } catch(_e) {}
         applyMuteGain();
         _beatPulseCacheFrame = -1;
-        if (!bgmBuffer) { _dbgSnap('bgmBuf-NULL'); _dbgSnap('doResumeBGM-done'); return; }
+        if (!bgmBuffer) { return; }
         /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
         setTimeout(() => {
           if (isPaused) return;
@@ -5164,11 +5074,9 @@ function togglePause() {
             _bgmAccumLastWall = t;
             bgmGain.gain.cancelScheduledValues(t);
             bgmGain.gain.setValueAtTime(1, t);
-          } else { _dbgSnap('createSrc-NULL'); }
-          _dbgSnap('doResumeBGM-done');
+          }
         }, 100);
       };
-      _dbgSnap('UNPAUSE-resume:' + audioCtx.state);
       _resumeAudioCtx(_doResumeBGM);
     }
   }
