@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.84';
+const VERSION = 'v2.85';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -228,12 +228,12 @@ function _updateDisplayCaches() {
 }
 
 /* ── ギヨウザオブジェクトプール ──
-   makeGyozaObj() が毎回 Array.from + 5個のオブジェクト生成＋HSL文字列を生成するのを防ぐ。
+   makeItem() が毎回 Array.from + 5個のオブジェクト生成＋HSL文字列を生成するのを防ぐ。
    greens配列も事前確保してフィールドをリセットするだけで再利用する。 */
-const _GYOZA_POOL_SIZE = 300;
-const _gyozaPool = [];
-for (let _i = 0; _i < _GYOZA_POOL_SIZE; _i++) {
-  _gyozaPool.push({
+const _ITEM_POOL_SIZE = 300;
+const _itemPool = [];
+for (let _i = 0; _i < _ITEM_POOL_SIZE; _i++) {
+  _itemPool.push({
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     skinL:'', skinD:'', bodyGrd:null, _dead:true, _rotPhase:0,
     greens: [{dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
@@ -241,17 +241,17 @@ for (let _i = 0; _i < _GYOZA_POOL_SIZE; _i++) {
              {dx:0,dy:0,rx:0,ry:0,a:0,color:''}],
   });
 }
-function _gyozaAlloc() {
-  for (let i = 0; i < _gyozaPool.length; i++) {
-    if (_gyozaPool[i]._dead) return _gyozaPool[i];
+function _itemAlloc() {
+  for (let i = 0; i < _itemPool.length; i++) {
+    if (_itemPool[i]._dead) return _itemPool[i];
   }
-  return _gyozaPool[0]; // fallback（最古を強制再利用）
+  return _itemPool[0]; // fallback（最古を強制再利用）
 }
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
-/* gyozas.sort() に毎フレーム渡す comparator。定数化でクロージャ生成ゼロ */
-const _cmpGyozaY    = (a, b) => a.y - b.y;
+/* items.sort() に毎フレーム渡す comparator。定数化でクロージャ生成ゼロ */
+const _cmpItemY    = (a, b) => a.y - b.y;
 /* 毎フレーム呼ばれる swapRemove の pred を定数化してクロージャ生成ゼロに */
 const _predParticle  = p => p.life > 0 && p.r > 0.3;
 const _predTimer     = p => p.timer > 0;
@@ -260,7 +260,7 @@ const _predLife      = o => o.life > 0;
 const _predUzaText   = t => t.age < t.life;
 const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
 /* H・W は起動後不変なので定数クロージャとして安全に使える */
-const _predGyoza     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
+const _predItem     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
 /* done フェーズで毎フレーム呼ばれる allShown 判定用 pred */
 const _predWheelShown = w => !w.result || w.resultPop >= 1;
 
@@ -392,7 +392,7 @@ let _cheatFeverQueued = false; // Ctrl+F予約
 let _cheatSlowQueued  = null;  // Ctrl+T予約: null=なし / true=スロー / false=通常
 
 /* ── ギヨウザコイン ── */
-const BET_OPTIONS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
+const BET_OPTIONS = [1, 5, 10, 25, 50, 100];
 /* 配当倍率（没収型: 掛け金は戻らない） */
 const PAYOUT_RATE = {
   reachJackpot: 60,
@@ -402,10 +402,10 @@ const PAYOUT_RATE = {
 };
 /* ペイアウト倍率 → ギヨウザ降下数（対数スケール）
    k=20, MAX=150: ×12→72, ×24→92, ×60→118 */
-const _GYOZA_BURST_K   = 20;
-const _GYOZA_BURST_MAX = 150;
-function _gyozaBurst(rate) {
-  return Math.min(_GYOZA_BURST_MAX, Math.round(Math.log2(rate) * _GYOZA_BURST_K));
+const _ITEM_BURST_K   = 20;
+const _ITEM_BURST_MAX = 150;
+function _itemBurst(rate) {
+  return Math.min(_ITEM_BURST_MAX, Math.round(Math.log2(rate) * _ITEM_BURST_K));
 }
 
 /* 当たり判定テーブル:
@@ -419,9 +419,9 @@ function _gyozaBurst(rate) {
    ※ 関数宣言はホイスティングされるため、この定数より後に定義された関数も参照可能 */
 const HIT_TABLE = [
   //          type        pat        payout      medId         onHit               update           draw                drawDelay
-  { type:'jackpot',  pat:TARGET,   payout:'jackpot', medId:null,       onHit:null,              update:null,          draw:drawGyozas,         drawDelay:0  },
+  { type:'jackpot',  pat:TARGET,   payout:'jackpot', medId:null,       onHit:null,              update:null,          draw:drawItems,         drawDelay:0  },
   { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  medId:'uyouyo',   onHit:initWorms,         update:updateWorms,   draw:drawWorms,          drawDelay:40 },
-  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawGyozas,         drawDelay:0  },
+  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawItems,         drawDelay:0  },
   { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:null,          draw:drawYoyoyoyo,       drawDelay:50 },
   { type:'uuuu',     pat:UUUU,     payout:'hitMed',  medId:'uuuu',     onHit:initUuuu,          update:updateUuuu,    draw:drawUuuu,           drawDelay:50 },
   { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  medId:'gyogyo',   onHit:initGyogyo,        update:null,          draw:drawGyogyo,         drawDelay:45 },
@@ -493,7 +493,7 @@ const ACHIEVEMENTS = [
   { id:'bet_max',       icon:'💎', name:'大勝負師',           desc:'ベット100でプレイした'               },
   { id:'poor',          icon:'💸', name:'文無し',             desc:'所持コインが一桁になった'            },
   { id:'comeback',      icon:'🔥', name:'不死鳥',             desc:'所持10以下から200以上に大逆転した'   },
-  { id:'big_bet_win',   icon:'🃏', name:'大博打',             desc:'ベット1000以上で大当たりを達成した'  },
+  { id:'big_bet_win',   icon:'🃏', name:'天運',               desc:'ベット100で大当たりを達成した'       },
   { id:'all_medium',    icon:'🏆', name:'全種制覇',           desc:'全9種の当たりを達成した'             },
 ];
 const LS_ACH    = 'giyouza_ach';
@@ -1392,7 +1392,7 @@ const REACH_DECEL_FRAMES   = 180; // この間スピードを減衰させる
 const FEVER_BANNER_FRAMES  = 180; // フィーバーバナー表示総フレーム数（フェードイン20f＋本体＋フェードアウト30f）
 const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
-let worms = [], uzaTexts = [], gyozas = [];
+let worms = [], uzaTexts = [], items = [];
 let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
 
 /* ── 吉祥雲配置 ── */
@@ -1565,7 +1565,7 @@ function initGame() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   _resetFeverState();
-  for (const g of gyozas) g._dead = true; gyozas = [];
+  for (const g of items) g._dead = true; items = [];
   init(true);
 }
 
@@ -1582,7 +1582,7 @@ function gameOverReset() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';
   _resetFeverState();
-  for (const g of gyozas) g._dead = true; gyozas = [];
+  for (const g of items) g._dead = true; items = [];
   lsSave();
   /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -1876,31 +1876,31 @@ function update() {
         }
         /* 残存ギヨウザがある場合: 当たりエフェクト発動前に地面スルーで退場させる
            フィーバー中の連続大当たりは積み重ねたいため除外 */
-        if (gyozas.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushGyozas();
+        if (items.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushItems();
         if (_isJackpot) {
           /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'complete') _jackpotAutoReset = true;
           if (_jackpotAutoReset) {
             const _isComplete = feverEndedReason === 'complete';
             /* フル連チャン達成時: ギヨウザ倍増（上限300）・配当は calcPayout で×2 */
-            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
+            initItems(_itemBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
             playSE('jackpot');
           } else if (isReach) {
             isReachJackpot = true;
             reachFlash = 1;
             launchReachFireworks();
-            initGyozas(_gyozaBurst(PAYOUT_RATE.reachJackpot), true);
+            initItems(_itemBurst(PAYOUT_RATE.reachJackpot), true);
             unlockAch('reach_jackpot');
             playSE('reach_jackpot');
             if (!feverPending && Math.random() < 0.30) feverPending = true;
           } else {
             launchFireworks();
-            initGyozas(_gyozaBurst(PAYOUT_RATE.jackpot), true);
+            initItems(_itemBurst(PAYOUT_RATE.jackpot), true);
             playSE('jackpot');
           }
           unlockAch('first_jackpot');
           jackpotCount++;
-          if (bet >= 1000) unlockAch('big_bet_win');
+          if (bet >= 100) unlockAch('big_bet_win');
           lsSaveStats();
         }
         /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
@@ -2026,7 +2026,7 @@ function update() {
 
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (_isJackpot && endTimer % 85 === 40) launchFireworks();
-    if (gyozas.length > 0)                    updateGyozas();
+    if (items.length > 0)                    updateItems();
     if (hitType === 'gizagiza' && endTimer % 120 === 60) launchGizaFireworks();
     if (_activeEffect?.update) _activeEffect.update();
   }
@@ -2039,7 +2039,7 @@ function update() {
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
   /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
-  if (gyozas.length > 0 && phase !== 'done') updateGyozas();
+  if (items.length > 0 && phase !== 'done') updateItems();
 
   /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
   if (feverStartBannerTimer > 0) {
@@ -2137,7 +2137,7 @@ function spawnWorm() {
   else if (side===2){ x=Math.random()*W; y=H+40;  angle=-Math.PI/2; }
   else              { x=-40;   y=Math.random()*H; angle= 0;          }
   angle += (Math.random()-0.5)*0.8;
-  const g       = makeGyozaObj(x, y, 0, 0);
+  const g       = makeItem(x, y, 0, 0);
   g.angle       = angle;
   g.speed       = 1.2 + Math.random()*1.5;
   g.wiggle      = Math.random()*Math.PI*2;
@@ -2166,15 +2166,15 @@ function updateWorms() {
 
 function drawWorms() {
   for (const w of worms) {
-    drawOneGyoza(w);
+    drawOneItem(w);
   }
   ctx.globalAlpha = 1;
   ctx.restore();
 }
 
 /* ════════════════ 落下ギヨウザ ════════════════ */
-function makeGyozaObj(x, y, vx, vy) {
-  const g    = _gyozaAlloc();
+function makeItem(x, y, vx, vy) {
+  const g    = _itemAlloc();
   g._dead    = false;
   const size = 34 + Math.random() * 8;
   g.x = x; g.y = y; g.vx = vx; g.vy = vy; g.age = 0; g._flush = false;
@@ -2204,8 +2204,8 @@ function makeGyozaObj(x, y, vx, vy) {
 }
 
 /* 残存ギヨウザを地面スルーで画面下へ落下させて退場させる */
-function flushGyozas() {
-  for (const g of gyozas) {
+function flushItems() {
+  for (const g of items) {
     g._flush = true;
     g.vy = 6 + Math.random() * 5;   // 強めの下向き初速
     g.vx += (Math.random() - 0.5) * 2; // 少し左右にばらす
@@ -2214,29 +2214,29 @@ function flushGyozas() {
 
 /* addOnly=true のとき既存ギヨウザを保持して追加（フィーバー連続大当たり用）。
    上限200を超えないようキャップする。 */
-function initGyozas(burst = 70, addOnly = false, max = 200) {
+function initItems(burst = 70, addOnly = false, max = 200) {
   if (!addOnly) {
-    for (const g of gyozas) g._dead = true; // 既存をプールに返却
-    gyozas = [];
+    for (const g of items) g._dead = true; // 既存をプールに返却
+    items = [];
   }
   /* 最初に中央からどさっとまとめて投下 */
   const FEVER_MAX = max;
-  const toAdd = addOnly ? Math.min(burst, FEVER_MAX - gyozas.length) : burst;
+  const toAdd = addOnly ? Math.min(burst, FEVER_MAX - items.length) : burst;
   for (let i = 0; i < toAdd; i++) {
     const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
     const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
     const vx   = (Math.random()-0.5) * 5;
     const vy   = 1.5 + Math.random() * 4;
-    gyozas.push(makeGyozaObj(cx, y, vx, vy));
+    items.push(makeItem(cx, y, vx, vy));
   }
 }
 
-function spawnGyoza() {
+function spawnItem() {
   /* 通常スポーン: 画面全体からランダムに */
   const x  = Math.random() * (W + 80) - 40;
   const vy = Math.random() * 1.5 + 0.5;
   const vx = (Math.random() - 0.5) * 4;
-  gyozas.push(makeGyozaObj(x, -50, vx, vy));
+  items.push(makeItem(x, -50, vx, vy));
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
@@ -2249,11 +2249,11 @@ const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
      複数イテレーション繰り返すことで安定した堆積を実現
    ・支えを失ったギヨウザは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
-function updateGyozas() {
+function updateItems() {
   /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ */
   if (isReachJackpot) {
     const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
-    if (endTimer % spawnRate === 0 && gyozas.length < 240) spawnGyoza();
+    if (endTimer % spawnRate === 0 && items.length < 240) spawnItem();
   }
 
   const GRAVITY     = 0.38;
@@ -2263,7 +2263,7 @@ function updateGyozas() {
   const ITERS       = 5;      // 衝突解決イテレーション数
 
   /* ① 積分: 重力適用・位置更新 */
-  for (const g of gyozas) {
+  for (const g of items) {
     g.age++;
     g.vy        += GRAVITY;
     g.vx        *= 0.997;        // 空気抵抗
@@ -2278,7 +2278,7 @@ function updateGyozas() {
   for (let iter = 0; iter < ITERS; iter++) {
 
     /* 地面 & 左右壁 */
-    for (const g of gyozas) {
+    for (const g of items) {
       const r = g.size * 0.52;
       if (!g._flush && g.y + r > GROUND_Y) {
         g.y = GROUND_Y - r;
@@ -2306,12 +2306,12 @@ function updateGyozas() {
     }
 
     /* ギヨウザ同士の円衝突 */
-    for (let i = 0; i < gyozas.length; i++) {
-      const a = gyozas[i];
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i];
       if (a._flush) continue; // 落下中は衝突スキップ
       const ra = a.size * 0.52;
-      for (let j = i + 1; j < gyozas.length; j++) {
-        const b  = gyozas[j];
+      for (let j = i + 1; j < items.length; j++) {
+        const b  = items[j];
         if (b._flush) continue;
         const rb = b.size * 0.52;
         const minD = ra + rb;
@@ -2356,12 +2356,12 @@ function updateGyozas() {
   }
 
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
-  swapRemove(gyozas, _predGyoza, _deadify);
-  /* updateの末尾でソートしておくことでdrawGyozas側でのslice+sortを排除 */
-  gyozas.sort(_cmpGyozaY);
+  swapRemove(items, _predItem, _deadify);
+  /* updateの末尾でソートしておくことでdrawItems側でのslice+sortを排除 */
+  items.sort(_cmpItemY);
 }
 
-function drawOneGyoza(g) {
+function drawOneItem(g) {
   const s = g.size;
   ctx.save();
   ctx.translate(g.x, g.y);
@@ -2435,10 +2435,10 @@ function drawOneGyoza(g) {
   ctx.restore();
 }
 
-function drawGyozas() {
-  if (!gyozas.length) return;
-  /* updateGyozas末尾でソート済みのため slice+sort 不要 */
-  for (const g of gyozas) drawOneGyoza(g);
+function drawItems() {
+  if (!items.length) return;
+  /* updateItems末尾でソート済みのため slice+sort 不要 */
+  for (const g of items) drawOneItem(g);
 }
 
 /* ════════════════ ウザウザ: ウザいテキスト大量発生 ════════════════ */
@@ -2490,10 +2490,10 @@ function drawUzaTexts() {
 
 /* ════════════════ ギウギウ: ぎゅうぎゅう詰め ════════════════ */
 function initGiugiu() {
-  for (const g of gyozas) g._dead = true;
-  gyozas = [];
+  for (const g of items) g._dead = true;
+  items = [];
   /* 外周リングから中央へ向かって一斉に投下 */
-  const N = _gyozaBurst(PAYOUT_RATE.hitMed);
+  const N = _itemBurst(PAYOUT_RATE.hitMed);
   const R = Math.hypot(W, H) * 0.55;
   for (let i = 0; i < N; i++) {
     const angle = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
@@ -2502,19 +2502,19 @@ function initGiugiu() {
     const spd = 32 + Math.random() * 10;
     const vx  = (W/2 - sx) / R * spd;
     const vy  = (H/2 - sy) / R * spd;
-    gyozas.push(makeGyozaObj(sx, sy, vx, vy));
+    items.push(makeItem(sx, sy, vx, vy));
   }
 }
 
 function updateGiugiu() {
   /* 外縁から追加投入（最大60個） */
-  if (endTimer % 15 === 0 && gyozas.length < 30) {
+  if (endTimer % 15 === 0 && items.length < 30) {
     const angle = Math.random() * Math.PI * 2;
     const R = Math.hypot(W, H) * 0.55;
     const sx = W/2 + Math.cos(angle) * R;
     const sy = H/2 + Math.sin(angle) * R;
     const spd = 32 + Math.random() * 10;
-    gyozas.push(makeGyozaObj(sx, sy,
+    items.push(makeItem(sx, sy,
       (W/2 - sx) / R * spd, (H/2 - sy) / R * spd));
   }
 
@@ -2542,7 +2542,7 @@ function updateGiugiu() {
   const ATTRACT_DYNA = ATTRACT * attractMul;
 
   /* ① 距離反比例引力 + 位置更新 */
-  for (const g of gyozas) {
+  for (const g of items) {
     const dx = CX - g.x, dy = CY - g.y;
     const d  = Math.sqrt(dx*dx + dy*dy) || 0.001;
     const forceMag = ATTRACT_DYNA * (1 + ATTRACT_REF / (d + ATTRACT_REF));
@@ -2561,10 +2561,10 @@ function updateGiugiu() {
 
   /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス） */
   for (let iter = 0; iter < ITERS; iter++) {
-    for (let i = 0; i < gyozas.length; i++) {
-      const a = gyozas[i], ra = a.size * 0.52;
-      for (let j = i + 1; j < gyozas.length; j++) {
-        const b  = gyozas[j], rb = b.size * 0.52;
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i], ra = a.size * 0.52;
+      for (let j = i + 1; j < items.length; j++) {
+        const b  = items[j], rb = b.size * 0.52;
         const minD = ra + rb;
         const dx = b.x - a.x, dy = b.y - a.y;
         if (Math.abs(dx) >= minD || Math.abs(dy) >= minD) continue;
@@ -2593,7 +2593,7 @@ function updateGiugiu() {
     }
   }
 
-  gyozas.sort(_cmpGyozaY);
+  items.sort(_cmpItemY);
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
@@ -2663,7 +2663,7 @@ function initYoyoyoyo() {
   const count = 14;
   for (let i = 0; i < count; i++) {
     const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*18;
-    const g   = makeGyozaObj(x, 0, 0, 0);
+    const g   = makeItem(x, 0, 0, 0);
     g.phase   = Math.random() * Math.PI * 2;
     g.freq    = 0.055 + Math.random()*0.04;
     g.amp     = H * 0.30 + Math.random() * H * 0.25;
@@ -2693,7 +2693,7 @@ function drawYoyoyoyo() {
     /* ギヨウザ */
     ctx.save();
     ctx.globalAlpha = a;
-    drawOneGyoza(y);
+    drawOneItem(y);
     ctx.restore();
   }
 }
@@ -2968,7 +2968,7 @@ function drawFish(f, t) {
   ctx.stroke();
   ctx.restore();
 
-  /* ── ギヨウザ本体（drawOneGyoza と同じパス構成） ── */
+  /* ── ギヨウザ本体（drawOneItem と同じパス構成） ── */
   /* 本体楕円（焼きギヨウザカラー） */
   const bodyGrd = ctx.createRadialGradient(-s*0.15, -s*0.3, 0, 0, s*0.1, s*1.1);
   bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
@@ -3394,8 +3394,8 @@ function draw() {
 
   /* 2. エフェクト面 */
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
-  /* フィーバー堆積ギヨウザ: _activeEffectがdrawGyozasを担う場合を除いて常時描画 */
-  if (gyozas.length > 0 && _activeEffect?.draw !== drawGyozas) drawGyozas();
+  /* フィーバー堆積ギヨウザ: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
+  if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
 
   /* 白フラッシュ (リーチ大当たり確定の瞬間) */
