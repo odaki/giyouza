@@ -40,6 +40,47 @@
 - 剛体円衝突シミュレーション（ギヨウザ落下・堆積・崩落）
 - `index.html` 単一ファイル完結
 
+## デバッグ
+
+### デバッグオーバーレイ（スナップショットログ）
+
+PAUSE/UNPAUSE 時などの音声状態をスナップショットとしてログに記録します。  
+Safari の Web Inspector コンソールから以下の関数で表示/非表示を切り替えられます（デフォルト非表示）。
+
+```js
+_dbg()   // 画面左下の緑テキストオーバーレイ（スナップショットログ）をトグル
+_lat()   // PAUSE中の右下レイテンシ診断・左下フレームグラフをトグル
+```
+
+### Web Inspector の接続方法
+
+**Mac Safari + iOS Safari（実機）**
+
+1. iPhone: 設定 → Safari → 詳細 → Web インスペクタ をオン
+2. USB ケーブルで Mac に接続
+3. Mac Safari: 設定 → 詳細 → 「Web デベロッパ用の機能を表示」をオン
+4. iPhone の Safari でページを開く
+5. Mac Safari のメニュー: 開発 → デバイス名 → ページを選択
+
+**Mac Safari + iOS シミュレータ（Xcode）**
+
+1. Xcode のシミュレータを起動し、Safari でページを開く
+2. Mac Safari の「開発」メニュー → Simulator → ページを選択  
+   （表示されない場合は Mac Safari を再起動）
+
+### ログの見方
+
+各スナップはイベント名・AudioContext 状態・BGM ソースの有無・Gain 値・BGM 積算位置を記録します。
+
+| フィールド | 内容 |
+|-----------|------|
+| `ctx:` | AudioContext の state (`running` / `suspended` / `interrupted`) |
+| `src:` | BGM BufferSourceNode の有無 (`SET` / `null`) |
+| `mG:` | masterGain の gain 値（0=ミュート, 1=通常） |
+| `bG:` | bgmGain の gain 値（通常は常に 1） |
+| `wall:` | BGM 積算の最終壁時計（null なら BGM 未再生） |
+| `pos:` | PAUSE 時に保存した BGM 再生位置（秒） |
+
 ## 開発セットアップ
 
 ### pre-commitフック（バージョン自動インクリメント）
@@ -51,7 +92,7 @@
 cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
 # pre-commit: index.html の VERSION 定数を自動インクリメントする
-# 例: 'v2.10' → 'v2.11'
+# 例: 'v3.10' → 'v3.11', 'v3.99' → 'v4.00'
 
 FILE="index.html"
 
@@ -63,8 +104,11 @@ fi
 
 MAJOR=$(echo "$CURRENT" | sed "s/v\([0-9]*\)\..*/\1/")
 MINOR=$(echo "$CURRENT" | sed "s/v[0-9]*\.\([0-9]*\)/\1/")
-NEXT_MINOR=$((MINOR + 1))
-NEXT="v${MAJOR}.${NEXT_MINOR}"
+if [ "$MINOR" -ge 99 ]; then
+  NEXT="v$((MAJOR + 1)).00"
+else
+  NEXT="v${MAJOR}.$(printf "%02d" $((MINOR + 1)))"
+fi
 
 sed -i "" "s/const VERSION = '${CURRENT}'/const VERSION = '${NEXT}'/" "$FILE"
 
