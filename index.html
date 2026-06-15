@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.06';
+const VERSION = 'v3.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -800,11 +800,31 @@ function getAudioCtx() {
   return audioCtx;
 }
 
-/* AudioContext を確実に running 状態にしてから callback を呼ぶ
-   resume() は already-running でも即解決する Promise を返すので常に経由する */
-function ensureAudioRunning(callback) {
-  const ctx = getAudioCtx();
-  ctx.resume().then(callback).catch(() => { callback(); });
+/* AudioContext の masterGain/bgmGain グラフを再構築する。
+   interrupted 状態から resume() では復帰できない場合に AudioContext ごと作り直す。
+   AudioBuffer（bgmBuffer, _noiseBuffer）は Context 非依存なので再利用可能。 */
+function _recreateAudioGraph() {
+  try { audioCtx.close(); } catch(_e) {}
+  audioCtx  = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = audioMuted ? 0 : 1;
+  masterGain.connect(audioCtx.destination);
+  bgmGain = audioCtx.createGain();
+  bgmGain.gain.value = 1;
+  bgmGain.connect(masterGain);
+}
+
+/* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
+   interrupted 状態は resume() では復帰できないため _recreateAudioGraph() で再作成する。
+   suspended/running は resume() で対応。
+   ※ 必ずタッチイベントハンドラの同期コード内で呼ぶこと（iOS ユーザーアクティベーション要件）。 */
+function _resumeAudioCtx(callback) {
+  if (audioCtx.state === 'interrupted') {
+    _recreateAudioGraph();
+    setTimeout(callback, 0);
+  } else {
+    audioCtx.resume().then(() => setTimeout(callback, 0)).catch(callback);
+  }
 }
 
 /* 音程ヘルパー: note='C'~'B', octave=3~5 */
@@ -1115,9 +1135,11 @@ function _onFirstGesture() {
   document.removeEventListener('mousedown', _onFirstGesture, true);
   const ctx = getAudioCtx();
   ctx.resume().then(() => {
+    /* masterGain 経由でサイレントバッファを再生して AVAudioSession をアクティブ化する。
+       destination 直結では BGM パスが開通しないことがある（iOS Safari）。 */
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
     const src = ctx.createBufferSource();
-    src.buffer = buf; src.connect(ctx.destination); src.start(0);
+    src.buffer = buf; src.connect(masterGain); src.start(ctx.currentTime);
   }).catch(() => {});
 }
 document.addEventListener('keydown',   _onFirstGesture, true);
@@ -1141,10 +1163,10 @@ function toggleMute() {
   try { localStorage.setItem(LS_MUTE, audioMuted ? '1' : '0'); } catch(e) {}
   /* ミュートは gain だけを制御する。BGMソースの起動・停止はしない。 */
   applyMuteGain();
-  /* ミュート解除時: iOS SafariでバックグラウンドからONになるとaudioCtxがsuspendedのままのことがある。
-     resume()完了後に再度 applyMuteGain() を呼んで gain を確実に反映させる。 */
+  /* ミュート解除時: interrupted/suspended 状態を _resumeAudioCtx で確実に解消する。
+     interrupted は再作成、suspended は resume() で対応。 */
   if (!audioMuted && audioCtx && audioCtx.state !== 'running') {
-    audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
+    _resumeAudioCtx(applyMuteGain);
   }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
      （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償） */
@@ -5113,20 +5135,18 @@ function togglePause() {
     if (audioCtx) {
       const _doResumeBGM = () => {
         _dbgSnap('doResumeBGM-enter');
-        /* iOS Safari: masterGain経由でサイレントバッファを再生してAVAudioSessionを確実にアクティブ化。
-           destination直結ではなくmasterGain経由にすることでBGMと同じパスを通す。 */
+        /* masterGain 経由でサイレントバッファを再生して AVAudioSession をアクティブ化する */
         try {
           const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
           const _s = audioCtx.createBufferSource();
           _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
         } catch(_e) { _dbgSnap('silentBuf-ERR'); }
-        masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
-        masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
+        applyMuteGain();
         _beatPulseCacheFrame = -1;
         if (!bgmBuffer) { _dbgSnap('bgmBuf-NULL'); _dbgSnap('doResumeBGM-done'); return; }
         /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
         setTimeout(() => {
-          if (isPaused) return; // その間にPAUSEされた場合は中止
+          if (isPaused) return;
           _destroyBGMSource();
           const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
           const offset  = _pauseBgmPos % loopDur;
@@ -5143,24 +5163,7 @@ function togglePause() {
         }, 100);
       };
       _dbgSnap('UNPAUSE-resume:' + audioCtx.state);
-      if (audioCtx.state === 'interrupted') {
-        /* iOS Safari: interrupted 状態は resume() では復帰できないため AudioContext を再作成する。
-           AudioBuffer はContext非依存なので bgmBuffer / whiteNoiseBuffer はそのまま再利用できる。 */
-        try { audioCtx.close(); } catch(_e) {}
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-        masterGain = audioCtx.createGain();
-        masterGain.gain.value = audioMuted ? 0 : 1;
-        masterGain.connect(audioCtx.destination);
-        bgmGain = audioCtx.createGain();
-        bgmGain.gain.value = 1;
-        bgmGain.connect(masterGain);
-        _dbgSnap('ctx-recreated');
-        setTimeout(_doResumeBGM, 0);
-      } else {
-        audioCtx.resume().then(() => {
-          setTimeout(_doResumeBGM, 0);
-        }).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
-      }
+      _resumeAudioCtx(_doResumeBGM);
     }
   }
 }
