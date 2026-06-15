@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.01';
+const VERSION = 'v3.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1126,12 +1126,14 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
 document.addEventListener('visibilitychange', () => {
-  _dbgSnap('visib-' + (document.hidden ? 'H' : 'V'));
+  _dbgSnap('visib-' + (document.hidden ? 'H' : 'V') + ':' + (audioCtx ? audioCtx.state : 'null'));
   if (document.hidden) {
     if (!isPaused && phase !== 'startup') togglePause();
-  } else {
-    if (audioCtx && !audioMuted) audioCtx.resume().then(() => { applyMuteGain(); }).catch(() => {});
   }
+  /* フォアグラウンド復帰時の resume() は削除。
+     interrupted 状態を suspended に変えてしまい、PAUSEボタンの
+     interrupted 検知ブランチ（AudioContext 再作成）が動かなくなるため。
+     PAUSEボタンのタッチイベント内で resume()/再作成を確実に行う。 */
 });
 
 function toggleMute() {
