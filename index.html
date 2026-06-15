@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.88';
+const VERSION = 'v2.89';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -357,6 +357,7 @@ let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
 let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音スケジュール用）
 let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニメ用: suspended中も進む）
+let _arrowProgressAtPause = -1; // ポーズ時に shooting 中だった場合のarrowProgress保存値
 const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
 let shootGuard = 0;    // init直後の誤射防止フレームカウンタ
 let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
@@ -5059,6 +5060,9 @@ function togglePause() {
   isPaused = !isPaused;
   if (isPaused) {
     cancelAnimationFrame(_rafId);
+    /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
+       逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
+    _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
     /* BGMソースを停止して再生位置を記録する。
        AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
        ポーズ中にaudioCtx.currentTimeが進んでもBGM位置は凍結されるため、
@@ -5073,6 +5077,13 @@ function togglePause() {
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
+    /* shooting 中にポーズしていた場合: _arrowStartWallTime を現在時刻から逆算して再設定。
+       performance.now() はバックグラウンド中も進み続けるため、そのまま使うと
+       復帰後の最初のフレームで arrowProgress=1 に飛んで即 done 遷移してしまう。 */
+    if (_arrowProgressAtPause >= 0 && phase === 'shooting') {
+      _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
+      _arrowProgressAtPause = -1;
+    }
     /* 描画ループは即座に再開する（音声は resume() 解決後に始動） */
     _rafId = requestAnimationFrame(_gameLoop);
     if (audioCtx) {
