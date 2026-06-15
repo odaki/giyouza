@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.99';
+const VERSION = 'v2.100';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5136,12 +5136,25 @@ function togglePause() {
           _dbgSnap('doResumeBGM-done');
         }, 100);
       };
-      _dbgSnap('UNPAUSE-resume');
-      audioCtx.resume().then(() => {
-        /* iOS Safari では resume().then() のマイクロタスク内では Audio Session が
-           まだ完全にアクティブでないことがある。setTimeout(0) で次の task に回す。 */
+      _dbgSnap('UNPAUSE-resume:' + audioCtx.state);
+      if (audioCtx.state === 'interrupted') {
+        /* iOS Safari: interrupted 状態は resume() では復帰できないため AudioContext を再作成する。
+           AudioBuffer はContext非依存なので bgmBuffer / whiteNoiseBuffer はそのまま再利用できる。 */
+        try { audioCtx.close(); } catch(_e) {}
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = audioMuted ? 0 : 1;
+        masterGain.connect(audioCtx.destination);
+        bgmGain = audioCtx.createGain();
+        bgmGain.gain.value = 1;
+        bgmGain.connect(masterGain);
+        _dbgSnap('ctx-recreated');
         setTimeout(_doResumeBGM, 0);
-      }).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
+      } else {
+        audioCtx.resume().then(() => {
+          setTimeout(_doResumeBGM, 0);
+        }).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
+      }
     }
   }
 }
