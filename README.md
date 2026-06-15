@@ -40,17 +40,55 @@
 - 剛体円衝突シミュレーション（ギヨウザ落下・堆積・崩落）
 - `index.html` 単一ファイル完結
 
+## iOS Safari Web Audio 実装ノート
+
+iOS Safari の Web Audio API は制約が多い。実装時に判明した仕様を記録する。
+
+### AudioContext の状態遷移
+
+| 状態 | 原因 | 復帰方法 |
+|------|------|----------|
+| `suspended` | 生成直後・通常の停止 | ユーザーアクティベーション内で `resume()` |
+| `interrupted` | バックグラウンド移行後 | `close()` + `new AudioContext()` で再作成 |
+| `running` | 正常動作中 | — |
+
+### 重要ルール
+
+**1. `audioCtx.suspend()` 禁止**  
+`suspend()` 後の `resume()` が不安定。無音化は `masterGain.gain.value = 0` のみで行う。
+
+**2. サイレントバッファは `masterGain` 経由必須**  
+`ctx.destination` 直結では AVAudioSession が開通しないことがある。  
+音声パス全体（BGM・SE・ジングル）をアクティブにするには `masterGain → destination` を通す必要がある。
+
+**3. `visibilitychange` で `resume()` しない**  
+バックグラウンド復帰時に `resume()` を呼ぶと `interrupted` → `suspended` に変わり、  
+`interrupted` 状態の検知（AudioContext 再作成）が動かなくなる。  
+フォアグラウンド復帰の音声復帰処理は、ユーザーが PAUSE 解除ボタンを押すタイミングに委ねる。
+
+**4. `interrupted` は `resume()` では戻せない**  
+`audioCtx.close()` して `new AudioContext()` を作り直す（`_recreateAudioGraph()`）。  
+ユーザーアクティベーション内で `new AudioContext()` すると iOS が即 `running` にする。
+
+**5. START ボタンの音声開始は `touchend` で行う**  
+`touchstart` で `resume()` + サイレントバッファ（`_unlockAudio()`）を発行し、  
+指を離す `touchend`（別のユーザーアクティベーション）で `initGame()` を呼ぶ。  
+`touchstart` と同一イベント内で音声スケジューリングすると、iOS が AudioContext を  
+`running` にする前にノートが積まれてしまい無音になることがある。
+
+**6. `new AudioContext()` はユーザーアクティベーション前でも作成できる**  
+`suspended` 状態で待機するだけで、`resume()` はジェスチャー内で呼べばよい。  
+ページロード時に生成しておくと BGM のオフラインレンダリングを事前に完了できる。
+
+### オーディオ関数の役割分担
+
+| 関数 | 用途 |
+|------|------|
+| `_unlockAudio()` | 全タッチ共通。機会があれば unlock する（fire-and-forget） |
+| `_resumeAudioCtx(cb)` | 特定の音声操作前に running を保証してから cb を呼ぶ |
+| `_recreateAudioGraph()` | `interrupted` 復帰専用。AudioContext ごと再作成 |
+
 ## デバッグ
-
-### デバッグオーバーレイ（スナップショットログ）
-
-PAUSE/UNPAUSE 時などの音声状態をスナップショットとしてログに記録します。  
-Safari の Web Inspector コンソールから以下の関数で表示/非表示を切り替えられます（デフォルト非表示）。
-
-```js
-_dbg()   // 画面左下の緑テキストオーバーレイ（スナップショットログ）をトグル
-_lat()   // PAUSE中の右下レイテンシ診断・左下フレームグラフをトグル
-```
 
 ### Web Inspector の接続方法
 
@@ -67,19 +105,6 @@ _lat()   // PAUSE中の右下レイテンシ診断・左下フレームグラフ
 1. Xcode のシミュレータを起動し、Safari でページを開く
 2. Mac Safari の「開発」メニュー → Simulator → ページを選択  
    （表示されない場合は Mac Safari を再起動）
-
-### ログの見方
-
-各スナップはイベント名・AudioContext 状態・BGM ソースの有無・Gain 値・BGM 積算位置を記録します。
-
-| フィールド | 内容 |
-|-----------|------|
-| `ctx:` | AudioContext の state (`running` / `suspended` / `interrupted`) |
-| `src:` | BGM BufferSourceNode の有無 (`SET` / `null`) |
-| `mG:` | masterGain の gain 値（0=ミュート, 1=通常） |
-| `bG:` | bgmGain の gain 値（通常は常に 1） |
-| `wall:` | BGM 積算の最終壁時計（null なら BGM 未再生） |
-| `pos:` | PAUSE 時に保存した BGM 再生位置（秒） |
 
 ## 開発セットアップ
 

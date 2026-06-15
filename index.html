@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.16';
+const VERSION = 'v3.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -801,11 +801,13 @@ function getAudioCtx() {
 }
 
 /* AudioContext の masterGain/bgmGain グラフを再構築する。
-   interrupted 状態から resume() では復帰できない場合に AudioContext ごと作り直す。
+   iOS Safari: interrupted 状態は resume() では復帰不可のため AudioContext ごと作り直す。
+   ユーザーアクティベーション内で new AudioContext() すると iOS が即 running にする。
    AudioBuffer（bgmBuffer, _noiseBuffer）は Context 非依存なので再利用可能。 */
 function _recreateAudioGraph() {
   try { audioCtx.close(); } catch(_e) {}
   audioCtx  = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
   masterGain = audioCtx.createGain();
   masterGain.gain.value = audioMuted ? 0 : 1;
   masterGain.connect(audioCtx.destination);
@@ -815,9 +817,9 @@ function _recreateAudioGraph() {
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
-   interrupted 状態は resume() では復帰できないため _recreateAudioGraph() で再作成する。
-   suspended/running は resume() で対応。
-   ※ 必ずタッチイベントハンドラの同期コード内で呼ぶこと（iOS ユーザーアクティベーション要件）。 */
+   - interrupted: _recreateAudioGraph() で再作成（ジェスチャー内なら即 running）
+   - suspended: resume() で復帰。Promise 解決後に setTimeout(callback, 0)
+   ※ ユーザーアクティベーション（touchstart/touchend/click）内から呼ぶこと。 */
 function _resumeAudioCtx(callback) {
   if (audioCtx.state === 'interrupted') {
     _recreateAudioGraph();
@@ -825,6 +827,21 @@ function _resumeAudioCtx(callback) {
   } else {
     audioCtx.resume().then(() => setTimeout(callback, 0)).catch(callback);
   }
+}
+
+/* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
+   resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
+   サイレントバッファは destination 直結では AVAudioSession が開かないため masterGain 経由必須。
+   特定の音声操作前に確実に running にしたい場合は _resumeAudioCtx(callback) を使う。 */
+function _unlockAudio() {
+  if (!audioCtx) getAudioCtx();
+  if (audioCtx.state === 'running') return;
+  audioCtx.resume().catch(() => {});
+  try {
+    const b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+    const s = audioCtx.createBufferSource();
+    s.buffer = b; s.connect(masterGain); s.start(audioCtx.currentTime);
+  } catch(_e) {}
 }
 
 /* 音程ヘルパー: note='C'~'B', octave=3~5 */
@@ -1124,12 +1141,8 @@ function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockI
 }
 
 
-/* 最初のユーザー操作で AudioContext を作成・resume・unlock する
-   ジェスチャー内で行わないと iOS Safari 等で suspended のまま音が出ない */
-/* マウス・キーボード用: 初回ジェスチャーで AudioContext を生成・resume（デスクトップ向け）
-   iOS touch は capture フェーズが non-capture より先に走るため別扱いすると
-   iOS がユーザージェスチャーと認識できない場合がある。touchstart は除外し
-   メインの touchstart ハンドラ内で直接処理する。 */
+/* デスクトップ向け: キーボード・マウス操作で AudioContext を unlock する。
+   iOS タッチは touchstart/touchend ハンドラ内の _unlockAudio() / _resumeAudioCtx() で処理する。 */
 function _onFirstGesture() {
   document.removeEventListener('keydown',   _onFirstGesture, true);
   document.removeEventListener('mousedown', _onFirstGesture, true);
@@ -1622,11 +1635,11 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: initGame() は touchend から呼ばれる。
-       touchstart で resume() + サイレントバッファを発行済みなので、
-       touchend の時点では AudioContext が running になっているはず。
-       _resumeAudioCtx 経由で確認し、まだ suspended なら touchend ジェスチャーで
-       再度 resume() して確実に unlock してからジングルを開始する。 */
+    /* スタート時: initGame() は touchend から呼ばれる（touchstart ではない）。
+       iOS Safari: touchstart の _unlockAudio() で resume() を発行し、
+       touchend（別のユーザーアクティベーション）までの ~150ms で iOS が
+       AudioContext を running にする。_resumeAudioCtx 経由でジングルを開始し、
+       まだ suspended なら touchend ジェスチャーで再度 resume() する。 */
     applyMuteGain();
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
@@ -5020,6 +5033,12 @@ function _gameLoop(t) {
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
+/* AudioContext をページロード時に事前生成する。
+   iOS Safari は suspended 状態での生成をユーザーアクティベーションなしで許可する。
+   これにより renderBGMBuffer() が即座に開始され、START 押下時に bgmBuffer が完成済みになる。
+   ユーザーアクティベーション前に生成した場合は suspended のまま待機し、
+   最初のタッチで resume() が呼ばれた時点で running になる。 */
+getAudioCtx();
 
 function togglePause() {
   if (phase === 'startup') return;
@@ -5296,26 +5315,11 @@ canvas.addEventListener('mousedown', e=>{
 document.addEventListener('touchstart', e=>{
   if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
-  /* iOS Safari 音声アンロック: capture フェーズを使わず non-capture のこのハンドラ内で
-     AudioContext の生成・resume・無音バッファ再生をすべて同期的に行う。
-     capture フェーズ(_onFirstGesture)からの resume() は iOS がユーザージェスチャーと
-     認識しない場合があり初回タップで音が出ない原因になるため touchstart は除外した。 */
-  if (!audioCtx) {
-    getAudioCtx();
-  }
-  /* iOS Safari: 初回・バックグラウンド復帰後ともに state が 'running' でなければ
-     resume() とサイレントバッファ再生をセットで行う。サイレントバッファが audio output を
-     ジェスチャーに紐付けるため、直後に開始するBGM等が確実に再生される。 */
-  if (audioCtx.state !== 'running') {
-    audioCtx.resume().catch(() => {});
-    try {
-      /* masterGain 経由で再生して BGM パス全体を確実にアクティブ化する。
-         destination 直結では AVAudioSession が開通しないことがある（iOS Safari）。 */
-      const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-      const _s = audioCtx.createBufferSource();
-      _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
-    } catch(_e) {}
-  }
+  /* すべてのタッチで AudioContext をアンロックする。
+     iOS Safari: touchstart はユーザーアクティベーションとして認定される。
+     resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
+     START ボタンの音声スケジューリング（initGame）は touchend で行う（後述）。 */
+  _unlockAudio();
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
