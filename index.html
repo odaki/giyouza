@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.10';
+const VERSION = 'v3.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1623,16 +1623,13 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: STARTボタンのタッチイベント内で resume() を同期的に呼んで
-       iOS の Audio Session をアンロックし、そのまま即座にジングルをスケジュールする。
-       resume() の Promise 解決を待たずに playStartJingle() を呼んでよい理由:
-       ジングルは setInterval で少し先の時刻にノートをスケジュールし続けるため、
-       resume() が数十ms 後に解決した時点でも大半のノートはまだ未来にある。
-       then() や setTimeout で非同期に回すとタッチイベントのコンテキストから外れ
-       iOS に「ユーザー操作なし」と判断されるリスクがある。 */
+    /* スタート時: AudioContext は事前生成済み（suspended）なので、
+       このジェスチャーで resume() だけを行えば iOS が確実に unlock する。
+       ジングルの開始は _resumeAudioCtx 経由で resume() 完了後に行う。
+       これにより "audioCtx 生成 + resume" の二重作業を避け、
+       PAUSE→UNPAUSE と同じ信頼性でオーディオを開始できる。 */
     applyMuteGain();
-    getAudioCtx().resume().catch(() => {});
-    playStartJingle(() => startBGM());
+    _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
@@ -5085,6 +5082,14 @@ function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
 }
 _rafId = requestAnimationFrame(_gameLoop);
+
+/* AudioContext をページ読み込み時に事前生成する。
+   iOS Safari は suspended 状態での生成はジェスチャーなしで許可する。
+   これにより最初のタッチでは「生成 + resume」ではなく「resume のみ」になり、
+   iOS がジェスチャーを確実に audio unlock に使えるようになる。
+   renderBGMBuffer() もここで開始するため、START 押下時には BGM バッファが
+   既に完成している可能性が高い。 */
+getAudioCtx();
 
 /* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
 const _dbgLog = [];
