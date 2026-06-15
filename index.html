@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.85';
+const VERSION = 'v2.86';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -227,7 +227,7 @@ function _updateDisplayCaches() {
   }
 }
 
-/* ── ギヨウザオブジェクトプール ──
+/* ── アイテムオブジェクトプール ──
    makeItem() が毎回 Array.from + 5個のオブジェクト生成＋HSL文字列を生成するのを防ぐ。
    greens配列も事前確保してフィールドをリセットするだけで再利用する。 */
 const _ITEM_POOL_SIZE = 300;
@@ -397,10 +397,10 @@ const BET_OPTIONS = [1, 5, 10, 25, 50, 100];
 const PAYOUT_RATE = {
   reachJackpot: 60,
   jackpot:      24,  // 大当たり
-  hitMed:       12,  // 中当たり（ギヨウザあり）
-  hitSml:        6,  // 小当たり（ギヨウザなし）
+  hitMed:       12,  // 中当たり（アイテムあり）
+  hitSml:        6,  // 小当たり（アイテムなし）
 };
-/* ペイアウト倍率 → ギヨウザ降下数（対数スケール）
+/* ペイアウト倍率 → アイテム降下数（対数スケール）
    k=20, MAX=150: ×12→72, ×24→92, ×60→118 */
 const _ITEM_BURST_K   = 20;
 const _ITEM_BURST_MAX = 150;
@@ -1667,7 +1667,7 @@ function init(fromStartup, fromGameOver) {
   worms      = [];
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
-  /* ギヨウザはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
+  /* アイテムはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
   /* フィーバー終了バナーはタイマーが切れるまで継続（入力に関係なく一定時間表示） */
   for (const o of gigiSparks) o._dead = true;
   gigiSparks  = [];
@@ -1874,15 +1874,15 @@ function update() {
             }
           }
         }
-        /* 残存ギヨウザがある場合: 当たりエフェクト発動前に地面スルーで退場させる
+        /* 残存アイテムがある場合: 当たりエフェクト発動前に地面スルーで退場させる
            フィーバー中の連続大当たりは積み重ねたいため除外 */
         if (items.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushItems();
         if (_isJackpot) {
-          /* フィーバー中の大当たり: ギヨウザ落下＋配当表示のみ・自動リセット */
+          /* フィーバー中の大当たり: アイテム落下＋配当表示のみ・自動リセット */
           if (isFever || feverEndedReason === 'complete') _jackpotAutoReset = true;
           if (_jackpotAutoReset) {
             const _isComplete = feverEndedReason === 'complete';
-            /* フル連チャン達成時: ギヨウザ倍増（上限300）・配当は calcPayout で×2 */
+            /* フル連チャン達成時: アイテム倍増（上限300）・配当は calcPayout で×2 */
             initItems(_itemBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
             playSE('jackpot');
           } else if (isReach) {
@@ -2013,7 +2013,7 @@ function update() {
     if (!isGameOver && isMissResult && !feverEndedReason && endTimer > minWait && allShown && onBeatGrid()) {
       _doAutoReset(); return;
     }
-    /* フィーバー中大当たり: 30f後に自動リセット（ギヨウザ落下のみ、入力待ちなし） */
+    /* フィーバー中大当たり: 30f後に自動リセット（アイテム落下のみ、入力待ちなし） */
     if (_jackpotAutoReset && !isGameOver && endTimer > 30) {
       _doAutoReset(); return;
     }
@@ -2038,7 +2038,7 @@ function update() {
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
-  /* フィーバー堆積ギヨウザ: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
+  /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
   if (items.length > 0 && phase !== 'done') updateItems();
 
   /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
@@ -2122,7 +2122,7 @@ function launchGizaFireworks() {
   }
 }
 
-/* ════════════════ ウヨウヨ: うごめくギヨウザ ════════════════ */
+/* ════════════════ ウヨウヨ: うごめくアイテム ════════════════ */
 function initWorms() {
   for (const g of worms) g._dead = true;
   worms = [];
@@ -2172,7 +2172,7 @@ function drawWorms() {
   ctx.restore();
 }
 
-/* ════════════════ 落下ギヨウザ ════════════════ */
+/* ════════════════ 落下アイテム ════════════════ */
 function makeItem(x, y, vx, vy) {
   const g    = _itemAlloc();
   g._dead    = false;
@@ -2203,7 +2203,7 @@ function makeItem(x, y, vx, vy) {
   return g;
 }
 
-/* 残存ギヨウザを地面スルーで画面下へ落下させて退場させる */
+/* 残存アイテムを地面スルーで画面下へ落下させて退場させる */
 function flushItems() {
   for (const g of items) {
     g._flush = true;
@@ -2212,7 +2212,7 @@ function flushItems() {
   }
 }
 
-/* addOnly=true のとき既存ギヨウザを保持して追加（フィーバー連続大当たり用）。
+/* addOnly=true のとき既存アイテムを保持して追加（フィーバー連続大当たり用）。
    上限200を超えないようキャップする。 */
 function initItems(burst = 70, addOnly = false, max = 200) {
   if (!addOnly) {
@@ -2244,10 +2244,10 @@ const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
 
 /* ────────────────────────────────────────────────────────────
    完全物理シミュレーション:
-   ・全ギヨウザを常に重力・衝突の対象にする
+   ・全アイテムを常に重力・衝突の対象にする
    ・位置修正(Positional Correction) + 速度インパルスを
      複数イテレーション繰り返すことで安定した堆積を実現
-   ・支えを失ったギヨウザは再落下し横方向にも動く
+   ・支えを失ったアイテムは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
 function updateItems() {
   /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ */
@@ -2259,7 +2259,7 @@ function updateItems() {
   const GRAVITY     = 0.38;
   const RESTITUTION = 0.06;   // 反発係数(低=ほぼ非弾性)
   const G_FRICTION  = 0.80;   // 地面摩擦
-  const G_FRICTION2 = 0.92;   // ギヨウザ間摩擦
+  const G_FRICTION2 = 0.92;   // アイテム間摩擦
   const ITERS       = 5;      // 衝突解決イテレーション数
 
   /* ① 積分: 重力適用・位置更新 */
@@ -2305,7 +2305,7 @@ function updateItems() {
       }
     }
 
-    /* ギヨウザ同士の円衝突 */
+    /* アイテム同士の円衝突 */
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
       if (a._flush) continue; // 落下中は衝突スキップ
@@ -2522,7 +2522,7 @@ function updateGiugiu() {
   const ATTRACT_REF = 50;    // 距離反比例の参照距離: d=REF で引力2倍、d→∞ で引力1倍
   const DAMPING     = 0.93;  // 速度減衰
   const RESTITUTION = 0.50;  // 反発係数
-  const FRICTION2   = 0.88;  // ギヨウザ間摩擦
+  const FRICTION2   = 0.88;  // アイテム間摩擦
   const ITERS       = 4;
   /* 重力発生点をリサージュ軌道でゆっくりドリフト（異周波数で不規則に動く） */
   const driftR = Math.min(W, H) * 0.10;
@@ -3394,7 +3394,7 @@ function draw() {
 
   /* 2. エフェクト面 */
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
-  /* フィーバー堆積ギヨウザ: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
+  /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
   if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
 
