@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.87';
+const VERSION = 'v2.88';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5073,28 +5073,50 @@ function togglePause() {
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
   } else {
-    if (audioCtx) {
-      /* BGMをポーズ位置から再起動 */
-      if (!bgmSource && bgmBuffer) {
-        const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
-        const offset  = _pauseBgmPos % loopDur;
-        const src     = _createBGMSource(_pauseBgmRate);
-        if (src) {
-          src.start(audioCtx.currentTime, offset);
-          /* bgmPhaseRefを調整: nextBeatQuantTime等の壁時計計算が再開後も正確になるよう
-             (audioCtx.currentTime - bgmPhaseRef) = _pauseBgmPos となるように設定 */
-          bgmPhaseRef = audioCtx.currentTime - _pauseBgmPos;
-          /* アキュムレータのwall時刻をリセット: 次回_bgmAccumStepのdtが0になり、位置が飛ばない */
-          _bgmAccumLastWall = audioCtx.currentTime;
-          /* bgmGainを確実に1に戻す（stopBGMが呼ばれていた場合に備えて） */
-          bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-          bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
-        }
-      }
-      masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
-      masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
-    }
+    /* 描画ループは即座に再開する（音声は resume() 解決後に始動） */
     _rafId = requestAnimationFrame(_gameLoop);
+    if (audioCtx) {
+      const _doResumeBGM = () => {
+        /* iOS: resume() 解決直後にサイレントバッファを再生して audio output をジェスチャーに
+           紐付ける。これにより直後の BGM start() が確実に再生される。 */
+        try {
+          const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+          const _s = audioCtx.createBufferSource();
+          _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
+        } catch(_e) {}
+        /* BGMをポーズ位置から再起動 */
+        if (!bgmSource && bgmBuffer) {
+          const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
+          const offset  = _pauseBgmPos % loopDur;
+          const src     = _createBGMSource(_pauseBgmRate);
+          if (src) {
+            src.start(audioCtx.currentTime, offset);
+            /* bgmPhaseRefを調整: nextBeatQuantTime等の壁時計計算が再開後も正確になるよう
+               (audioCtx.currentTime - bgmPhaseRef) = _pauseBgmPos となるように設定 */
+            bgmPhaseRef = audioCtx.currentTime - _pauseBgmPos;
+            /* アキュムレータのwall時刻をリセット: 次回_bgmAccumStepのdtが0になり、位置が飛ばない */
+            _bgmAccumLastWall = audioCtx.currentTime;
+            /* bgmGainを確実に1に戻す（stopBGMが呼ばれていた場合に備えて） */
+            bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+            bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          }
+        }
+        masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        masterGain.gain.setValueAtTime(audioMuted ? 0 : 1, audioCtx.currentTime);
+        /* beat pulse キャッシュを強制リセット: _bgmAccumLastWall が更新されたので
+           次フレームで getBeatPulse() が再計算されsyncアニメーションが即座に復活する */
+        _beatPulseCacheFrame = -1;
+      };
+      /* iOS はバックグラウンド移行で AudioContext を強制サスペンドする。
+         suspended 状態のまま src.start() や gain 操作をしても音が出ないため、
+         resume() の解決を待ってから音声処理を実行する。
+         通常の PAUSE/UNPAUSE では state === 'running' なので即実行される。 */
+      if (audioCtx.state === 'running') {
+        _doResumeBGM();
+      } else {
+        audioCtx.resume().then(_doResumeBGM).catch(_doResumeBGM);
+      }
+    }
   }
 }
 
@@ -5318,13 +5340,18 @@ document.addEventListener('touchstart', e=>{
      認識しない場合があり初回タップで音が出ない原因になるため touchstart は除外した。 */
   if (!audioCtx) {
     getAudioCtx();
+  }
+  /* iOS Safari: 初回・バックグラウンド復帰後ともに state が 'running' でなければ
+     resume() とサイレントバッファ再生をセットで行う。サイレントバッファが audio output を
+     ジェスチャーに紐付けるため、直後に開始するBGM等が確実に再生される。 */
+  if (audioCtx.state !== 'running') {
+    audioCtx.resume().catch(() => {});
     try {
       const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
       const _s = audioCtx.createBufferSource();
       _s.buffer = _b; _s.connect(audioCtx.destination); _s.start(0);
     } catch(_e) {}
   }
-  if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   /* 入力物理発生時刻をオーディオ時刻に換算 */
   const inputAudioTime = inputEventToAudioTime(e.timeStamp);
   const pt = touchToCanvas(e.touches[0]);
