@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.95';
+const VERSION = 'v2.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5129,13 +5129,8 @@ function togglePause() {
         _beatPulseCacheFrame = -1;
         _dbgSnap('doResumeBGM-done');
       };
-      if (audioCtx.state === 'running') {
-        _dbgSnap('UNPAUSE-sync');
-        _doResumeBGM();
-      } else {
-        _dbgSnap('UNPAUSE-async');
-        audioCtx.resume().then(_doResumeBGM).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
-      }
+      _dbgSnap('UNPAUSE-resume');
+      audioCtx.resume().then(_doResumeBGM).catch(e => { _dbgSnap('resume-ERR'); _doResumeBGM(); });
     }
   }
 }
