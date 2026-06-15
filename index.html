@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.92';
+const VERSION = 'v2.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5019,6 +5019,7 @@ function drawStartup() {
 
   /* ── DEBUG OVERLAY (remove before release) ── */
   if (true) { // DEBUG: always show
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // save/restore ずれ対策: 強制リセット
     const lines = [
       `ctx.state: ${audioCtx ? audioCtx.state : 'null'}`,
       `bgmSrc: ${bgmSource ? 'SET' : 'null'}`,
