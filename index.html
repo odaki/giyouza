@@ -65,6 +65,7 @@ canvas {
 <div id="canvas-wrap">
   <canvas id="c"></canvas>
   <button id="fs-btn" aria-label="全画面切替"></button>
+  <div id="dbg" style="position:fixed;top:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
 </div>
 
 <script>
@@ -113,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v2.93';
+const VERSION = 'v2.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5018,9 +5019,8 @@ function drawStartup() {
   ctx.restore();
 
   /* ── DEBUG OVERLAY (remove before release) ── */
-  if (true) { // DEBUG: always show
-    ctx.setTransform(1, 0, 0, 1, 0, 0); // save/restore ずれ対策: 強制リセット
-    const lines = [
+  { const _dbg = document.getElementById('dbg');
+    if (_dbg) _dbg.textContent = [
       `ctx.state: ${audioCtx ? audioCtx.state : 'null'}`,
       `bgmSrc: ${bgmSource ? 'SET' : 'null'}`,
       `bgmBuf: ${bgmBuffer ? 'SET' : 'null'}`,
@@ -5033,14 +5033,7 @@ function drawStartup() {
       `jingle: ${jingleScheduler ? 'RUN' : 'null'}`,
       `isPaused: ${isPaused}`,
       `phase: ${phase}`,
-    ];
-    ctx.save();
-    ctx.font = '18px monospace';
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(4, 4, 280, lines.length * 22 + 8);
-    ctx.fillStyle = '#0f0';
-    lines.forEach((l, i) => ctx.fillText(l, 10, 24 + i * 22));
-    ctx.restore();
+    ].join('\n');
   }
 }
 
