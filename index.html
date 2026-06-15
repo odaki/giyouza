@@ -65,7 +65,7 @@ canvas {
 <div id="canvas-wrap">
   <canvas id="c"></canvas>
   <button id="fs-btn" aria-label="全画面切替"></button>
-  <div id="dbg" style="position:fixed;bottom:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
+  <div id="dbg" style="display:none;position:fixed;bottom:4px;left:4px;background:rgba(0,0,0,0.75);color:#0f0;font:14px monospace;padding:4px 8px;z-index:9999;pointer-events:none;white-space:pre;line-height:1.4"></div>
 </div>
 
 <script>
@@ -114,7 +114,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.02';
+const VERSION = 'v3.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5063,6 +5063,8 @@ _rafId = requestAnimationFrame(_gameLoop);
 
 /* ── DEBUG: ログ蓄積ユーティリティ (remove before release) ── */
 const _dbgLog = [];
+/* Web Inspector コンソールから _dbg() で表示/非表示を切り替え */
+window._dbg = () => { const el = document.getElementById('dbg'); if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none'; };
 function _dbgSnap(label) {
   const t = audioCtx ? audioCtx.currentTime.toFixed(2) : '-';
   _dbgLog.push(
