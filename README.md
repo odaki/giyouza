@@ -1,4 +1,4 @@
 # ギヨウザルーレット
 
-Copyright (c) 2025 odaki  
+Copyright (C) 2026 Michiyasu ODAKI  
 MIT License
