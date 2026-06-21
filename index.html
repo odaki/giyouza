@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.34';
+const VERSION = 'v3.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4964,19 +4964,16 @@ function drawStartup() {
 
   if (IS_PORTRAIT) {
     const cy = H / 2;
-    /* タイトル（2行） */
-    /* ルーレットの幅を計測し、ギヨウザが同じ幅になるフォントサイズを算出 */
-    /* ギヨウザ: ルーレット(42px)と同幅になるサイズで描画 */
-    const rouletteFs = 42;
-    const giyouzaCalcFs = 42;
-    ctx.font = `900 ${giyouzaCalcFs}px 'Hiragino Mincho ProN',serif`;
-    const wRoulette = ctx.measureText('ルーレット').width;
-    const wGiyouza  = ctx.measureText('ギヨウザ').width;
-    const giyouzaFs = Math.round(giyouzaCalcFs * (wRoulette / wGiyouza));
+    /* タイトル（2行）: 上段を下段と同幅になるようフォントサイズをスケール */
+    const refFs    = 42; // 計測基準サイズ
+    ctx.font = `900 ${refFs}px 'Hiragino Mincho ProN',serif`;
+    const refW     = ctx.measureText('ルーレット').width;
+    const srcW     = ctx.measureText('ギヨウザ').width;
+    const scaledFs = Math.round(refFs * (refW / srcW));
     ctx.fillStyle = Y;
     ctx.shadowColor = 'rgba(245,208,32,0.7)';
     ctx.shadowBlur = 18 + pulse * 10;
-    ctx.font = `900 ${giyouzaFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 ${scaledFs}px 'Hiragino Mincho ProN',serif`;
     ctx.fillText('ギヨウザ', W / 2, cy - 91);
     ctx.font = `900 36px 'Hiragino Mincho ProN',serif`;
     ctx.fillText('ルーレット', W / 2, cy - 29);
