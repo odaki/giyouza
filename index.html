@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.26';
+const VERSION = 'v3.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1666,12 +1666,25 @@ function gameOverReset() {
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: initGame() は touchend から呼ばれる（touchstart ではない）。
-       iOS Safari: touchstart の _unlockAudio() で resume() を発行し、
-       touchend（別のユーザーアクティベーション）までの ~150ms で iOS が
-       AudioContext を running にする。_resumeAudioCtx 経由でジングルを開始し、
-       まだ suspended なら touchend ジェスチャーで再度 resume() する。 */
+       iOS Safari: resume() Promise は初回起動時に次のジェスチャーまで解決しない
+       既知の問題がある（Web Audio API Issue #1759）。
+       Howler.js / PixiJS / Phaser と同様に、Promise待ちをせず
+       1サンプルバッファの start() でアンロックし即座にジングルを開始する。 */
     applyMuteGain();
-    _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
+    if (audioCtx) {
+      if (audioCtx.state === 'interrupted') {
+        _recreateAudioGraph();
+      } else {
+        /* 業界標準アンロックパターン: 1サンプルバッファをstart()してiOSをアンロック */
+        try {
+          const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+          const _s = audioCtx.createBufferSource();
+          _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
+        } catch(_e) {}
+        audioCtx.resume().catch(() => {});
+      }
+    }
+    playStartJingle(() => startBGM());
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
