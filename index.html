@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.27';
+const VERSION = 'v3.28';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1666,24 +1666,21 @@ function gameOverReset() {
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: initGame() は touchend から呼ばれる（touchstart ではない）。
-       iOS Safari: resume() Promise は初回起動時に次のジェスチャーまで解決しない
-       既知の問題がある（Web Audio API Issue #1759）。
-       Howler.js / PixiJS / Phaser と同様に、Promise待ちをせず
-       1サンプルバッファの start() でアンロックし即座にジングルを開始する。 */
-    applyMuteGain();
-    if (audioCtx) {
-      if (audioCtx.state === 'interrupted') {
-        _recreateAudioGraph();
-      } else {
-        /* 業界標準アンロックパターン: 1サンプルバッファをstart()してiOSをアンロック */
-        try {
-          const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-          const _s = audioCtx.createBufferSource();
-          _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
-        } catch(_e) {}
-        audioCtx.resume().catch(() => {});
-      }
+       iOS Safari: ページロード時に作成した AudioContext は内蔵スピーカー使用時に
+       resume() Promise が次のジェスチャーまで解決しない問題がある（Web Audio API Issue #1759）。
+       Bluetooth では発生しない（接続時にセッションが Playback カテゴリで初期化されるため）。
+       解決策: running 以外の状態なら touchend 内で _recreateAudioGraph() を呼ぶ。
+       ユーザーアクティベーション内での new AudioContext() は iOS が即 running にするため
+       2タップ問題を回避できる。bgmBuffer（PCMデータ）は AudioContext をまたいで再利用可能。 */
+    if (audioCtx && audioCtx.state !== 'running') {
+      _destroyBGMSource();
+      _recreateAudioGraph();
+      _updateBgmQuantizedLoopDur();
+      updateSyncTimingOffset();
+      _updateBeatDisplayAdvance();
+      _buildNoiseBuffer();
     }
+    applyMuteGain();
     playStartJingle(() => startBGM());
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
