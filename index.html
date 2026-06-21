@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.30';
+const VERSION = 'v3.31';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -864,9 +864,13 @@ function _elevateAudioSession() {
    特定の音声操作前に確実に running にしたい場合は _resumeAudioCtx(callback) を使う。 */
 function _unlockAudio() {
   _elevateAudioSession(); // iOS: AVAudioSessionをPlaybackカテゴリに昇格（マナーモード対策）
+  const _wasNull = !audioCtx;
   if (!audioCtx) getAudioCtx();
-  if (audioCtx.state === 'running') return;
-  audioCtx.resume().catch(() => {});
+  /* ジェスチャー内で new AudioContext() すると即 running になるため、
+     初回作成時（_wasNull）は running でも masterGain 経由バッファを再生して
+     AVAudioSession スピーカールートを確実に開通させる */
+  if (!_wasNull && audioCtx.state === 'running') return;
+  if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   try {
     const b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
     const s = audioCtx.createBufferSource();
