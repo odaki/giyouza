@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.19';
+const VERSION = 'v3.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1403,7 +1403,7 @@ const LS_BEST  = 'giyouza_best';
 const LS_MUTE  = 'giyouza_mute';
 const LS_BET   = 'giyouza_bet';
 /* LS_COINS 等が確定した後に定義（TDZ回避） */
-const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_ACH, LS_MED, LS_STATS];
+const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_BET, LS_ACH, LS_MED, LS_STATS];
 function lsSave() {
   /* _idle でアイドル時に書き込み（ゲームループのフレーム予算を削らない） */
   const _c = coins, _b = bet;
@@ -1656,8 +1656,8 @@ function init(fromStartup, fromGameOver) {
     unlockAch('first_fever');
   }
   const prevSlowSpin = isSlowSpin;
-  /* 基本1%、高シンクロ時は最大5%まで上昇 */
-  const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002; // 上限2%（syncRate=1.0時）
+  /* 基本0.2%、高シンクロ時は最大2%まで上昇（syncRate=1.0時） */
+  const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002;
   if (_slowSpinPending !== null) {
     isSlowSpin = !isFever && _slowSpinPending; // Ctrl+Tチートによる次トライ強制
     _slowSpinPending = null;
@@ -2206,6 +2206,7 @@ function updateWorms() {
 }
 
 function drawWorms() {
+  ctx.save();
   for (const w of worms) {
     drawOneItem(w);
   }
@@ -2638,8 +2639,6 @@ function updateGiugiu() {
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
-function initGigigigi() { for (const o of gigiSparks) o._dead = true; gigiSparks = []; }
-
 function updateGigigigi() {
   /* 火花をランダムに飛ばす（プール再利用） */
   const rate = Math.min(8, 2 + Math.floor(endTimer / 60));
@@ -3399,10 +3398,6 @@ function draw() {
   /* 弓 (縦画面のみ) */
   if (IS_PORTRAIT && (phase==='idle'||phase==='reach')) drawBow();
 
-  /* ホイール番号 */
-  for (let i=0;i<4;i++){
-    const active=i===curIdx&&(phase==='idle'||phase==='reach');
-  }
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール */
