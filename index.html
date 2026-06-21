@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.25';
+const VERSION = 'v3.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -844,11 +844,26 @@ function _resumeAudioCtx(callback) {
   }
 }
 
+/* iOS マナーモード対策: <audio>要素をユーザーアクティベーション内で再生すると
+   AVAudioSession カテゴリが Ambient → Playback に昇格し、マナーモードをバイパスする。
+   無音の最小WAV(44バイト)をdata URIで埋め込み、ファイル不要でインライン実現。
+   成功後は再呼び出しをスキップ（フラグで管理）。 */
+const _iosAudioEl = document.createElement('audio');
+_iosAudioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+_iosAudioEl.setAttribute('playsinline', '');
+_iosAudioEl.volume = 0;
+let _iosSessionElevated = false;
+function _elevateAudioSession() {
+  if (_iosSessionElevated) return;
+  _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
+}
+
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
    サイレントバッファは destination 直結では AVAudioSession が開かないため masterGain 経由必須。
    特定の音声操作前に確実に running にしたい場合は _resumeAudioCtx(callback) を使う。 */
 function _unlockAudio() {
+  _elevateAudioSession(); // iOS: AVAudioSessionをPlaybackカテゴリに昇格（マナーモード対策）
   if (!audioCtx) getAudioCtx();
   if (audioCtx.state === 'running') return;
   audioCtx.resume().catch(() => {});
