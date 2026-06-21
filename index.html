@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.32';
+const VERSION = 'v3.33';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1206,7 +1206,7 @@ document.addEventListener('visibilitychange', () => {
 
 function toggleMute() {
   audioMuted = !audioMuted;
-  try { localStorage.setItem(LS_MUTE, audioMuted ? '1' : '0'); } catch(e) {}
+  /* audioMuted は毎セッション MUTED スタートのため localStorage に保存しない */
   /* ミュートは gain だけを制御する。BGMソースの起動・停止はしない。 */
   applyMuteGain();
   /* ミュート解除時: interrupted/suspended 状態を _resumeAudioCtx で確実に解消する。
@@ -1434,10 +1434,9 @@ function hitTest(rect, x, y) {
 /* ── localStorage ── */
 const LS_COINS = 'giyouza_coins';
 const LS_BEST  = 'giyouza_best';
-const LS_MUTE  = 'giyouza_mute';
 const LS_BET   = 'giyouza_bet';
 /* LS_COINS 等が確定した後に定義（TDZ回避） */
-const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_MUTE, LS_BET, LS_ACH, LS_MED, LS_STATS];
+const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_BET, LS_ACH, LS_MED, LS_STATS];
 function lsSave() {
   /* _idle でアイドル時に書き込み（ゲームループのフレーム予算を削らない） */
   const _c = coins, _b = bet;
@@ -1451,15 +1450,13 @@ function lsSave() {
 }
 function lsLoad() {
   try {
-    const c = parseInt(localStorage.getItem(LS_COINS));
-    const b = parseInt(localStorage.getItem(LS_BEST));
-    const m = localStorage.getItem(LS_MUTE);
+    const c  = parseInt(localStorage.getItem(LS_COINS));
+    const b  = parseInt(localStorage.getItem(LS_BEST));
     const bv = parseInt(localStorage.getItem(LS_BET));
     coins     = (c > 0) ? c : 60;
     bestCoins = (b > 0) ? b : coins;
-    /* ミュート状態は毎セッション MUTED スタート（内蔵スピーカーの2タップ問題対策）。
-       MUTE ボタンで解除 → START の順で操作することで1タップ目に音声ルートが確立される。
-       保存値（m）は読み捨てる。 */
+    /* audioMuted は復元しない。毎セッション MUTED スタート（let audioMuted = true が初期値）。
+       iOS 内蔵スピーカーは2タップ必要なため、MUTE解除（tap1）→ START（tap2）を強制する。 */
     if (BET_OPTIONS.includes(bv)) bet = bv;
   } catch(e) {
     coins = 60; bestCoins = 60;
@@ -1671,11 +1668,11 @@ function gameOverReset() {
 
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
-    /* スタート時: initGame() は touchend から呼ばれる（touchstart ではない）。
-       iOS Safari: touchstart の _unlockAudio() で resume() を発行し、
-       touchend（別のユーザーアクティベーション）までの ~150ms で iOS が
-       AudioContext を running にする。_resumeAudioCtx 経由でジングルを開始し、
-       まだ suspended なら touchend ジェスチャーで再度 resume() する。 */
+    /* スタート時: initGame() は START ボタンの touchend から呼ばれる。
+       iOS 内蔵スピーカーは物理2タップ必要（根本制約）。
+       MUTE ボタン touchstart（tap1）で AudioContext 生成 + スピーカールート確立済み。
+       START touchend（tap2）到達時点では AudioContext は running のため
+       _resumeAudioCtx の Promise は即解決し、ジングルが確実に再生される。 */
     applyMuteGain();
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
