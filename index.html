@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.28';
+const VERSION = 'v3.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1666,22 +1666,12 @@ function gameOverReset() {
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: initGame() は touchend から呼ばれる（touchstart ではない）。
-       iOS Safari: ページロード時に作成した AudioContext は内蔵スピーカー使用時に
-       resume() Promise が次のジェスチャーまで解決しない問題がある（Web Audio API Issue #1759）。
-       Bluetooth では発生しない（接続時にセッションが Playback カテゴリで初期化されるため）。
-       解決策: running 以外の状態なら touchend 内で _recreateAudioGraph() を呼ぶ。
-       ユーザーアクティベーション内での new AudioContext() は iOS が即 running にするため
-       2タップ問題を回避できる。bgmBuffer（PCMデータ）は AudioContext をまたいで再利用可能。 */
-    if (audioCtx && audioCtx.state !== 'running') {
-      _destroyBGMSource();
-      _recreateAudioGraph();
-      _updateBgmQuantizedLoopDur();
-      updateSyncTimingOffset();
-      _updateBeatDisplayAdvance();
-      _buildNoiseBuffer();
-    }
+       iOS Safari: touchstart の _unlockAudio() で resume() を発行し、
+       touchend（別のユーザーアクティベーション）までの ~150ms で iOS が
+       AudioContext を running にする。_resumeAudioCtx 経由でジングルを開始し、
+       まだ suspended なら touchend ジェスチャーで再度 resume() する。 */
     applyMuteGain();
-    playStartJingle(() => startBGM());
+    _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
