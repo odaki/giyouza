@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.29';
+const VERSION = 'v3.30';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5062,12 +5062,11 @@ function _gameLoop(t) {
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
-/* AudioContext をページロード時に事前生成する。
-   iOS Safari は suspended 状態での生成をユーザーアクティベーションなしで許可する。
-   これにより renderBGMBuffer() が即座に開始され、START 押下時に bgmBuffer が完成済みになる。
-   ユーザーアクティベーション前に生成した場合は suspended のまま待機し、
-   最初のタッチで resume() が呼ばれた時点で running になる。 */
-getAudioCtx();
+/* AudioContext は最初のユーザーアクティベーション（touchstart / mousedown / keydown）内で
+   生成する。ジェスチャー内の new AudioContext() は iOS が即 running にするため、
+   ページロード時生成（suspended → 2タップ必要）の問題を回避できる。
+   renderBGMBuffer() はジングル（約5.7秒）より先に完了するため BGM 再生に間に合う。
+   _unlockAudio() / _onFirstGesture() / 各ボタンハンドラが初回ジェスチャーで呼ぶ。 */
 
 function togglePause() {
   if (phase === 'startup') return;
