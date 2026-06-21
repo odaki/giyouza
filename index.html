@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.31';
+const VERSION = 'v3.32';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1457,7 +1457,9 @@ function lsLoad() {
     const bv = parseInt(localStorage.getItem(LS_BET));
     coins     = (c > 0) ? c : 60;
     bestCoins = (b > 0) ? b : coins;
-    if (m !== null) audioMuted = (m === '1');
+    /* ミュート状態は毎セッション MUTED スタート（内蔵スピーカーの2タップ問題対策）。
+       MUTE ボタンで解除 → START の順で操作することで1タップ目に音声ルートが確立される。
+       保存値（m）は読み捨てる。 */
     if (BET_OPTIONS.includes(bv)) bet = bv;
   } catch(e) {
     coins = 60; bestCoins = 60;
