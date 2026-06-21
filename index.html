@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.33';
+const VERSION = 'v3.34';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -512,10 +512,10 @@ const ACHIEVEMENTS = [
   { id:'big_bet_win',   icon:'🃏', name:'天運',               desc:'ベット100で大当たりを達成した'       },
   { id:'all_medium',    icon:'🏆', name:'全種制覇',           desc:'全9種の当たりを達成した'             },
 ];
-const LS_ACH    = 'giyouza_ach';
-const LS_MED    = 'giyouza_med';
-const LS_STATS  = 'giyouza_stats';
-const LS_SCHEMA = 'giyouza_schema';
+const LS_ACH    = 'game_ach';
+const LS_MED    = 'game_med';
+const LS_STATS  = 'game_stats';
+const LS_SCHEMA = 'game_schema';
 /* スキーマハッシュ:
    - フォーマットバージョン（保存構造を変えたら手動インクリメント）
    - 実績IDリスト（実績追加/削除/ID変更で自動変化）
@@ -1432,9 +1432,9 @@ function hitTest(rect, x, y) {
 }
 
 /* ── localStorage ── */
-const LS_COINS = 'giyouza_coins';
-const LS_BEST  = 'giyouza_best';
-const LS_BET   = 'giyouza_bet';
+const LS_COINS = 'game_coins';
+const LS_BEST  = 'game_best';
+const LS_BET   = 'game_bet';
 /* LS_COINS 等が確定した後に定義（TDZ回避） */
 const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_BET, LS_ACH, LS_MED, LS_STATS];
 function lsSave() {
