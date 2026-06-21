@@ -113,7 +113,7 @@ const H = IS_PORTRAIT ? 820  : 560;
 canvas.width  = W;
 canvas.height = H;
 
-const VERSION = 'v3.21';
+const VERSION = 'v3.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5014,8 +5014,13 @@ let _rafId;
 const _FRAME_BUF_SIZE = 120;
 const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // rAF間隔 ms
 const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update+draw処理時間 ms
+const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: 60fps上限（120Hz等の高リフレッシュレート対策）
 let _frameTimesIdx = 0, _frameLastT = 0;
 function _gameLoop(t) {
+  _rafId = requestAnimationFrame(_gameLoop);
+  /* 60fps上限: 前フレームから16.667ms未満なら描画をスキップして次のrAFへ委ねる
+     (-1msの余裕: 60Hzで16.4ms程度のジッターを許容しフレーム落ちを防ぐ) */
+  if (_frameLastT > 0 && t - _frameLastT < _TARGET_FRAME_MS - 1) return;
   if (_frameLastT > 0) {
     _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _frameLastT;
     _frameTimesIdx++;
@@ -5024,7 +5029,6 @@ function _gameLoop(t) {
   const _tWork = performance.now();
   update(); draw();
   _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
-  _rafId = requestAnimationFrame(_gameLoop);
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
