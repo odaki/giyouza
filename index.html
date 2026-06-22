@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.37';
+const VERSION = 'v3.38';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -607,21 +607,20 @@ function onBeatGrid() {
 /* 表示遅延補正: outputLatency（デバイス実測）+ rAF描画(~16ms) + モニター表示(~16ms) の合計
    AudioContext生成後に updateSyncTimingOffset() で実測値に更新される
    ビートパルス先読み表示 & 入力評価の巻き戻しに共通使用 */
-let SYNC_TIMING_OFFSET = 0.042; // 起動前フォールバック値 42ms
+let SYNC_TIMING_OFFSET = 0; // 入力タイミング評価補正値（0 = 補正なし）
 
 function updateSyncTimingOffset() {
   if (!audioCtx) return;
-  /* getOutputTimestamp() が使える場合: 返値の contextTime が既に outputLatency を吸収した
-     「今スピーカーから出ている音のオーディオ時刻」なので、ハードウェア遅延の二重計上を避ける。
-     補正するのはrAF描画(~16ms) + モニター表示(~16ms) の視覚遅延分のみ。
+  /* getOutputTimestamp() が使える場合: contextTime が既に outputLatency を吸収済みのため
+     固定補正は不要（0）。
      フォールバック(Safari等): audioCtx.currentTime は書き込み位置なので
-     outputLatency + baseLatency も加算する必要がある。 */
+     outputLatency + baseLatency を補正として加算する。 */
   const hasOutputTimestamp = typeof audioCtx.getOutputTimestamp === 'function';
   if (hasOutputTimestamp) {
-    SYNC_TIMING_OFFSET = 0.042; // 視覚遅延のみ（+10ms調整: わずかなツッコミ感を解消）
+    SYNC_TIMING_OFFSET = 0;
   } else {
     const hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-    SYNC_TIMING_OFFSET = hw + 0.042;
+    SYNC_TIMING_OFFSET = hw;
   }
 }
 
