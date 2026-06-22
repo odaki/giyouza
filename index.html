@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.42';
+const VERSION = 'v3.43';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -734,7 +734,9 @@ function _bgmAccumStep() {
 /* getBeatPulse: 同一フレーム内で複数回呼ばれるためフレームキャッシュを使用 */
 let _beatPulseCache = 0, _beatPulseCacheFrame = -1;
 function getBeatPulse() {
-  /* 同じフレーム内の2回目以降はキャッシュを返す（_bgmAccumStepはupdate先頭で1回呼ばれる） */
+  /* 同じフレーム内の2回目以降はキャッシュを返す
+     _bgmAccumStep は update()先頭 または draw-only フレームの先頭で呼ばれ、
+     _bgmAccumLastWall が更新されるとキャッシュが無効化される */
   if (_beatPulseCacheFrame === _bgmAccumLastWall) return _beatPulseCache;
   _beatPulseCacheFrame = _bgmAccumLastWall;
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) {
@@ -828,6 +830,7 @@ function _recreateAudioGraph() {
   bgmGain = audioCtx.createGain();
   bgmGain.gain.value = 1;
   bgmGain.connect(masterGain);
+  _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
@@ -861,19 +864,21 @@ function _elevateAudioSession() {
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
    サイレントバッファは destination 直結では AVAudioSession が開かないため masterGain 経由必須。
    特定の音声操作前に確実に running にしたい場合は _resumeAudioCtx(callback) を使う。 */
+let _speakerRouteEstablished = false; // masterGain経由バッファ再生でスピーカールートを開通済みか
 function _unlockAudio() {
   _elevateAudioSession(); // iOS: AVAudioSessionをPlaybackカテゴリに昇格（マナーモード対策）
-  const _wasNull = !audioCtx;
   if (!audioCtx) getAudioCtx();
-  /* ジェスチャー内で new AudioContext() すると即 running になるため、
-     初回作成時（_wasNull）は running でも masterGain 経由バッファを再生して
-     AVAudioSession スピーカールートを確実に開通させる */
-  if (!_wasNull && audioCtx.state === 'running') return;
+  /* スピーカールート未確立、または suspended の場合にバッファを再生する。
+     ジェスチャー内で生成した AudioContext は即 running になるが、
+     最初のタッチでルートを開通させないと内蔵スピーカーへの音声出力が確立されない。
+     _recreateAudioGraph() 後は false にリセットされ再開通が必要になる。 */
+  if (_speakerRouteEstablished && audioCtx.state === 'running') return;
   if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   try {
     const b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
     const s = audioCtx.createBufferSource();
     s.buffer = b; s.connect(masterGain); s.start(audioCtx.currentTime);
+    _speakerRouteEstablished = true;
   } catch(_e) {}
 }
 
@@ -5047,23 +5052,23 @@ const _FRAME_BUF_SIZE = 120;
 const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // update()間隔 ms
 const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()+draw()処理時間 ms
 const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の1tick
-let _frameTimesIdx = 0, _frameLastT = 0, _prevUpdateT = 0, _updateAccum = 0;
+let _frameTimesIdx = 0, _rafLastT = 0, _updateLastT = 0, _updateAccum = 0;
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
   /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
      dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
-  const dt = _frameLastT > 0 ? Math.min(t - _frameLastT, 50) : 0;
-  _frameLastT = t;
+  const dt = _rafLastT > 0 ? Math.min(t - _rafLastT, 50) : 0;
+  _rafLastT = t;
   _updateAccum += dt;
   if (_updateAccum >= _TARGET_FRAME_MS) {
     _updateAccum -= _TARGET_FRAME_MS;
     if (_updateAccum > _TARGET_FRAME_MS) _updateAccum = 0; // 過剰蓄積防止
     /* 60fps tick: update() → draw() の順でA/V同期を保つ */
-    if (_prevUpdateT > 0) {
-      _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _prevUpdateT;
+    if (_updateLastT > 0) {
+      _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _updateLastT;
       _frameTimesIdx++;
     }
-    _prevUpdateT = t;
+    _updateLastT = t;
     const _tWork = performance.now();
     update();
     draw();
@@ -5331,6 +5336,8 @@ canvas.addEventListener('mousedown', e=>{
   }
   if (hitTest(PAUSE_BTN, cx, cy)) { togglePause(); return; }
   if (isPaused) {
+    /* PAUSE中はゲームループが止まっているため操作後に draw() を明示的に呼ぶ（mousedown）
+       touchstart ハンドラはゲームループが動いているため draw() 不要（非対称だが意図的） */
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; draw(); return; }
     if (showAchievements) { showAchievements = false; draw(); return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
