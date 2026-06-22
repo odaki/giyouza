@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.35';
+const VERSION = 'v3.36';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1886,6 +1886,7 @@ function update() {
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
   if (phase === 'startup') {
     for (const w of wheels) w.rot += w.speed; // ホイールだけ背景で回す
+    startupTimer++; // draw()ではなくupdate()でカウント（draw分離後も60fps固定）
     return;
   }
   if (phase === 'tapestart') {
@@ -4951,7 +4952,6 @@ const STARTUP_BTN = IS_PORTRAIT
 
 function drawStartup() {
   if (phase !== 'startup') return;
-  startupTimer++;
   const pulse = 0.5 + 0.5 * Math.sin(startupTimer * 0.05);
 
   /* 暗幕オーバーレイ */
@@ -5042,14 +5042,15 @@ particles = [];
 let _rafId;
 /* フレーム時間計測（ポーズ画面診断用） */
 const _FRAME_BUF_SIZE = 120;
-const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // rAF間隔 ms
-const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update+draw処理時間 ms
-const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: 60fps上限（120Hz等の高リフレッシュレート対策）
+const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // update()間隔 ms
+const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()処理時間 ms
+const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の60fps上限
 let _frameTimesIdx = 0, _frameLastT = 0;
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
-  /* 60fps上限: 前フレームから16.667ms未満なら描画をスキップして次のrAFへ委ねる
-     (-1msの余裕: 60Hzで16.4ms程度のジッターを許容しフレーム落ちを防ぐ) */
+  /* draw()は毎rAF実行（ネイティブHz）: 入力後の画面反映をジッターや高Hzに左右されず最速にする */
+  draw();
+  /* update()のみ60fps上限: ゲームロジック（物理・タイマー・ホイール回転）の整合性を保つ */
   if (_frameLastT > 0 && t - _frameLastT < _TARGET_FRAME_MS - 1) return;
   if (_frameLastT > 0) {
     _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _frameLastT;
@@ -5057,7 +5058,7 @@ function _gameLoop(t) {
   }
   _frameLastT = t;
   const _tWork = performance.now();
-  update(); draw();
+  update();
   _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
 }
 _rafId = requestAnimationFrame(_gameLoop);
