@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.48';
+const VERSION = 'v3.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2426,13 +2426,63 @@ function updateItems() {
   items.sort(_cmpItemY);
 }
 
+/* ギヨウザ本体形状を任意のコンテキストへ描画する共通関数。
+   drawOneItem()・_makeGhostCanvas() の両方から呼ばれる。
+   c2: 描画先コンテキスト / s: サイズ / ox,oy: 中心座標 / bodyGrd: 本体グラジェント
+   影・具（greens）・オーラ・ハロ・尾は呼び出し側で個別に描く。
+   オブジェクト生成なし（c2の参照とプリミティブのみ）→ GC 影響ゼロ。 */
+function _drawGyozaBody(c2, s, ox, oy, bodyGrd) {
+  /* 本体楕円 */
+  c2.beginPath();
+  c2.ellipse(ox, oy + s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
+  c2.fillStyle = bodyGrd;
+  c2.fill();
+  c2.strokeStyle = 'rgba(120,90,50,0.55)';
+  c2.lineWidth = 1.2;
+  c2.stroke();
+
+  /* 蒸し焼き底面の焦げ色 */
+  c2.save();
+  c2.beginPath();
+  c2.ellipse(ox, oy + s*0.32, s*0.46, s*0.18, 0, 0, Math.PI*2);
+  c2.fillStyle = 'hsl(30,60%,52%)';
+  c2.globalAlpha = 0.45; c2.fill();
+  c2.restore();
+
+  /* 頂部の薄皮 */
+  c2.beginPath();
+  c2.ellipse(ox, oy - s*0.12, s*0.40, s*0.14, 0, 0, Math.PI*2);
+  c2.fillStyle = 'hsl(50,55%,88%)';
+  c2.fill();
+  c2.strokeStyle = 'rgba(120,90,50,0.4)';
+  c2.lineWidth = 0.8;
+  c2.stroke();
+
+  /* ひだ（9本を1回のstrokeでGPUフラッシュ削減） */
+  c2.strokeStyle = 'rgba(140,105,55,0.55)';
+  c2.lineWidth = 0.9;
+  c2.beginPath();
+  for (let i = -4; i <= 4; i++) {
+    const bx = ox + i * s * 0.095;
+    c2.moveTo(bx, oy - s*0.04);
+    c2.bezierCurveTo(bx - s*0.04, oy - s*0.22, bx + s*0.04, oy - s*0.22, bx + s*0.07, oy - s*0.04);
+  }
+  c2.stroke();
+
+  /* ハイライト */
+  c2.beginPath();
+  c2.ellipse(ox - s*0.18, oy - s*0.08, s*0.16, s*0.09, -0.4, 0, Math.PI*2);
+  c2.fillStyle = 'rgba(255,255,255,0.28)';
+  c2.fill();
+}
+
 function drawOneItem(g) {
   const s = g.size;
   ctx.save();
   ctx.translate(g.x, g.y);
   ctx.rotate(g.rot);
 
-  /* 影 */
+  /* 影（drawOneItem固有） */
   ctx.save();
   ctx.translate(s*0.06, s*0.12);
   ctx.scale(1, 0.55);
@@ -2442,60 +2492,18 @@ function drawOneItem(g) {
   ctx.fill();
   ctx.restore();
 
-  /* 本体 (楕円ベース) */
-  ctx.beginPath();
-  ctx.ellipse(0, s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
-  ctx.fillStyle = g.bodyGrd; // キャッシュ済みグラジェントを使用
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(120,90,50,0.55)';
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
+  /* 本体形状（共通） */
+  _drawGyozaBody(ctx, s, 0, 0, g.bodyGrd);
 
-  /* 蒸し焼き底面の焦げ色 */
-  ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(0, s*0.32, s*0.46, s*0.18, 0, 0, Math.PI*2);
-  ctx.fillStyle = `hsl(30,60%,52%)`;
-  ctx.globalAlpha = 0.45;
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.restore();
-
-  /* 頂部の薄皮 (楕円) */
-  ctx.beginPath();
-  ctx.ellipse(0, -s*0.12, s*0.40, s*0.14, 0, 0, Math.PI*2);
-  ctx.fillStyle = `hsl(50,55%,88%)`;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(120,90,50,0.4)';
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-
-  /* ひだ (放射状の曲線) — 9本をまとめて1回のstrokeで描画してGPUフラッシュを削減 */
-  ctx.strokeStyle = 'rgba(140,105,55,0.55)';
-  ctx.lineWidth = 0.9;
-  ctx.beginPath();
-  for (let i = -4; i <= 4; i++) {
-    const bx = i * s * 0.095;
-    ctx.moveTo(bx, -s*0.04);
-    ctx.bezierCurveTo(bx - s*0.04, -s*0.22, bx + s*0.04, -s*0.22, bx + s*0.07, -s*0.04);
-  }
-  ctx.stroke();
-
-  /* 具 (緑) */
+  /* 具（drawOneItem固有 / greens は per-item ランダムデータ） */
   ctx.globalAlpha = 0.82;
   for (const gr of g.greens) {
     ctx.beginPath();
     ctx.ellipse(gr.dx*s, gr.dy*s, gr.rx*s, gr.ry*s, gr.a, 0, Math.PI*2);
-    ctx.fillStyle = gr.color; // 生成時にキャッシュ済み（毎フレーム文字列確保を排除）
+    ctx.fillStyle = gr.color; // 生成時にキャッシュ済み
     ctx.fill();
   }
   ctx.globalAlpha = 1;
-
-  /* ハイライト */
-  ctx.beginPath();
-  ctx.ellipse(-s*0.18, -s*0.08, s*0.16, s*0.09, -0.4, 0, Math.PI*2);
-  ctx.fillStyle = 'rgba(255,255,255,0.28)';
-  ctx.fill();
 
   ctx.restore();
 }
@@ -2806,45 +2814,12 @@ function _makeGhostCanvas(r) {
   c2.fill();
   c2.restore();
 
-  /* 本体楕円（通常の焼きギヨウザカラー） */
+  /* 本体形状（共通関数で描画）*/
   const bodyGrd = c2.createRadialGradient(cx - r*0.15, cy - r*0.3, 0, cx, cy + r*0.1, r * 1.1);
   bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
   bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
   bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
-  c2.beginPath();
-  c2.ellipse(cx, cy + r*0.08, r*0.58, r*0.48, 0, 0, Math.PI*2);
-  c2.fillStyle = bodyGrd; c2.fill();
-  c2.strokeStyle = 'rgba(120,90,50,0.55)'; c2.lineWidth = 1.2; c2.stroke();
-
-  /* 蒸し焼き底面の焦げ色 */
-  c2.save();
-  c2.beginPath();
-  c2.ellipse(cx, cy + r*0.32, r*0.46, r*0.18, 0, 0, Math.PI*2);
-  c2.fillStyle = 'hsl(30,60%,52%)';
-  c2.globalAlpha = 0.45; c2.fill();
-  c2.restore();
-
-  /* 頂部の薄皮（クリーム色） */
-  c2.beginPath();
-  c2.ellipse(cx, cy - r*0.12, r*0.40, r*0.14, 0, 0, Math.PI*2);
-  c2.fillStyle = 'hsl(50,55%,88%)'; c2.fill();
-  c2.strokeStyle = 'rgba(120,90,50,0.4)'; c2.lineWidth = 0.8; c2.stroke();
-
-  /* ひだ（茶色） */
-  c2.strokeStyle = 'rgba(140,105,55,0.55)'; c2.lineWidth = 0.9;
-  c2.beginPath();
-  for (let i = -4; i <= 4; i++) {
-    const bx = cx + i * r * 0.095;
-    c2.moveTo(bx, cy - r*0.04);
-    c2.bezierCurveTo(bx - r*0.04, cy - r*0.22, bx + r*0.04, cy - r*0.22, bx + r*0.07, cy - r*0.04);
-  }
-  c2.stroke();
-
-
-  /* ハイライト */
-  c2.beginPath();
-  c2.ellipse(cx - r*0.18, cy - r*0.08, r*0.16, r*0.09, -0.4, 0, Math.PI*2);
-  c2.fillStyle = 'rgba(255,255,255,0.30)'; c2.fill();
+  _drawGyozaBody(c2, r, cx, cy, bodyGrd);
 
   /* ── 天使の輪（ギヨウザ上方に浮かぶ金色の楕円リング） ── */
   const haloY  = cy - r * 0.72; // 頭上に浮かせる
