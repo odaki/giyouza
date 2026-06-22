@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.49';
+const VERSION = 'v3.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1678,8 +1678,10 @@ function init(fromStartup, fromGameOver) {
     unlockAch('first_fever');
   }
   const prevSlowSpin = isSlowSpin;
-  /* 基本0.2%、高シンクロ時は最大2%まで上昇（syncRate=1.0時） */
-  const slowProb = syncRate >= 0.5 ? (0.01 + syncRate * 0.01) : 0.002;
+  /* 基本0.2%、高シンクロ時は最大2%まで上昇（syncRate=1.0時）
+     バッファが16回分埋まるまでは syncRate が不安定なためデフォルト確率を使用 */
+  const slowProb = (_syncHistCount >= SYNC_HIST_LEN && syncRate >= 0.5)
+    ? (0.01 + syncRate * 0.01) : 0.002;
   if (_slowSpinPending !== null) {
     isSlowSpin = !isFever && _slowSpinPending; // Ctrl+Tチートによる次トライ強制
     _slowSpinPending = null;
@@ -4444,7 +4446,7 @@ function _syncBarColor(r) {
 
 function drawSyncMeter() {
   if (phase === 'startup') return;
-  if (syncRateAboveCount < SYNC_VISIBLE_THRESHOLD) return;
+  if (_syncHistCount < SYNC_HIST_LEN || syncRateAboveCount < SYNC_VISIBLE_THRESHOLD) return;
 
   const pct     = syncRateDisp;                      // 0-1（VUメーター式表示値）
   const [fillC, glowC, glowStr] = _syncBarColor(pct);
@@ -5173,8 +5175,8 @@ function onShoot(_inputAudioTime){
     _pushSyncScore(score);
     /* このビートは発射済みとしてマーク（auto-decayが二重にカウントしないよう） */
     _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2)) : -1;
-    /* JUST/GOOD/OK 演出: 連続してsyncRate≥0.5になってから表示 */
-    if (syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
+    /* JUST/GOOD/OK 演出: 16回分のバッファが埋まり連続してsyncRate≥0.5になってから表示 */
+    if (_syncHistCount >= SYNC_HIST_LEN && syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
       if (score >= 0.667) {        // ±33ms以内 → JUST
         syncJustLabel = 'JUST!'; syncChain++;
       } else if (score >= 0.333) { // ±67ms以内 → GOOD
