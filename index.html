@@ -44,30 +44,11 @@ canvas {
 @media (max-height: 480px) and (orientation: landscape) {
   h1 { display: none; }
 }
-/* 全画面ボタン */
-/* キャンバスラッパー: ボタンをキャンバス上に重ねるための基準 */
+/* キャンバスラッパー */
 #canvas-wrap {
   position: relative;
   display: inline-block;
   line-height: 0;
-}
-#fs-btn {
-  position: absolute; /* 位置・サイズは fitCanvas() で JS から設定 */
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  background: rgba(0,0,0,0.55);
-  border: 1px solid rgba(245,208,32,0.55);
-  border-radius: 6px;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-  user-select: none;
-  display: none; /* タッチデバイスのみJS側で表示 */
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  z-index: 200;
 }
 </style>
 </head>
@@ -75,7 +56,6 @@ canvas {
 <h1>ギヨウザルーレット</h1>
 <div id="canvas-wrap">
   <canvas id="c"></canvas>
-  <button id="fs-btn" aria-label="全画面切替"></button>
 </div>
 
 <script>
@@ -127,7 +107,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.46';
+const VERSION = 'v3.47';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -569,6 +549,15 @@ const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE
 const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP,                        w: BTN_SIZE, h: BTN_SIZE }; // 左上
 const PAUSE_BTN   = { x: BTN_RIGHT, y: BTN_TOP + BTN_SIZE + BTN_GAP,  w: BTN_SIZE, h: BTN_SIZE }; // 左上・トロフィー下
 
+/* 全画面ボタン: Canvas 描画用（HTML button 廃止）
+   Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
+   スケール = BTN_SIZE / 24 でボタン全体に合わせ、(-12,-12) オフセットで中央揃え。 */
+const FS_SUPPORTED = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+let _isFullscreen = false; // fullscreenchange で更新
+const _FS_ICON_SCALE = BTN_SIZE / 24;
+const _FS_PATH_ENTER = new Path2D('M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z');
+const _FS_PATH_EXIT  = new Path2D('M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z');
+
 /* ── BETバーレイアウト定数（横画面） ── */
 const BAR_X = 335, BAR_W = 390, BAR_Y = H - 106, BAR_H = 80;
 /* ── BETバーレイアウト定数（縦画面） ── */
@@ -649,7 +638,7 @@ function inputEventToAudioTime(eventTimeStamp) {
 let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx初期化後に動的更新
 
 /* outputLatency + baseLatency + _BEAT_DISPLAY_ADVANCE = TARGET になるよう動的設定 */
-const _BEAT_ADVANCE_TARGET = 0.027; // 27ms
+const _BEAT_ADVANCE_TARGET = 4 / 60; // ≈66.7ms（4フレーム分）
 let _hwLatency = 0; // outputLatency + baseLatency のキャッシュ（毎フレーム読み取りを避ける）
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
@@ -3574,9 +3563,23 @@ function draw() {
   ctx.stroke();
   ctx.restore();
 
+  /* ── 全画面ボタン（Fullscreen API 対応環境のみ・常時最前面） ── */
+  if (FS_SUPPORTED) {
+    ctx.save();
+    roundRect(FS_BTN_RECT.x, FS_BTN_RECT.y, FS_BTN_RECT.w, FS_BTN_RECT.h, 6);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(245,208,32,0.55)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#f5d020';
+    ctx.translate(FS_BTN_RECT.x + FS_BTN_RECT.w / 2, FS_BTN_RECT.y + FS_BTN_RECT.h / 2);
+    ctx.scale(_FS_ICON_SCALE, _FS_ICON_SCALE);
+    ctx.translate(-12, -12); // 24×24 viewBox の中心揃え
+    ctx.fill(_isFullscreen ? _FS_PATH_EXIT : _FS_PATH_ENTER);
+    ctx.restore();
+  }
+
   /* ── ミュートボタン（右上・常時最前面） ── */
   ctx.save();
-  /* 背景ボックス（全画面ボタンと同スタイル） */
+  /* 背景ボックス */
   roundRect(MUTE_BTN.x, MUTE_BTN.y, MUTE_BTN.w, MUTE_BTN.h, 6);
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fill();
@@ -5339,6 +5342,7 @@ canvas.addEventListener('mousedown', e=>{
   /* _canvasRect キャッシュを使用（getBoundingClientRect() 強制レイアウトを排除） */
   const cx = (e.clientX - _canvasRect.left) * (W / _canvasRect.width);
   const cy = (e.clientY - _canvasRect.top)  * (H / _canvasRect.height);
+  if (FS_SUPPORTED && hitTest(FS_BTN_RECT, cx, cy)) { toggleFullscreen(); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
@@ -5378,16 +5382,17 @@ canvas.addEventListener('mousedown', e=>{
 
 /* タッチ操作対応（ページ内どこでもタップで反応） */
 document.addEventListener('touchstart', e=>{
-  if (e.target.closest('#fs-btn')) return;
   e.preventDefault();
+  /* 入力物理発生時刻をオーディオ時刻に換算 */
+  const inputAudioTime = inputEventToAudioTime(e.timeStamp);
+  const pt = touchToCanvas(e.touches[0]);
+  /* 全画面ボタン: 最初にチェック（全フェーズで有効） */
+  if (FS_SUPPORTED && hitTest(FS_BTN_RECT, pt.x, pt.y)) { toggleFullscreen(); return; }
   /* すべてのタッチで AudioContext をアンロックする。
      iOS Safari: touchstart はユーザーアクティベーションとして認定される。
      resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
      START ボタンの音声スケジューリング（initGame）は touchend で行う（後述）。 */
   _unlockAudio();
-  /* 入力物理発生時刻をオーディオ時刻に換算 */
-  const inputAudioTime = inputEventToAudioTime(e.timeStamp);
-  const pt = touchToCanvas(e.touches[0]);
 
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
@@ -5487,17 +5492,6 @@ function fitCanvas() {
   /* BET ラベル幅を計測してキャッシュ（フォント・テキスト不変なので1回だけ） */
   _initBetLabelWidth();
 
-  /* 全画面ボタンの位置・サイズを canvas 座標に同期
-     display チェックなしで常に計算し、表示時に正しい位置になるようにする */
-  const fsEl = document.getElementById('fs-btn');
-  if (fsEl) {
-    fsEl.style.left   = Math.round(FS_BTN_RECT.x * scale) + 'px';
-    fsEl.style.top    = Math.round(FS_BTN_RECT.y * scale) + 'px';
-    fsEl.style.width  = Math.round(FS_BTN_RECT.w * scale) + 'px';
-    fsEl.style.height = Math.round(FS_BTN_RECT.h * scale) + 'px';
-    fsEl.style.right  = '';
-  }
-
   /* _canvasRect キャッシュを更新: 入力ハンドラ内での getBoundingClientRect() 強制レイアウトを排除 */
   requestAnimationFrame(() => { _canvasRect = canvas.getBoundingClientRect(); });
 }
@@ -5509,43 +5503,21 @@ if (window.visualViewport) {
 }
 fitCanvas();
 
-/* ── 全画面ボタン（Fullscreen API 対応環境のみ表示） ── */
-const fsBtn = document.getElementById('fs-btn');
-const FS_SUPPORTED = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
-
-/* SVGアイコン: Material Design fullscreen / fullscreen_exit */
-/* SVGはwidth/heightを100%にしてボタンサイズに追従させる（fitCanvas()でボタンがスケールされるため） */
-const FS_SVG_ENTER = `<svg viewBox="0 0 24 24" width="100%" height="100%" fill="#f5d020" xmlns="http://www.w3.org/2000/svg">
-  <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
-</svg>`;
-const FS_SVG_EXIT  = `<svg viewBox="0 0 24 24" width="100%" height="100%" fill="#f5d020" xmlns="http://www.w3.org/2000/svg">
-  <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
-</svg>`;
+/* ── 全画面切替（Fullscreen API 対応環境のみ有効） ── */
+function toggleFullscreen() {
+  const el = document.documentElement;
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) req.call(el).catch(()=>{});
+  } else {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document).catch(()=>{});
+  }
+}
 
 if (FS_SUPPORTED) {
-  fsBtn.style.display = 'flex';
-  fsBtn.innerHTML = FS_SVG_ENTER;
-  fitCanvas(); // 表示ON後に位置を再計算
-
-  function toggleFullscreen() {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (req) req.call(el).catch(()=>{});
-    } else {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      if (exit) exit.call(document).catch(()=>{});
-    }
-  }
-
-  fsBtn.addEventListener('click', e => { e.stopPropagation(); toggleFullscreen(); });
-  fsBtn.addEventListener('touchstart', e => {
-    e.preventDefault(); e.stopPropagation(); toggleFullscreen();
-  }, { passive: false });
-
   function onFsChange() {
-    const inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    fsBtn.innerHTML = inFs ? FS_SVG_EXIT : FS_SVG_ENTER;
+    _isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
     setTimeout(fitCanvas, 150);
   }
   document.addEventListener('fullscreenchange', onFsChange);
