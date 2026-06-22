@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.50';
+const VERSION = 'v3.51';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4453,7 +4453,7 @@ function drawSyncMeter() {
   /* テキストキャッシュ: 値が変化した時のみ再生成（毎フレームのテンプレートリテラルを排除） */
   const pctRounded = Math.round(pct * 100);
   if (pctRounded !== _cachedSyncPctVal) { _cachedSyncPctVal = pctRounded; _cachedSyncPctStr = `SYNC ${pctRounded}%`; }
-  if (syncChain   !== _cachedSyncChainVal) { _cachedSyncChainVal = syncChain; _cachedSyncChainStr = syncChain >= 2 ? `🎵×${syncChain}` : ''; }
+  if (syncChain   !== _cachedSyncChainVal) { _cachedSyncChainVal = syncChain; _cachedSyncChainStr = syncChain >= 2 ? `♪×${syncChain}` : ''; }
   const pctText   = _cachedSyncPctStr;
   const chainText = _cachedSyncChainStr;
 
