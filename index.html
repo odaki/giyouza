@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.36';
+const VERSION = 'v3.37';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5043,23 +5043,33 @@ let _rafId;
 /* フレーム時間計測（ポーズ画面診断用） */
 const _FRAME_BUF_SIZE = 120;
 const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // update()間隔 ms
-const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()処理時間 ms
-const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の60fps上限
-let _frameTimesIdx = 0, _frameLastT = 0;
+const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()+draw()処理時間 ms
+const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の1tick
+let _frameTimesIdx = 0, _frameLastT = 0, _prevUpdateT = 0, _updateAccum = 0;
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
-  /* draw()は毎rAF実行（ネイティブHz）: 入力後の画面反映をジッターや高Hzに左右されず最速にする */
-  draw();
-  /* update()のみ60fps上限: ゲームロジック（物理・タイマー・ホイール回転）の整合性を保つ */
-  if (_frameLastT > 0 && t - _frameLastT < _TARGET_FRAME_MS - 1) return;
-  if (_frameLastT > 0) {
-    _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _frameLastT;
-    _frameTimesIdx++;
-  }
+  /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
+     dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
+  const dt = _frameLastT > 0 ? Math.min(t - _frameLastT, 50) : 0;
   _frameLastT = t;
-  const _tWork = performance.now();
-  update();
-  _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
+  _updateAccum += dt;
+  if (_updateAccum >= _TARGET_FRAME_MS) {
+    _updateAccum -= _TARGET_FRAME_MS;
+    if (_updateAccum > _TARGET_FRAME_MS) _updateAccum = 0; // 過剰蓄積防止
+    /* 60fps tick: update() → draw() の順でA/V同期を保つ */
+    if (_prevUpdateT > 0) {
+      _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _prevUpdateT;
+      _frameTimesIdx++;
+    }
+    _prevUpdateT = t;
+    const _tWork = performance.now();
+    update();
+    draw();
+    _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
+  } else {
+    /* 追加フレーム（120Hz等）: draw()のみ実行して入力を即反映 */
+    draw();
+  }
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
