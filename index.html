@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.53';
+const VERSION = 'v3.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -275,6 +275,9 @@ const _BEAT_BORDER_COLORS = /* ミュート時枠線: rgba(245,208,32, 0.3〜0.8
   Array.from({length:32}, (_,i) => `rgba(245,208,32,${(0.3 + (i/31)*0.55).toFixed(4)})`);
 /* BEAT BONUS 虹色LUT: 120段階×3°=360° 起動時1回のみ生成、毎フレームはインデックス参照のみ（GCゼロ） */
 const _RAINBOW_COLORS = Array.from({length:120}, (_,i) => `hsl(${Math.round(i*3)},100%,62%)`);
+const BEAT_BONUS_CHAIN = 100; // BEAT BONUS発動に必要なチェーン数（閾値変更はここだけ）
+/* 虹色インデックス: performance.now()ベース、約6秒で一周（GCゼロ） */
+function _rainbowIdx() { return ((performance.now() / 50) | 0) % 120; }
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
 const _SYNC_RGB_TABLE = (() => {
   const t64 = Array.from({length:64});
@@ -1783,7 +1786,7 @@ function changeBet(dir) {
 }
 
 function calcPayout() {
-  const beatMult = syncChain >= 100 ? 2 : 1; // BEAT BONUS: chain100以上で配当×2
+  const beatMult = syncChain >= BEAT_BONUS_CHAIN ? 2 : 1; // BEAT BONUS: chain100以上で配当×2
   if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot * beatMult;
   const entry = HIT_TABLE.find(h => h.type === hitType);
   const base = entry ? bet * PAYOUT_RATE[entry.payout] : 0;
@@ -1991,7 +1994,7 @@ function update() {
         const payout = calcPayout();
         if (payout > 0) {
           coins += payout;
-          payoutPopups.push({ amt: payout, timer: 150, beatBonus: syncChain >= 100 });
+          payoutPopups.push({ amt: payout, timer: 150, beatBonus: syncChain >= BEAT_BONUS_CHAIN });
           if (!_isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
@@ -3358,6 +3361,21 @@ function _drawBtnBg(rect, active) {
   ctx.stroke();
 }
 
+/* ピルバッジの外形パスを設定（beginPath〜closePath）。fill()/stroke()は呼び出し側で行う */
+function _drawPillPath(bx, by, bw, bh) {
+  const r = bh / 2;
+  ctx.beginPath();
+  ctx.moveTo(bx + r, by); ctx.lineTo(bx + bw - r, by);
+  ctx.arcTo(bx + bw, by,      bx + bw, by + bh, r);
+  ctx.lineTo(bx + bw, by + bh - r);
+  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
+  ctx.lineTo(bx + r,  by + bh);
+  ctx.arcTo(bx,       by + bh, bx, by + bh - r, r);
+  ctx.lineTo(bx,      by + r);
+  ctx.arcTo(bx,       by,      bx + r, by, r);
+  ctx.closePath();
+}
+
 /* ════════════════ Main draw ════════════════ */
 function draw() {
   /* 画面シェイク */
@@ -4499,8 +4517,8 @@ function drawSyncMeter() {
   ctx.fillText(pctText, mx + 6, my + mh / 2);
   if (chainText) {
     ctx.textAlign = 'right';
-    ctx.fillStyle = syncChain >= 100
-      ? _RAINBOW_COLORS[((performance.now() / 50) | 0) % 120]
+    ctx.fillStyle = syncChain >= BEAT_BONUS_CHAIN
+      ? _RAINBOW_COLORS[_rainbowIdx()]
       : '#f5d020';
     ctx.fillText(chainText, mx + mw - 6, my + mh / 2);
   }
@@ -4579,18 +4597,7 @@ function drawSlowHandBadge() {
   }
 
   /* 背景ピル */
-  ctx.beginPath();
-  const r = bh / 2;
-  ctx.moveTo(bx + r, by);
-  ctx.lineTo(bx + bw - r, by);
-  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-  ctx.lineTo(bx + bw, by + bh - r);
-  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
-  ctx.lineTo(bx + r, by + bh);
-  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
-  ctx.lineTo(bx, by + r);
-  ctx.arcTo(bx, by, bx + r, by, r);
-  ctx.closePath();
+  _drawPillPath(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(20,10,60,0.82)';
   ctx.fill();
   ctx.strokeStyle = `rgba(160,130,255,${0.7 * alpha})`;
@@ -4612,7 +4619,7 @@ function drawBeatBonusBadge() {
 
   /* BETバー直下・同期メーターと同じ高さに配置（B案: 下部エリア） */
   const by = IS_PORTRAIT ? P_BAR_Y + P_BAR_H + 2 : BAR_Y + BAR_H + 2;
-  const text = '♪ BEAT BONUS';
+  const text = '♪BONUS READY';
   const fs   = 9; // 2/3サイズ（キャンバス内に収める）
   ctx.save();
   ctx.font = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
@@ -4623,25 +4630,14 @@ function drawBeatBonusBadge() {
   const bx = (W - bw) / 2;
 
   /* 背景ピル */
-  const ri = ((performance.now() / 50) | 0) % 120;
-  ctx.beginPath();
-  const r = bh / 2;
-  ctx.moveTo(bx + r, by); ctx.lineTo(bx + bw - r, by);
-  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-  ctx.lineTo(bx + bw, by + bh - r);
-  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
-  ctx.lineTo(bx + r, by + bh);
-  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
-  ctx.lineTo(bx, by + r);
-  ctx.arcTo(bx, by, bx + r, by, r);
-  ctx.closePath();
+  _drawPillPath(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(10,20,10,0.85)'; ctx.fill();
-  ctx.strokeStyle = _RAINBOW_COLORS[ri]; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.strokeStyle = _RAINBOW_COLORS[_rainbowIdx()]; ctx.lineWidth = 1.5; ctx.stroke();
 
-  /* テキスト */
+  /* テキスト（+1: 9pxフォントのem中央と視覚的中央のずれを補正） */
   ctx.fillStyle = '#fffde7';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, by + bh / 2);
+  ctx.fillText(text, W / 2, by + bh / 2 + 1);
   ctx.restore();
 }
 
@@ -4745,18 +4741,7 @@ function drawFeverBadge() {
   const by   = IS_PORTRAIT ? 10 : 8;
 
   /* 背景ピル */
-  ctx.beginPath();
-  const r = bh / 2;
-  ctx.moveTo(bx + r, by);
-  ctx.lineTo(bx + bw - r, by);
-  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-  ctx.lineTo(bx + bw, by + bh - r);
-  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
-  ctx.lineTo(bx + r, by + bh);
-  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
-  ctx.lineTo(bx, by + r);
-  ctx.arcTo(bx, by, bx + r, by, r);
-  ctx.closePath();
+  _drawPillPath(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(80,20,0,0.88)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(255,160,0,0.85)';
@@ -4795,18 +4780,7 @@ function drawContinueBadge() {
   ctx.translate(-W / 2, -(by + bh / 2));
 
   /* 背景ピル */
-  const r = bh / 2;
-  ctx.beginPath();
-  ctx.moveTo(bx + r, by);
-  ctx.lineTo(bx + bw - r, by);
-  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-  ctx.lineTo(bx + bw, by + bh - r);
-  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
-  ctx.lineTo(bx + r, by + bh);
-  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
-  ctx.lineTo(bx, by + r);
-  ctx.arcTo(bx, by, bx + r, by, r);
-  ctx.closePath();
+  _drawPillPath(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(20,20,40,0.82)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(180,180,255,0.7)';
