@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.40';
+const VERSION = 'v3.41';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5066,7 +5066,10 @@ function _gameLoop(t) {
     draw();
     _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
   } else {
-    /* 追加フレーム（120Hz等）: draw()のみ実行して入力を即反映 */
+    /* 追加フレーム（120Hz等・ジッター）: draw()のみ実行して入力を即反映
+       _bgmAccumStep()を呼んで音声位置を更新しないとBGMリング表示が凍結し
+       JUST判定とリングのピーク表示がずれる */
+    _bgmAccumStep();
     draw();
   }
 }
