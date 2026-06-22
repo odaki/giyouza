@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.52';
+const VERSION = 'v3.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3478,6 +3478,7 @@ function draw() {
   /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
   drawSlowHandBadge();
   drawFeverBadge();
+  drawBeatBonusBadge();
   drawContinueBadge();
 
   /* ── ポーズオーバーレイ ── */
@@ -3697,18 +3698,10 @@ function drawWheel(i) {
   }
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
   ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
-  /* ビート拍動: 外側に広がる拍動リング
-     BEAT BONUS中(chain≥100)は虹色+globalAlpha、通常は金色LUT（文字列生成ゼロ） */
+  /* ビート拍動: 外側に広がる拍動リング（テーブルで文字列生成ゼロ） */
   if (bp > 0.01) {
     ctx.beginPath(); ctx.arc(0,0,WR+12+bp*14,0,Math.PI*2);
-    if (syncChain >= 100) {
-      ctx.strokeStyle = _RAINBOW_COLORS[((performance.now() / 50) | 0) % 120];
-      ctx.globalAlpha = bp * 0.55;
-      ctx.lineWidth = 2+bp*2; ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.strokeStyle=_BEAT_RING_COLORS[Math.min(31,bp*31|0)]; ctx.lineWidth=2+bp*2; ctx.stroke();
-    }
+    ctx.strokeStyle=_BEAT_RING_COLORS[Math.min(31,bp*31|0)]; ctx.lineWidth=2+bp*2; ctx.stroke();
   }
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
@@ -4610,6 +4603,45 @@ function drawSlowHandBadge() {
   ctx.textBaseline = 'middle';
   ctx.fillText(text, W / 2, by + bh / 2);
 
+  ctx.restore();
+}
+
+function drawBeatBonusBadge() {
+  if (phase === 'startup' || phase === 'tapestart' || isGameOver) return;
+  if (syncChain < 100) return;
+
+  /* BETバー直下・同期メーターと同じ高さに配置（B案: 下部エリア） */
+  const by = IS_PORTRAIT ? P_BAR_Y + P_BAR_H + 2 : BAR_Y + BAR_H + 2;
+  const text = '♪ BEAT BONUS';
+  const fs   = 9; // 2/3サイズ（キャンバス内に収める）
+  ctx.save();
+  ctx.font = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  const tw = ctx.measureText(text).width;
+  const padX = 12, padY = 4;
+  const bw = tw + padX * 2;
+  const bh = fs + padY * 2;
+  const bx = (W - bw) / 2;
+
+  /* 背景ピル */
+  const ri = ((performance.now() / 50) | 0) % 120;
+  ctx.beginPath();
+  const r = bh / 2;
+  ctx.moveTo(bx + r, by); ctx.lineTo(bx + bw - r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.lineTo(bx + bw, by + bh - r);
+  ctx.arcTo(bx + bw, by + bh, bx + bw - r, by + bh, r);
+  ctx.lineTo(bx + r, by + bh);
+  ctx.arcTo(bx, by + bh, bx, by + bh - r, r);
+  ctx.lineTo(bx, by + r);
+  ctx.arcTo(bx, by, bx + r, by, r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(10,20,10,0.85)'; ctx.fill();
+  ctx.strokeStyle = _RAINBOW_COLORS[ri]; ctx.lineWidth = 1.5; ctx.stroke();
+
+  /* テキスト */
+  ctx.fillStyle = '#fffde7';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, W / 2, by + bh / 2);
   ctx.restore();
 }
 
