@@ -64,7 +64,8 @@ canvas {
 /* ════════════════════════════════════════════════════════════════
    目次 (Table of Contents)
    ────────────────────────────────────────────────────────────────
-   ■ 定数              canvas・カラー・サイズ・当たり判定テーブル
+   ■ 定数              canvas・DPR・カラー・サイズ・当たり判定テーブル
+                        全画面ボタン定数（FS_SUPPORTED・Path2D等）
    ■ キャッシュ・プール  オブジェクトプール・文字列キャッシュ・LUT
    ■ ゲーム状態         フェーズ・矢・コイン・ビートシンク変数群
    ■ 実績システム        実績定義・localStorage キー
@@ -81,12 +82,13 @@ canvas {
                         ザザザザ・ギョギョ
    ■ 画面エフェクト      ギザギザ・ウザウザフラッシュ
    ■ 吉祥雲 / 獅子
-   ■ Draw helpers       outText・easeOutBack・roundRect
+   ■ Draw helpers       outText・easeOutBack・roundRect・_drawBtnBg
    ■ Main draw          draw() メインループ描画
    ■ 描画関数群          BETボタン・的・矢・コインヘッダ・BETバー等
    ■ Startup Screen     スタート画面
    ■ Loop / Input       ゲームループ・入力ハンドラ
-   ■ キャンバス初期化    fitCanvas・全画面ボタン
+   ■ キャンバス初期化    fitCanvas（セーフエリア対応）
+   ■ 全画面切替         toggleFullscreen・onFsChange
    ════════════════════════════════════════════════════════════════ */
 
 /* ════════════════ 定数 ════════════════ */
@@ -107,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.47';
+const VERSION = 'v3.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -600,16 +602,10 @@ let SYNC_TIMING_OFFSET = 0; // 入力タイミング評価補正値（0 = 補正
 
 function updateSyncTimingOffset() {
   if (!audioCtx) return;
-  /* getOutputTimestamp() が使える場合: contextTime が既に outputLatency を吸収済みのため
-     固定補正は不要（0）。
-     フォールバック(Safari等): audioCtx.currentTime は書き込み位置なので
-     outputLatency + baseLatency を補正として加算する。 */
-  const hasOutputTimestamp = typeof audioCtx.getOutputTimestamp === 'function';
-  if (hasOutputTimestamp) {
-    SYNC_TIMING_OFFSET = 0;
-  } else {
-    const hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-    SYNC_TIMING_OFFSET = hw;
+  /* getOutputTimestamp() 未対応環境のみ補正値を設定する。
+     対応環境は contextTime が outputLatency を吸収済みのため初期値 0 のまま。 */
+  if (typeof audioCtx.getOutputTimestamp !== 'function') {
+    SYNC_TIMING_OFFSET = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
   }
 }
 
@@ -3370,6 +3366,16 @@ function roundRect(x,y,w,h,r) {
   ctx.quadraticCurveTo(x,y,x+r,y);
   ctx.closePath();
 }
+/* 右上/左上ボタン群共通の背景描画（roundRect + fill + gold border）
+   active=true: トロフィーON時のゴールド強調背景 */
+function _drawBtnBg(rect, active) {
+  roundRect(rect.x, rect.y, rect.w, rect.h, 6);
+  ctx.fillStyle = active ? 'rgba(180,140,0,0.75)' : 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
 
 /* ════════════════ Main draw ════════════════ */
 function draw() {
@@ -3519,12 +3525,7 @@ function draw() {
   /* ── 右上ボタン群（トロフィー・ミュート）常時最前面 ── */
   /* トロフィーボタン */
   ctx.save();
-  roundRect(ACH_TROPHY.x, ACH_TROPHY.y, ACH_TROPHY.w, ACH_TROPHY.h, 6);
-  ctx.fillStyle = showAchievements ? 'rgba(180,140,0,0.75)' : 'rgba(0,0,0,0.55)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  _drawBtnBg(ACH_TROPHY, showAchievements);
   /* トロフィーアイコン: 完全再設計 - カップ→ネック→台座の正しいシルエット */
   ctx.translate(ACH_TROPHY.x + ACH_TROPHY.w / 2, ACH_TROPHY.y + ACH_TROPHY.h / 2);
   ctx.strokeStyle = '#f5d020';
@@ -3566,9 +3567,7 @@ function draw() {
   /* ── 全画面ボタン（Fullscreen API 対応環境のみ・常時最前面） ── */
   if (FS_SUPPORTED) {
     ctx.save();
-    roundRect(FS_BTN_RECT.x, FS_BTN_RECT.y, FS_BTN_RECT.w, FS_BTN_RECT.h, 6);
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(245,208,32,0.55)'; ctx.lineWidth = 1; ctx.stroke();
+    _drawBtnBg(FS_BTN_RECT, false);
     ctx.fillStyle = '#f5d020';
     ctx.translate(FS_BTN_RECT.x + FS_BTN_RECT.w / 2, FS_BTN_RECT.y + FS_BTN_RECT.h / 2);
     ctx.scale(_FS_ICON_SCALE, _FS_ICON_SCALE);
@@ -3579,13 +3578,7 @@ function draw() {
 
   /* ── ミュートボタン（右上・常時最前面） ── */
   ctx.save();
-  /* 背景ボックス */
-  roundRect(MUTE_BTN.x, MUTE_BTN.y, MUTE_BTN.w, MUTE_BTN.h, 6);
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  _drawBtnBg(MUTE_BTN, false);
   /* アイコンを中心座標基準で描く */
   ctx.translate(MUTE_BTN.x + MUTE_BTN.w / 2, MUTE_BTN.y + MUTE_BTN.h / 2);
   const ic = '#f5d020'; // 全画面ボタンと同じ金色
@@ -3635,12 +3628,7 @@ function draw() {
   /* ── ポーズボタン（左上・トロフィー下、startup以外・常時最前面） ── */
   if (phase !== 'startup') {
     ctx.save();
-    roundRect(PAUSE_BTN.x, PAUSE_BTN.y, PAUSE_BTN.w, PAUSE_BTN.h, 6);
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(245,208,32,0.55)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    _drawBtnBg(PAUSE_BTN, false);
     ctx.translate(PAUSE_BTN.x + PAUSE_BTN.w / 2, PAUSE_BTN.y + PAUSE_BTN.h / 2);
     ctx.fillStyle = '#f5d020';
     if (isPaused) {
