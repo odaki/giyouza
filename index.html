@@ -127,7 +127,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.43';
+const VERSION = 'v3.44';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3578,7 +3578,7 @@ function draw() {
   ctx.save();
   /* 背景ボックス（全画面ボタンと同スタイル） */
   roundRect(MUTE_BTN.x, MUTE_BTN.y, MUTE_BTN.w, MUTE_BTN.h, 6);
-  ctx.fillStyle = audioMuted ? 'rgba(100,20,20,0.75)' : 'rgba(0,0,0,0.55)';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.55)';
   ctx.lineWidth = 1;
@@ -3588,8 +3588,14 @@ function draw() {
   const ic = '#f5d020'; // 全画面ボタンと同じ金色
   ctx.strokeStyle = ic; ctx.fillStyle = ic;
   ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  /* ミュート時: 右へ3px移動 + 1.2倍スケールで斜線の中央に揃える
+     通常:   体 x=-9〜-4, コーン x=-4〜3（中心 x≈-3）
+     ミュート: translate(3,0)+scale(1.2) → 体 x≈-7.8〜-2.2, コーン x≈-2.2〜6.6（中心 x≈-0.8） */
+  const spkShift = audioMuted ? 2 : 0;
+  ctx.save();
+  ctx.translate(spkShift, 0);
+  if (audioMuted) ctx.scale(0.95, 1.1); // ミュート時: 縦1.1倍・横0.95倍（横圧縮）
   /* スピーカー本体（台形＋四角） */
-  /* 四角いボディ */
   ctx.fillRect(-9, -4, 5, 8);
   /* 台形コーン */
   ctx.beginPath();
@@ -3608,12 +3614,18 @@ function draw() {
     ctx.beginPath();
     ctx.arc(3, 0, 9, -Math.PI * 0.45, Math.PI * 0.45);
     ctx.stroke();
-  } else {
-    /* ミュート: ✕ を赤で描く */
-    ctx.strokeStyle = '#e05050';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(5, -7); ctx.lineTo(11, -1); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(11, -7); ctx.lineTo(5, -1); ctx.stroke();
+  }
+  ctx.restore();
+  if (audioMuted) {
+    /* ミュート: 左上→右下の斜線（macOS スタイル）
+       完全不透明の黒ボーダーでスピーカーをシャープに切り、上からゴールドを重ねる */
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
+    ctx.strokeStyle = ic;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
   }
   ctx.restore();
 
@@ -3621,7 +3633,7 @@ function draw() {
   if (phase !== 'startup') {
     ctx.save();
     roundRect(PAUSE_BTN.x, PAUSE_BTN.y, PAUSE_BTN.w, PAUSE_BTN.h, 6);
-    ctx.fillStyle = isPaused ? 'rgba(0,100,0,0.75)' : 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(245,208,32,0.55)';
     ctx.lineWidth = 1;
