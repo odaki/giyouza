@@ -109,7 +109,7 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.51';
+const VERSION = 'v3.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -273,6 +273,8 @@ const _BEAT_RING_COLORS = /* 32段階 rgba(245,208,32, 0〜0.55) */
   Array.from({length:32}, (_,i) => `rgba(245,208,32,${((i/31)*0.55).toFixed(4)})`);
 const _BEAT_BORDER_COLORS = /* ミュート時枠線: rgba(245,208,32, 0.3〜0.85) */
   Array.from({length:32}, (_,i) => `rgba(245,208,32,${(0.3 + (i/31)*0.55).toFixed(4)})`);
+/* BEAT BONUS 虹色LUT: 120段階×3°=360° 起動時1回のみ生成、毎フレームはインデックス参照のみ（GCゼロ） */
+const _RAINBOW_COLORS = Array.from({length:120}, (_,i) => `hsl(${Math.round(i*3)},100%,62%)`);
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
 const _SYNC_RGB_TABLE = (() => {
   const t64 = Array.from({length:64});
@@ -1781,10 +1783,12 @@ function changeBet(dir) {
 }
 
 function calcPayout() {
-  if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot;
+  const beatMult = syncChain >= 100 ? 2 : 1; // BEAT BONUS: chain100以上で配当×2
+  if (isReachJackpot) return bet * PAYOUT_RATE.reachJackpot * beatMult;
   const entry = HIT_TABLE.find(h => h.type === hitType);
   const base = entry ? bet * PAYOUT_RATE[entry.payout] : 0;
-  return feverEndedReason === 'complete' ? base * 2 : base;
+  const feverMult = feverEndedReason === 'complete' ? 2 : 1;
+  return base * feverMult * beatMult;
 }
 
 function createWheel(x, y, feverChar) {
@@ -1987,7 +1991,7 @@ function update() {
         const payout = calcPayout();
         if (payout > 0) {
           coins += payout;
-          payoutPopups.push({ amt: payout, timer: 150 });
+          payoutPopups.push({ amt: payout, timer: 150, beatBonus: syncChain >= 100 });
           if (!_isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
         }
         /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
@@ -3693,10 +3697,18 @@ function drawWheel(i) {
   }
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
   ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
-  /* ビート拍動: 外側に広がる拍動リング（テーブルで文字列生成ゼロ） */
+  /* ビート拍動: 外側に広がる拍動リング
+     BEAT BONUS中(chain≥100)は虹色+globalAlpha、通常は金色LUT（文字列生成ゼロ） */
   if (bp > 0.01) {
     ctx.beginPath(); ctx.arc(0,0,WR+12+bp*14,0,Math.PI*2);
-    ctx.strokeStyle=_BEAT_RING_COLORS[Math.min(31,bp*31|0)]; ctx.lineWidth=2+bp*2; ctx.stroke();
+    if (syncChain >= 100) {
+      ctx.strokeStyle = _RAINBOW_COLORS[((performance.now() / 50) | 0) % 120];
+      ctx.globalAlpha = bp * 0.55;
+      ctx.lineWidth = 2+bp*2; ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.strokeStyle=_BEAT_RING_COLORS[Math.min(31,bp*31|0)]; ctx.lineWidth=2+bp*2; ctx.stroke();
+    }
   }
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
@@ -4167,6 +4179,9 @@ function drawPayoutPopup() {
     const popY    = H / 2 - 60 - (1 - pt) * 30;
     ctx.globalAlpha = alpha * 0.95;
     outText(`＋${fmt(p.amt)}ギヨウザ！`, W / 2, popY, '#ffee44', 'rgba(0,0,0,0.9)', 8);
+    if (p.beatBonus) {
+      outText('♪BONUS', W / 2, popY + 44, '#fffde7', 'rgba(0,0,0,0.8)', 4);
+    }
   }
   ctx.restore();
 }
@@ -4491,7 +4506,9 @@ function drawSyncMeter() {
   ctx.fillText(pctText, mx + 6, my + mh / 2);
   if (chainText) {
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#f5d020';
+    ctx.fillStyle = syncChain >= 100
+      ? _RAINBOW_COLORS[((performance.now() / 50) | 0) % 120]
+      : '#f5d020';
     ctx.fillText(chainText, mx + mw - 6, my + mh / 2);
   }
 
