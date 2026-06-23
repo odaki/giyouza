@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.62';
+const VERSION = 'v3.63';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -144,7 +144,7 @@ const GIGIGIGI = ['ギ', 'ギ', 'ギ', 'ギ'];  // 小当たり③
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 小当たり④
 
 const WR  = IS_PORTRAIT ? 66  : 95;
-const WXS = IS_PORTRAIT ? [185, 185, 185, 185] : [230, 430, 630, 830];
+const WXS = IS_PORTRAIT ? [210, 210, 210, 210] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
    コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
 const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [235, 235, 235, 235];
@@ -4604,7 +4604,7 @@ function drawSyncJust() {
 
   /* 表示位置
      横: BETバー上端(H-106=414)の少し上 → y≈394、x=中央
-     縦: 結果文字と同じx中心(WXS[0]=185)、第4的下・BETバー上 → y=712 */
+     縦: 結果文字と同じx中心(WXS[0]=210)、第4的下・BETバー上 → y=712 */
   const px = IS_PORTRAIT ? WXS[0] : W / 2;
   const py = IS_PORTRAIT ? P_BAR_Y - 20 : BAR_Y - 20;
   const fs = IS_PORTRAIT ? 20  : 22;
