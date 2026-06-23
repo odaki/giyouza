@@ -109,13 +109,24 @@ canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
-const VERSION = 'v3.54';
+
+const VERSION = 'v3.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
 const YD  = '#c8a800';
 const GN  = '#0f5c22';
 const GN2 = '#1a7a30';
+
+/* ホイールハブグラジェント: 全ホイール・全トライ共通（毎トライの生成＆GCを排除）
+   ctx.scale(_dpr,_dpr)適用済み・カラー定数定義後に1回だけ生成。
+   drawWheel()内でctx.translate後に使うためグラジェント座標(0,0)は
+   常にホイール中心に正しくマッピングされる。 */
+const _WHEEL_HUB_GRD = (() => {
+  const g = ctx.createRadialGradient(0,0,0,0,0,10);
+  g.addColorStop(0,'#fffde7'); g.addColorStop(1,YD);
+  return g;
+})();
 
 const SEG_D = { 'ギ':'#7b1a1a', 'ヨ':'#164d28', 'ウ':'#7a4e00', 'ザ':'#1a2e5a' };
 const SEG_L = { 'ギ':'#c0392b', 'ヨ':'#27ae60', 'ウ':'#e8a000', 'ザ':'#2471a3' };
@@ -1817,9 +1828,8 @@ function createWheel(x, y, feverChar) {
     angle += span;
     return s;
   });
-  /* ホイールハブのグラジェントもキャッシュ */
-  const hubGrd = ctx.createRadialGradient(0,0,0,0,0,10);
-  hubGrd.addColorStop(0,'#fffde7'); hubGrd.addColorStop(1,YD);
+  /* ホイールハブのグラジェント: 起動時に1回生成した共通定数を参照（GC削減） */
+  const hubGrd = _WHEEL_HUB_GRD;
   return {
     x, y, segs, hubGrd,
     rot:       Math.random() * Math.PI * 2,
