@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.59';
+const VERSION = 'v3.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1742,6 +1742,10 @@ function init(fromStartup, fromGameOver) {
   }
   _pendingWheels = null;
   _pendingWheelScheduled = false;
+  /* 次トライ用ホイールをアイドル時間に事前構築開始。
+     プレイヤーが4本射るまでの時間（≥270ms）で完成するため、
+     ハズレ自動リセット時も同期生成コストを回避できる。 */
+  _scheduleWheelPreBuild();
   curIdx     = 0;
   phase      = 'idle';
   arrowProgress = 0;
