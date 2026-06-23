@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.58';
+const VERSION = 'v3.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3937,14 +3937,8 @@ function drawCoinHeader() {
   ctx.globalAlpha = blink;
   ctx.font = `bold 60px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  /* アニメーション中(coinsDisp≠coins)はshadowBlurを省略。
-     毎フレーム文字列が変わるとGPUキャッシュが無効になり再ラスタライズが走るため。
-     静止時は通常のグロー表示を維持する。 */
-  ctx.shadowColor = glowColor;
-  ctx.shadowBlur = (coinsDisp !== coins) ? 0 : (lowCoins ? 22 : 14);
   ctx.fillStyle = mainColor;
   ctx.fillText(_cachedCoinsStr, cx, py + ph / 2 - 1);
-  ctx.shadowBlur = 0;
 
   /* ベストスコア（小・右下） */
   if (bestCoins > coins) {
