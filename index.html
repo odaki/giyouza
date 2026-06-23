@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.55';
+const VERSION = 'v3.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -547,7 +547,27 @@ let showAchievements = false;
 let isPaused = false;
 let _pauseBgmPos  = 0;   // ポーズ時のBGM再生位置（秒）
 let _pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
-/* 実績パネル・ボタンの当たり判定領域（canvas座標） */
+/* ── ホイール事前構築: done フェーズのアイドル時間に次トライ用を準備 ──
+   プレイヤーがエフェクトを見ている間にグラジェント生成を済ませ
+   タップ時の touch handler 内同期処理（GCスパイク）を削減する */
+let _pendingWheels = null;        // 事前構築済みホイール（null=未構築）
+let _pendingWheelScheduled = false; // スケジュール済みフラグ（重複防止）
+
+function _scheduleWheelPreBuild() {
+  if (_pendingWheelScheduled) return;
+  _pendingWheelScheduled = true;
+  const build = () => {
+    /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
+       feverPending/isFever が真の場合は init() 側で再構築（レアケース）。 */
+    _pendingWheels = WXS.map((x, i) => createWheel(x, WYS[i], null));
+  };
+  /* requestIdleCallback: iOS Safari未対応のためsetTimeoutでフォールバック */
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(build, { timeout: 200 });
+  } else {
+    setTimeout(build, 0);
+  }
+}
 
 /* ════════════════ UI レイアウト定数 ════════════════ */
 
@@ -770,8 +790,13 @@ function calcSyncScore(atTime) {
   const rawPos   = audioPos + (_BEAT_DISPLAY_ADVANCE - _hwLatency) * rate; // getBeatPulseと同一基準
   const loopN    = Math.floor(rawPos / _bgmQuantizedLoopDur);
   const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
-  const ph       = ((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT; // 0〜BGM_BEAT
-  const distSec  = ph < BGM_BEAT / 2 ? ph : BGM_BEAT - ph;         // 最近傍キックまでの距離
+  /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
+     メロディは4分・8分音符両方に音符があるため、4分音符グリッドでは
+     8分音符タイミングが常に最悪スコアになっていた。
+     ビートリング表示（getBeatPulse）は4分音符周期のまま維持。 */
+  const halfBeat = BGM_BEAT / 2;
+  const ph       = ((posInLoop % halfBeat) + halfBeat) % halfBeat; // 0〜halfBeat
+  const distSec  = ph < halfBeat / 2 ? ph : halfBeat - ph;        // 最近傍8分音符までの距離
   const distMs   = distSec * 1000;
   return Math.max(0, 1 - distMs / 100); // 0ms→1.0, 100ms→0.0, 100ms超→0
 }
@@ -1704,7 +1729,19 @@ function init(fromStartup, fromGameOver) {
   } else {
     isSlowSpin = !isFever && Math.random() < slowProb;
   }
-  wheels     = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
+  /* 事前構築済みホイールを再利用（GCスパイク回避）。
+     フィーバー発動時・未構築時は通常通り同期生成にフォールバック。 */
+  if (_pendingWheels && !isFever && !feverPending) {
+    wheels = _pendingWheels;
+    /* isSlowSpin はここで初めて確定するため speed のみ更新 */
+    for (const w of wheels) {
+      w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
+    }
+  } else {
+    wheels = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
+  }
+  _pendingWheels = null;
+  _pendingWheelScheduled = false;
   curIdx     = 0;
   phase      = 'idle';
   arrowProgress = 0;
@@ -2102,7 +2139,10 @@ function update() {
     }
     /* エフェクト終了後: canRestartをセット
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
-    if (!isGameOver && !_jackpotAutoReset && endTimer > minWait && allShown) canRestart = true;
+    if (!isGameOver && !_jackpotAutoReset && endTimer > minWait && allShown) {
+      canRestart = true;
+      _scheduleWheelPreBuild(); // アイドル時間に次トライのホイールを事前構築
+    }
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
