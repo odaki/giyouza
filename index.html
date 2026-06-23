@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.60';
+const VERSION = 'v3.61';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -436,9 +436,9 @@ const HIT_TABLE = [
   { type:'jackpot',  pat:TARGET,   payout:'jackpot', medId:null,       onHit:null,              update:null,          draw:drawItems,         drawDelay:0  },
   { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  medId:'uyouyo',   onHit:initWorms,         update:updateWorms,   draw:drawWorms,          drawDelay:40 },
   { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawItems,         drawDelay:0  },
-  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:null,          draw:drawYoyoyoyo,       drawDelay:50 },
+  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:updateYoyoyoyo,draw:drawYoyoyoyo,       drawDelay:50 },
   { type:'uuuu',     pat:UUUU,     payout:'hitMed',  medId:'uuuu',     onHit:initUuuu,          update:updateUuuu,    draw:drawUuuu,           drawDelay:50 },
-  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  medId:'gyogyo',   onHit:initGyogyo,        update:null,          draw:drawGyogyo,         drawDelay:45 },
+  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  medId:'gyogyo',   onHit:initGyogyo,        update:updateGyogyo,  draw:drawGyogyo,         drawDelay:45 },
   { type:'gizagiza', pat:GIZAGIZA, payout:'hitSml',  medId:'gizagiza', onHit:launchGizaFireworks,update:null,         draw:drawGizagizaEffect, drawDelay:0  },
   { type:'uzauza',   pat:UZAUZA,   payout:'hitSml',  medId:'uzauza',   onHit:initUzaTexts,      update:updateUzaTexts,draw:drawUzaTexts,       drawDelay:40 },
   { type:'gigigigi', pat:GIGIGIGI, payout:'hitSml',  medId:'gigigigi', onHit:null,              update:updateGigigigi,draw:drawGigigigi,       drawDelay:0  },
@@ -2808,14 +2808,19 @@ function initYoyoyoyo() {
   }
 }
 
+function updateYoyoyoyo() {
+  for (const y of yoyos) {
+    y.y   = y.topY + y.amp * (0.5 + 0.5 * Math.sin(endTimer * y.freq + y.phase));
+    y.rot += y.spinSpd;
+  }
+}
+
 function drawYoyoyoyo() {
   if (hitType !== 'yoyoyoyo' || endTimer < 50) return;
   for (const y of yoyos) {
     const age = endTimer - 50 - y.delay;
     if (age <= 0) continue;
-    const a  = Math.min(1, age / 22);
-    y.y  = y.topY + y.amp * (0.5 + 0.5*Math.sin(endTimer * y.freq + y.phase));
-    y.rot += y.spinSpd;
+    const a = Math.min(1, age / 22);
 
     /* 糸 */
     ctx.save();
@@ -3030,14 +3035,23 @@ function initGyogyo() {
   gyogyoFish = [];
   for (let i = 0; i < 18; i++) {
     const fromLeft = Math.random() < 0.5;
+    const size = 28 + Math.random() * 28;
+    /* bodyGrd: makeItem()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
+       グラジェント座標はfillStyle適用時の座標系で評価されるため
+       transform前に生成しても translate+rotate後の使用で正しく機能する */
+    const bodyGrd = ctx.createRadialGradient(-size*0.15, -size*0.3, 0, 0, size*0.1, size*1.1);
+    bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
+    bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
+    bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
     gyogyoFish.push({
       x:     fromLeft ? -70 : W + 70,
       y:     60 + Math.random() * (H - 140),
       vx:    (fromLeft ? 1 : -1) * (2.5 + Math.random() * 3.5),
       vy:    (Math.random() - 0.5) * 2.5,
-      size:  28 + Math.random() * 28,
+      size,
       phase: Math.random() * Math.PI * 2,
       col:   ['#f0a030','#e06820','#ff8040','#ffcc44','#dd6644'][Math.floor(Math.random()*5)],
+      bodyGrd,
       exclamTimer: 0,
       exclamDur:   0,
     });
@@ -3071,13 +3085,9 @@ function drawFish(f, t) {
 
   /* ── ギヨウザ本体（drawOneItem と同じパス構成） ── */
   /* 本体楕円（焼きギヨウザカラー） */
-  const bodyGrd = ctx.createRadialGradient(-s*0.15, -s*0.3, 0, 0, s*0.1, s*1.1);
-  bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
-  bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
-  bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
   ctx.beginPath();
   ctx.ellipse(0, s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
-  ctx.fillStyle = bodyGrd;
+  ctx.fillStyle = f.bodyGrd; // initGyogyo()で事前生成済み
   ctx.globalAlpha = 0.97;
   ctx.fill();
   ctx.strokeStyle = 'rgba(120,90,50,0.55)';
@@ -3159,6 +3169,22 @@ function drawFish(f, t) {
   ctx.restore();
 }
 
+function updateGyogyo() {
+  const t = endTimer;
+  for (const f of gyogyoFish) {
+    f.x += f.vx;
+    f.y += f.vy + Math.sin(t * 0.09 + f.phase) * 0.6;
+    f.vx *= 0.998;
+    if (Math.abs(f.vx) < 1.2) f.vx = 1.2 * Math.sign(f.vx);
+    const margin = f.size * 1.2;
+    if (f.x < margin   && f.vx < 0) { f.vx *= -1; f.exclamTimer = 0; f.exclamDur = 25; }
+    if (f.x > W-margin && f.vx > 0) { f.vx *= -1; f.exclamTimer = 0; f.exclamDur = 25; }
+    if (f.y < margin   && f.vy < 0) f.vy *= -1;
+    if (f.y > H-margin && f.vy > 0) f.vy *= -1;
+    if (f.exclamTimer < f.exclamDur) f.exclamTimer++;
+  }
+}
+
 function drawGyogyo() {
   if (hitType !== 'gyogyo' || endTimer < 45) return;
   const t = endTimer;
@@ -3168,25 +3194,10 @@ function drawGyogyo() {
   ctx.globalAlpha = fadeIn;
 
   for (const f of gyogyoFish) {
-    /* 移動 */
-    f.x += f.vx;
-    f.y += f.vy + Math.sin(t * 0.09 + f.phase) * 0.6;
-    f.vx *= 0.998;
-    /* 最低横速度を保証: 減衰しきっても縦動きだけにならないようにする */
-    if (Math.abs(f.vx) < 1.2) f.vx = 1.2 * Math.sign(f.vx);
-
-    /* 壁で反転 */
-    const margin = f.size * 1.2;
-    if (f.x < margin  && f.vx < 0) { f.vx *= -1; f.exclamTimer = 0; f.exclamDur = 25; }
-    if (f.x > W - margin && f.vx > 0) { f.vx *= -1; f.exclamTimer = 0; f.exclamDur = 25; }
-    if (f.y < margin  && f.vy < 0) f.vy *= -1;
-    if (f.y > H - margin && f.vy > 0) f.vy *= -1;
-
     drawFish(f, t);
 
-    /* ！エクスクラメーション */
+    /* ！エクスクラメーション（exclamTimer更新はupdateGyogyo()で実施） */
     if (f.exclamTimer < f.exclamDur) {
-      f.exclamTimer++;
       const prog = f.exclamTimer / f.exclamDur;
       const alpha2 = prog < 0.5 ? prog * 2 : (1 - prog) * 2;
       ctx.save();
