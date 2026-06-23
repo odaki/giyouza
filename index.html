@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.56';
+const VERSION = 'v3.57';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4210,7 +4210,7 @@ function drawMissPopup() {
   ctx.save();
   ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.shadowColor = '#cc2200'; ctx.shadowBlur = 20;
+  /* shadowBlur除去: 黒アウトライン(lw=6)で視認性は確保済み。GPU負荷削減。 */
   for (const p of missPopups) {
     const elapsed = TOTAL - p.timer;
     const t       = elapsed / TOTAL;            // 0→1
