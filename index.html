@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.63';
+const VERSION = 'v3.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -163,7 +163,8 @@ let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（play
 /* ── 静的レイヤーキャッシュ ──
    雲・獅子は毎フレーム同じパスを繰り返し描画していた。
    OffscreenCanvas に事前描画しておき、drawImage() 1回で済ませる。 */
-let _staticLayerCanvas = null; // 雲 + 獅子（PC のみ）を合成した透明オフスクリーン
+let _staticLayerCanvas = null; // 雲（PC のみ）の透明オフスクリーン
+let _lionLayerCanvas   = null; // 獅子（PC のみ）専用オフスクリーン（合成時にalphaを適用）
 
 function _prebuildStaticLayers() {
   /* OffscreenCanvas 未対応の古いブラウザではスキップ（通常描画にフォールバック） */
@@ -172,15 +173,20 @@ function _prebuildStaticLayers() {
   const oc2 = oc.getContext('2d');
   oc2.scale(_dpr, _dpr);
 
-  /* 雲を描く（_drawCloudTo を使って oc2 に直接描画） */
+  /* 雲を描く */
   for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
-
-  /* PC レイアウトのみ獅子を描く */
-  if (!IS_PORTRAIT) {
-    _drawShishiTo(oc2, 72,  290, 0.82, false);
-    _drawShishiTo(oc2, 988, 290, 0.82, true);
-  }
   _staticLayerCanvas = oc;
+
+  /* PC レイアウトのみ獅子を別キャンバスに不透明で描画。
+     main canvas への合成時に globalAlpha で背景とブレンドする。 */
+  if (!IS_PORTRAIT) {
+    const lc  = new OffscreenCanvas(W * _dpr, H * _dpr);
+    const lc2 = lc.getContext('2d');
+    lc2.scale(_dpr, _dpr);
+    _drawShishiTo(lc2, 78,  360, 0.82, false);
+    _drawShishiTo(lc2, 983, 360, 0.82, true);
+    _lionLayerCanvas = lc;
+  }
 }
 
 /* ── 文字列キャッシュ（coins/bet が変わった時だけ再計算） ──
@@ -1509,10 +1515,10 @@ const CLOUDS = IS_PORTRAIT ? [
   { x: 260, y:  48, s:0.6,  a:0.65, r: 0.25 },
   { x: 870, y:  40, s:0.75, a:0.70, r:-0.2  },
   { x: 940, y:  78, s:0.8,  a:0.70, r: 0.15 },
-  { x:  30, y: 440, s:0.65, a:0.60, r:-0.3  },
-  { x: 140, y: 510, s:0.55, a:0.55, r: 0.1  },
-  { x: 950, y: 460, s:0.70, a:0.60, r: 0.2  },
-  { x:1040, y: 380, s:0.58, a:0.55, r:-0.15 },
+  { x:  30, y: 480, s:0.65, a:0.60, r:-0.3  },
+  { x: 140, y: 520, s:0.55, a:0.55, r: 0.1  },
+  { x: 950, y: 490, s:0.70, a:0.60, r: 0.2  },
+  { x:1040, y: 460, s:0.58, a:0.55, r:-0.15 },
   { x: 490, y:  20, s:0.50, a:0.45, r: 0.0  },
   { x: 580, y: 530, s:0.48, a:0.45, r: 0.0  },
 ];
@@ -3338,48 +3344,112 @@ function _drawShishiTo(c2, cx, cy, sc, mirX) {
   c2.translate(cx, cy);
   c2.scale(mirX ? -sc : sc, sc);
 
+  /* 胴体・脚（最背面に描画 → たてがみ・顔の下に隠れる） */
+  c2.fillStyle=Y;
+  c2.beginPath(); c2.ellipse(-23,20,13,16,0.15,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse( 23,20,13,16,-0.15,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(0,12,29,18,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(-32,44,11,18,0.1,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse( 32,44,11,18,-0.1,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(0,28,22,20,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(-16,36,11,18,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse( 16,36,11,18,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(-38,62,16,9,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse( 38,62,16,9,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(-16,54,14,9,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse( 16,54,14,9,0,0,Math.PI*2); c2.fill();
+  c2.fillStyle=GN;
+  for (const [x,y,r] of [[-10,8,5],[10,8,5],[0,18,5],[-22,20,4],[22,20,4]]) {
+    c2.beginPath(); c2.arc(x,y,r,0,Math.PI*2); c2.fill();
+  }
+  /* 尻尾: 根元は体の側面、先端が横外側（+やや上）を向く
+     rotate(-1.2)で先端がx負方向=外側へ。mirXで右獅子は右外側に自動反転 */
+  c2.save();
+  c2.translate(-44, 40);
+  c2.rotate(-1.2);
+  c2.beginPath();
+  c2.moveTo(0,-24);
+  c2.bezierCurveTo( 9,-14, 11, 3, 0, 15);
+  c2.bezierCurveTo(-11,  3, -9,-14, 0,-24);
+  c2.closePath();
+  c2.fillStyle=Y; c2.fill();
+  c2.restore();
+
+  /* たてがみ: 全周に巻き貝・渦巻きカール（狛犬スタイル）
+     上部3個(i=8,9,10)・下部3個(i=2,3,4)は顔より前面に描画 */
+  const _hx = 0, _hy = -28, _ringR = 45, _cR = 17, _N = 12, _WR = 1.22;
+  const _drawCurl = i => {
+    const a = (i / _N) * Math.PI * 2;
+    const cx = _hx + Math.cos(a) * _ringR, cy = _hy + Math.sin(a) * _ringR;
+    c2.fillStyle = Y;
+    c2.beginPath(); c2.ellipse(cx, cy, _cR*_WR, _cR, 0, 0, Math.PI*2); c2.fill();
+    c2.save();
+    c2.translate(cx, cy); c2.scale(_WR, 1);
+    /* C字弧の開口を顔中心方向に向ける。
+       現開口方向≈5.751rad、顔中心方向=a+π。差分を回転として加算。 */
+    const _rot = (a + Math.PI) - 5.751;
+    c2.globalAlpha = 0.6; // C字弧の濃さ
+    c2.beginPath();
+    c2.arc(-_cR*0.18, _cR*0.08, _cR*0.52, 0.35 + _rot, Math.PI*1.55 + _rot);
+    c2.strokeStyle = GN; c2.lineWidth = _cR*0.3; c2.lineCap = 'round'; c2.stroke();
+    c2.globalAlpha = 1;
+    c2.restore();
+  };
+  /* 背面カール（顔の後ろ）: 左右の6個 */
+  for (const i of [0,1,5,6,7,11]) _drawCurl(i);
+  /* 顔の輪郭: 少し大きな緑の楕円を先に描いてボーダーを作る */
+  c2.globalAlpha = 0.65;
+  c2.fillStyle = GN;
+  c2.beginPath(); c2.ellipse(0,-28, 35*_WR+4, 39, 0, 0, Math.PI*2); c2.fill();
+  c2.globalAlpha = 1;
+  /* 頭部楕円（横長）を上から描画 */
   c2.fillStyle = Y;
-  const mane=[[-Math.PI*0.85,-40],[-Math.PI*0.55,-40],[-Math.PI*0.20,-40],
-               [Math.PI*0.20,-40],[Math.PI*0.55,-40],[Math.PI*0.85,-40],
-               [Math.PI*1.15,-30],[-Math.PI*1.15,-30]];
-  for (const [a,d] of mane) {
-    c2.beginPath(); c2.arc(Math.cos(a)*44,Math.sin(a)*44+d/2,20,0,Math.PI*2); c2.fill();
-  }
-  c2.beginPath(); c2.arc(0,-28,33,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(0,-28, 35*_WR, 35, 0, 0, Math.PI*2); c2.fill();
+  /* 目: 緑塗りつぶし */
   c2.fillStyle=GN;
-  c2.beginPath(); c2.arc(-12,-34,10,0,Math.PI*2); c2.fill();
-  c2.beginPath(); c2.arc(12,-34,10,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.arc(-17,-34,3.5,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.arc(17,-34,3.5,0,Math.PI*2); c2.fill();
+  /* 瞼: 顔色の大きな円で目の上部・外側寄りを覆う（左右対称） */
   c2.fillStyle=Y;
-  c2.beginPath(); c2.arc(-9,-33,4,0,Math.PI*2); c2.fill();
-  c2.beginPath(); c2.arc(15,-33,4,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.arc(-17-2,-34-7,5,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.arc( 17+2,-34-7,5,0,Math.PI*2); c2.fill();
+  /* 眉毛: 尻尾と同形状（ティアドロップ）、半透明で微妙な濃さ
+     内側（鼻寄り）が高くなるよう傾ける（凛々しい表情） */
+  c2.save();
+  c2.globalAlpha = 0.30;
+  for (const [ex, rot] of [[-17, 1.3], [17, -1.3]]) {
+    c2.save();
+    c2.translate(ex, -44);
+    c2.rotate(rot);
+    c2.beginPath();
+    c2.moveTo(0,-10);
+    c2.bezierCurveTo( 4,-5.5, 4.5, 1, 0, 6);
+    c2.bezierCurveTo(-4.5, 1, -4,-5.5, 0,-10);
+    c2.closePath();
+    c2.fillStyle=GN; c2.fill();
+    c2.restore();
+  }
+  c2.restore();
+  /* 鼻（小さめ・少し上に） */
   c2.fillStyle=GN;
-  c2.beginPath(); c2.ellipse(0,-18,7,5,0,0,Math.PI*2); c2.fill();
+  c2.beginPath(); c2.ellipse(0,-21,5,3,0,0,Math.PI*2); c2.fill();
+  /* 口: 人字型（犬っぽい口） */
+  /* 口: 人字型（犬っぽい口） */
+  c2.strokeStyle=GN; c2.lineWidth=1.8; c2.lineCap='round'; c2.lineJoin='round';
+  /* 人中（鼻下〜口中央）: 口にピッタリ接続 */
   c2.beginPath();
-  c2.moveTo(-24,-10); c2.bezierCurveTo(-20,8,20,8,24,-10);
-  c2.bezierCurveTo(16,15,-16,15,-24,-10); c2.fill();
-  c2.fillStyle=Y;
-  for (let i=-2;i<=2;i++){
-    c2.beginPath(); c2.moveTo(i*8,-6); c2.lineTo(i*8-4,6); c2.lineTo(i*8+4,6); c2.closePath(); c2.fill();
-  }
-  c2.fillStyle=Y;
-  c2.beginPath(); c2.ellipse(5,38,27,40,Math.PI*0.05,0,Math.PI*2); c2.fill();
-  c2.fillStyle=GN;
-  for (const [sx,sy] of [[-10,18],[12,20],[0,33],[-14,44],[14,46],[2,58],[-8,65]]) {
-    c2.beginPath(); c2.arc(sx,sy,6,0,Math.PI*2); c2.fill();
-  }
-  c2.fillStyle=Y;
-  c2.beginPath(); c2.ellipse(-18,72,11,18,Math.PI*0.1,0,Math.PI*2); c2.fill();
-  c2.beginPath(); c2.ellipse(22,72,11,18,-Math.PI*0.1,0,Math.PI*2); c2.fill();
-  c2.beginPath(); c2.arc(-18,88,13,0,Math.PI*2); c2.fill();
-  c2.beginPath(); c2.arc(22,88,13,0,Math.PI*2); c2.fill();
-  c2.strokeStyle=Y; c2.lineWidth=9; c2.lineCap='round'; c2.lineJoin='round';
-  c2.beginPath();
-  c2.moveTo(28,28);
-  c2.bezierCurveTo(58,10,75,-20,58,-45);
-  c2.bezierCurveTo(41,-70,18,-58,28,-40);
-  c2.bezierCurveTo(38,-22,52,-16,46,-8);
-  c2.bezierCurveTo(40,0,34,5,36,12);
+  c2.moveTo(0,-17); c2.lineTo(0,-13);
   c2.stroke();
+  /* 口: Wの下二つのアーチを丸くした形（ω口）
+     左右の口角(高め)→下方へアーチ→中央で合わさる */
+  c2.beginPath();
+  c2.moveTo(-7,-13);
+  c2.quadraticCurveTo(-4,-10, 0,-13);
+  c2.quadraticCurveTo(4,-10, 7,-13);
+  c2.stroke();
+  /* 前面カール: 下部中央(i=3)を最背面→左右(i=2,4)→上部(i=8,9,10) */
+  _drawCurl(3);          // 下部中央: 最背面
+  for (const i of [2,4,8,9,10]) _drawCurl(i);
   c2.restore();
 }
 function drawShishi(cx, cy, sc, mirX) { _drawShishiTo(ctx, cx, cy, sc, mirX); }
@@ -3477,11 +3547,18 @@ function draw() {
      キャッシュ未構築（古いブラウザ等）はフォールバックで通常描画 */
   if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
+    if (_lionLayerCanvas) {
+      ctx.globalAlpha = 0.6; // 雲と同程度の透明度（内部は不透明のまま背景とブレンド）
+      ctx.drawImage(_lionLayerCanvas, 0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
   } else {
     for (const c of CLOUDS) drawCloud(c.x,c.y,c.s,c.a,c.r);
     if (!IS_PORTRAIT) {
-      drawShishi(72, 290, 0.82, false);
-      drawShishi(988,290, 0.82, true);
+      ctx.globalAlpha = 0.6;
+      drawShishi(78, 360, 0.82, false);
+      drawShishi(983, 360, 0.82, true);
+      ctx.globalAlpha = 1;
     }
   }
 
