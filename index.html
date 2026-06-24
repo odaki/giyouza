@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.68';
+const VERSION = 'v3.69';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -556,11 +556,18 @@ let showAchievements = false;
 let isPaused = false;
 let _pauseBgmPos  = 0;   // ポーズ時のBGM再生位置（秒）
 let _pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
-/* ── ホイール事前構築: done フェーズのアイドル時間に次トライ用を準備 ──
-   プレイヤーがエフェクトを見ている間にグラジェント生成を済ませ
-   タップ時の touch handler 内同期処理（GCスパイク）を削減する */
-let _pendingWheels = null;        // 事前構築済みホイール（null=未構築）
-let _pendingWheelScheduled = false; // スケジュール済みフラグ（重複防止）
+/* ── ホイール事前構築 & OffscreenCanvas プール ──────────────────────────────
+   プレイヤーがエフェクトを見ている間に次トライのホイールを構築し、
+   タップ時の同期処理（GCスパイク）を削減する。
+   OffscreenCanvas はプールで再利用してアロケーションをゼロにする。 */
+let _pendingWheels        = null;  // 事前構築済みホイール（null=未構築）
+let _pendingWheelScheduled= false; // スケジュール済みフラグ（重複防止）
+const _freeWheelOCs       = [];    // 解放済みOCプール（再利用でGCゼロ）
+
+function _releaseWheelOCs(ws) {
+  if (!ws) return;
+  for (const w of ws) if (w?._oc) { _freeWheelOCs.push(w._oc); w._oc = null; }
+}
 
 function _scheduleWheelPreBuild() {
   if (_pendingWheelScheduled) return;
@@ -1735,8 +1742,8 @@ function init(fromStartup, fromGameOver) {
   } else {
     isSlowSpin = !isFever && Math.random() < slowProb;
   }
-  /* 旧ホイールの OffscreenCanvas をプールへ返却（GCスパイク防止） */
-  if (wheels) for (const w of wheels) if (w?._oc) { _freeWheelOCs.push(w._oc); w._oc = null; }
+  /* 旧ホイールのOCをプールへ返却してGCを防ぐ */
+  _releaseWheelOCs(wheels);
   /* 事前構築済みホイールを再利用（GCスパイク回避）。
      フィーバー発動時・未構築時は通常通り同期生成にフォールバック。 */
   if (_pendingWheels && !isFever && !feverPending) {
@@ -1854,18 +1861,15 @@ function calcPayout() {
   return base * feverMult * beatMult;
 }
 
-/* ホイール OffscreenCanvas の再利用プール。
-   毎トライ new OffscreenCanvas を生成すると GC スパイクが発生するため
-   古いOCをプールに戻し次トライで再利用してアロケーションをゼロにする。 */
-const _freeWheelOCs = [];
+/* ホイールOCのCSSピクセル半径（WR+余白・定数）。drawWheel でも参照 */
+const _WHEEL_OC_R = WR + 4;
 
 /* セグメント・文字・ハブを OffscreenCanvas に事前描画。
    文字は mid + π/2 回転させてホイール中心が文字の下方になるようにする。
    毎フレームの描画コストをなくし drawImage 1回に置き換える。 */
 function _buildWheelOC(w) {
   if (typeof OffscreenCanvas === 'undefined') return;
-  const _ocR = WR + 4; // セグメント半径 + 余白
-  const sz = Math.ceil(_ocR * 2 * _dpr);
+  const sz = Math.ceil(_WHEEL_OC_R * 2 * _dpr);
   /* プールから再利用、なければ新規生成 */
   const oc = _freeWheelOCs.pop() || new OffscreenCanvas(sz, sz);
   const c = oc.getContext('2d');
@@ -1873,7 +1877,7 @@ function _buildWheelOC(w) {
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, sz, sz);
   c.scale(_dpr, _dpr);
-  c.translate(_ocR, _ocR); // ハブを中心に
+  c.translate(_WHEEL_OC_R, _WHEEL_OC_R); // ハブを中心に
 
   for (const s of w.segs) {
     const mid = s.start + s.span / 2;
@@ -1901,8 +1905,7 @@ function _buildWheelOC(w) {
   hubG.addColorStop(0,'#fffde7'); hubG.addColorStop(1,YD);
   c.beginPath(); c.arc(0,0,10,0,Math.PI*2); c.fillStyle=hubG; c.fill();
 
-  w._oc  = oc;
-  w._ocR = _ocR; // CSS ピクセルでの中心までの距離
+  w._oc = oc; // _ocR は _WHEEL_OC_R（定数）を参照するため不要
 }
 
 function createWheel(x, y, feverChar) {
@@ -1937,7 +1940,7 @@ function createWheel(x, y, feverChar) {
     resultPop: 0,
     hasArrow:  false,
     syncScore: 0.5,
-    _oc: null, _ocR: 0, // OffscreenCanvas（事前描画済みセグメント+文字+ハブ）
+    _oc: null, // OffscreenCanvas（事前描画済みセグメント+文字+ハブ）
   };
   _buildWheelOC(w);
   return w;
@@ -3896,7 +3899,7 @@ function drawWheel(i) {
   if (w._oc) {
     ctx.save();
     ctx.rotate(w.rot);
-    ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
+    ctx.drawImage(w._oc, -_WHEEL_OC_R, -_WHEEL_OC_R, _WHEEL_OC_R*2, _WHEEL_OC_R*2);
     ctx.restore();
   } else {
     /* フォールバック: OffscreenCanvas 未対応時は従来描画（文字は回転なし） */
