@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.64';
+const VERSION = 'v3.65';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -163,8 +163,7 @@ let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（play
 /* ── 静的レイヤーキャッシュ ──
    雲・獅子は毎フレーム同じパスを繰り返し描画していた。
    OffscreenCanvas に事前描画しておき、drawImage() 1回で済ませる。 */
-let _staticLayerCanvas = null; // 雲（PC のみ）の透明オフスクリーン
-let _lionLayerCanvas   = null; // 獅子（PC のみ）専用オフスクリーン（合成時にalphaを適用）
+let _staticLayerCanvas = null; // 雲 + 獅子（PC のみ）を合成した透明オフスクリーン
 
 function _prebuildStaticLayers() {
   /* OffscreenCanvas 未対応の古いブラウザではスキップ（通常描画にフォールバック） */
@@ -175,18 +174,16 @@ function _prebuildStaticLayers() {
 
   /* 雲を描く */
   for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
-  _staticLayerCanvas = oc;
 
-  /* PC レイアウトのみ獅子を別キャンバスに不透明で描画。
-     main canvas への合成時に globalAlpha で背景とブレンドする。 */
+  /* PC レイアウトのみ獅子をビルド時に 0.6 alpha で合成。
+     drawImage は毎フレーム1回で済み、別キャンバス不要。 */
   if (!IS_PORTRAIT) {
-    const lc  = new OffscreenCanvas(W * _dpr, H * _dpr);
-    const lc2 = lc.getContext('2d');
-    lc2.scale(_dpr, _dpr);
-    _drawShishiTo(lc2, 78,  360, 0.82, false);
-    _drawShishiTo(lc2, 983, 360, 0.82, true);
-    _lionLayerCanvas = lc;
+    oc2.globalAlpha = 0.6;
+    _drawShishiTo(oc2, 78,  360, 0.82, false);
+    _drawShishiTo(oc2, 983, 360, 0.82, true);
+    oc2.globalAlpha = 1;
   }
+  _staticLayerCanvas = oc;
 }
 
 /* ── 文字列キャッシュ（coins/bet が変わった時だけ再計算） ──
@@ -3547,11 +3544,6 @@ function draw() {
      キャッシュ未構築（古いブラウザ等）はフォールバックで通常描画 */
   if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
-    if (_lionLayerCanvas) {
-      ctx.globalAlpha = 0.6; // 雲と同程度の透明度（内部は不透明のまま背景とブレンド）
-      ctx.drawImage(_lionLayerCanvas, 0, 0, W, H);
-      ctx.globalAlpha = 1;
-    }
   } else {
     for (const c of CLOUDS) drawCloud(c.x,c.y,c.s,c.a,c.r);
     if (!IS_PORTRAIT) {
