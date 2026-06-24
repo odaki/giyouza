@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.66';
+const VERSION = 'v3.67';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1905,22 +1905,20 @@ function createWheel(x, y, feverChar) {
   const segs = chars.map((c, i) => {
     const span = (weights[i] / sum) * Math.PI * 2;
     const mid  = angle + span / 2;
-    /* セグメントグラジェントをここで1回だけ生成してキャッシュ */
+    /* gradient・font は OffscreenCanvas 未対応時のフォールバック描画用。
+       通常は _buildWheelOC 内で再生成するため毎フレームの描画には使われない。 */
     const grd = ctx.createRadialGradient(
       Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
     grd.addColorStop(0, SEG_L[c]);
     grd.addColorStop(1, SEG_D[c]);
-    /* フォント文字列をキャッシュ: span は不変なので毎フレーム生成不要 */
     const fontSize = Math.max(12, Math.min(33, (span / (Math.PI * 2)) * 116));
     const font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
     const s = { char: c, start: angle, span, gradient: grd, font };
     angle += span;
     return s;
   });
-  /* ホイールハブのグラジェント: 起動時に1回生成した共通定数を参照（GC削減） */
-  const hubGrd = _WHEEL_HUB_GRD;
   const w = {
-    x, y, segs, hubGrd,
+    x, y, segs, hubGrd: _WHEEL_HUB_GRD, // フォールバック用（通常は _buildWheelOC で描画済み）
     rot:       Math.random() * Math.PI * 2,
     speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1),
     locked:    false,
@@ -3482,7 +3480,6 @@ function _drawShishiTo(c2, cx, cy, sc, mirX) {
   c2.fillStyle=GN;
   c2.beginPath(); c2.ellipse(0,-21,5,3,0,0,Math.PI*2); c2.fill();
   /* 口: 人字型（犬っぽい口） */
-  /* 口: 人字型（犬っぽい口） */
   c2.strokeStyle=GN; c2.lineWidth=1.8; c2.lineCap='round'; c2.lineJoin='round';
   /* 人中（鼻下〜口中央）: 口にピッタリ接続 */
   c2.beginPath();
@@ -3916,7 +3913,6 @@ function drawWheel(i) {
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
 
-  /* ハブは _buildWheelOC で事前描画済みのため不要（フォールバック時は上記で描画済み） */
 
   if (active || w.locked) {
     ctx.shadowColor = w.locked ? '#ff4422' : Y;
