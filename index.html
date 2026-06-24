@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.65';
+const VERSION = 'v3.66';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -175,12 +175,18 @@ function _prebuildStaticLayers() {
   /* 雲を描く */
   for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
 
-  /* PC レイアウトのみ獅子をビルド時に 0.6 alpha で合成。
-     drawImage は毎フレーム1回で済み、別キャンバス不要。 */
+  /* PC レイアウトのみ獅子を合成。
+     獅子を一時 OffscreenCanvas に不透明で描いてから 0.6 alpha で貼り付け。
+     oc2 に直接 globalAlpha=0.6 で描くと内部パーツもすべて半透明（X線状態）になるため
+     この2段階方式で「内部は不透明・全体を 0.6 でブレンド」を実現する。 */
   if (!IS_PORTRAIT) {
+    const lc  = new OffscreenCanvas(W * _dpr, H * _dpr);
+    const lc2 = lc.getContext('2d');
+    lc2.scale(_dpr, _dpr);
+    _drawShishiTo(lc2, 78,  360, 0.82, false);
+    _drawShishiTo(lc2, 983, 360, 0.82, true);
     oc2.globalAlpha = 0.6;
-    _drawShishiTo(oc2, 78,  360, 0.82, false);
-    _drawShishiTo(oc2, 983, 360, 0.82, true);
+    oc2.drawImage(lc, 0, 0, W, H); // CSSピクセルサイズを明示（省略するとDPR倍になり消える）
     oc2.globalAlpha = 1;
   }
   _staticLayerCanvas = oc;
@@ -1846,6 +1852,48 @@ function calcPayout() {
   return base * feverMult * beatMult;
 }
 
+/* セグメント・文字・ハブを OffscreenCanvas に事前描画。
+   文字は mid + π/2 回転させてホイール中心が文字の下方になるようにする。
+   毎フレームの描画コストをなくし drawImage 1回に置き換える。 */
+function _buildWheelOC(w) {
+  if (typeof OffscreenCanvas === 'undefined') return;
+  const _ocR = WR + 4; // セグメント半径 + 余白
+  const sz = Math.ceil(_ocR * 2 * _dpr);
+  const oc = new OffscreenCanvas(sz, sz);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(_ocR, _ocR); // ハブを中心に
+
+  for (const s of w.segs) {
+    const mid = s.start + s.span / 2;
+    /* セグメントグラジェントを OffscreenCanvas 座標で再生成 */
+    const grd = c.createRadialGradient(
+      Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
+    grd.addColorStop(0, SEG_L[s.char]);
+    grd.addColorStop(1, SEG_D[s.char]);
+    /* セグメント塗り・枠 */
+    c.beginPath(); c.moveTo(0,0); c.arc(0,0,WR, s.start, s.start+s.span); c.closePath();
+    c.fillStyle=grd; c.fill();
+    c.strokeStyle='rgba(245,208,32,0.3)'; c.lineWidth=1.5; c.stroke();
+    /* 文字: mid + π/2 回転でハブ中心が文字下方になるよう向きを固定 */
+    const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
+    c.save();
+    c.translate(tx, ty);
+    c.rotate(mid + Math.PI/2);
+    c.font=s.font; c.textAlign='center'; c.textBaseline='middle';
+    c.lineWidth=4; c.strokeStyle='rgba(0,0,0,0.88)'; c.strokeText(s.char,0,0);
+    c.fillStyle='#fffde7'; c.fillText(s.char,0,0);
+    c.restore();
+  }
+  /* ハブ */
+  const hubG = c.createRadialGradient(0,0,0,0,0,10);
+  hubG.addColorStop(0,'#fffde7'); hubG.addColorStop(1,YD);
+  c.beginPath(); c.arc(0,0,10,0,Math.PI*2); c.fillStyle=hubG; c.fill();
+
+  w._oc  = oc;
+  w._ocR = _ocR; // CSS ピクセルでの中心までの距離
+}
+
 function createWheel(x, y, feverChar) {
   const chars   = [...CHARS].sort(() => Math.random() - 0.5);
   /* フィーバー中: 対象文字97%、他3文字各1%の極端な偏りを設定 */
@@ -1871,7 +1919,7 @@ function createWheel(x, y, feverChar) {
   });
   /* ホイールハブのグラジェント: 起動時に1回生成した共通定数を参照（GC削減） */
   const hubGrd = _WHEEL_HUB_GRD;
-  return {
+  const w = {
     x, y, segs, hubGrd,
     rot:       Math.random() * Math.PI * 2,
     speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1),
@@ -1879,8 +1927,11 @@ function createWheel(x, y, feverChar) {
     result:    null,
     resultPop: 0,
     hasArrow:  false,
-    syncScore: 0.5, // ショット時のビートシンクスコア（結果文字色に使用）
+    syncScore: 0.5,
+    _oc: null, _ocR: 0, // OffscreenCanvas（事前描画済みセグメント+文字+ハブ）
   };
+  _buildWheelOC(w);
+  return w;
 }
 
 function hitResult(w) {
@@ -3832,18 +3883,28 @@ function drawWheel(i) {
     ctx.shadowBlur=0; // セグメント描画前にリセット
   }
 
-  for (const s of w.segs) {
-    const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
-    ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,WR,a1,a2); ctx.closePath();
-    ctx.fillStyle=s.gradient; ctx.fill(); // キャッシュ済みグラジェントを使用
-    ctx.strokeStyle='rgba(245,208,32,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
-    const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
-    ctx.save(); ctx.translate(tx,ty);
-    ctx.font=s.font; // キャッシュ済み文字列を使用（毎フレーム生成しない）
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    /* strokeText でアウトライン描画（shadowBlur は上で既にリセット済み） */
-    ctx.lineWidth=4; ctx.strokeStyle='rgba(0,0,0,0.88)'; ctx.strokeText(s.char,0,0);
-    ctx.fillStyle='#fffde7'; ctx.fillText(s.char,0,0); ctx.restore();
+  /* セグメント・文字・ハブ: 事前描画済み OffscreenCanvas を回転して貼る
+     文字はホイール中心が下方になるよう _buildWheelOC で固定済み */
+  if (w._oc) {
+    ctx.save();
+    ctx.rotate(w.rot);
+    ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
+    ctx.restore();
+  } else {
+    /* フォールバック: OffscreenCanvas 未対応時は従来描画（文字は回転なし） */
+    for (const s of w.segs) {
+      const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,WR,a1,a2); ctx.closePath();
+      ctx.fillStyle=s.gradient; ctx.fill();
+      ctx.strokeStyle='rgba(245,208,32,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
+      const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
+      ctx.save(); ctx.translate(tx,ty);
+      ctx.font=s.font; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.lineWidth=4; ctx.strokeStyle='rgba(0,0,0,0.88)'; ctx.strokeText(s.char,0,0);
+      ctx.fillStyle='#fffde7'; ctx.fillText(s.char,0,0); ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2);
+    ctx.fillStyle=w.hubGrd; ctx.fill();
   }
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
   ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
@@ -3855,8 +3916,7 @@ function drawWheel(i) {
   ctx.beginPath(); ctx.arc(0,0,WR+8,0,Math.PI*2);
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
 
-  ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2);
-  ctx.fillStyle=w.hubGrd; ctx.fill(); // キャッシュ済みグラジェントを使用
+  /* ハブは _buildWheelOC で事前描画済みのため不要（フォールバック時は上記で描画済み） */
 
   if (active || w.locked) {
     ctx.shadowColor = w.locked ? '#ff4422' : Y;
