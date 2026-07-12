@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.69';
+const VERSION = 'v3.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -248,21 +248,26 @@ function _updateDisplayCaches() {
    makeItem() が毎回 Array.from + 5個のオブジェクト生成＋HSL文字列を生成するのを防ぐ。
    greens配列も事前確保してフィールドをリセットするだけで再利用する。 */
 const _ITEM_POOL_SIZE = 300;
-const _itemPool = [];
-for (let _i = 0; _i < _ITEM_POOL_SIZE; _i++) {
-  _itemPool.push({
+function _makePoolItem() {
+  return {
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     skinL:'', skinD:'', bodyGrd:null, _dead:true, _rotPhase:0,
     greens: [{dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
              {dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
              {dx:0,dy:0,rx:0,ry:0,a:0,color:''}],
-  });
+  };
 }
+const _itemPool = [];
+for (let _i = 0; _i < _ITEM_POOL_SIZE; _i++) _itemPool.push(_makePoolItem());
 function _itemAlloc() {
   for (let i = 0; i < _itemPool.length; i++) {
     if (_itemPool[i]._dead) return _itemPool[i];
   }
-  return _itemPool[0]; // fallback（最古を強制再利用）
+  /* 満杯: 生きているエントリを乗っ取ると items 等の配列に同一オブジェクトが
+     二重登録され物理・描画が破綻する。新規生成してプールに加える（レアな1回のみGC） */
+  const g = _makePoolItem();
+  _itemPool.push(g);
+  return g;
 }
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
@@ -319,11 +324,15 @@ let _cachedSyncChainVal = -1, _cachedSyncChainStr = '';
 function _makePool(size, factory) {
   const pool = [];
   for (let i = 0; i < size; i++) pool.push(factory());
+  pool._factory = factory; // 満杯時の追加生成用
   return pool;
 }
 function _poolAlloc(pool) {
   for (let i = 0; i < pool.length; i++) if (pool[i]._dead) return pool[i];
-  return pool[0]; // fallback
+  /* 満杯: 生存エントリの乗っ取りは配列二重登録を招くため新規生成（レアな1回のみGC） */
+  const o = pool._factory();
+  pool.push(o);
+  return o;
 }
 /* _swapRemovePool は swapRemove(arr, pred, _deadify) に統一したため削除 */
 
@@ -342,12 +351,15 @@ const _partPool = [];
 for (let _i = 0; _i < _PART_POOL_SIZE; _i++) {
   _partPool.push({ x:0, y:0, vx:0, vy:0, color:'', life:0, r:0, _dead:true });
 }
-/* プールから死んでいるエントリを確保して返す。満杯の場合は先頭を強制再利用 */
+/* プールから死んでいるエントリを確保して返す。満杯の場合は新規生成 */
 function _partAlloc() {
   for (let i = 0; i < _partPool.length; i++) {
     if (_partPool[i]._dead) return _partPool[i];
   }
-  return _partPool[0]; // fallback（短命パーティクルが1つ消えるだけ）
+  /* 満杯: 生存エントリの乗っ取りは particles 配列二重登録を招くため新規生成（レアな1回のみGC） */
+  const p = { x:0, y:0, vx:0, vy:0, color:'', life:0, r:0, _dead:true };
+  _partPool.push(p);
+  return p;
 }
 /* パーティクル追加ヘルパー（particles.push({...}) の代替）
    プールオブジェクトを再利用することでGCゼロを実現 */
@@ -494,6 +506,9 @@ const SYNC_VISIBLE_THRESHOLD = 4; // この射数以上連続でsyncRate≥0.5�
 let bestCoins; // ハイスコア
 
 /* ════════════════ 実績システム ════════════════ */
+/* 注意: id は SCHEMA_HASH に含まれるため、リネームすると全セーブデータが消去される。
+   play_10/shot_100/coins_500 等の数値は歴史的経緯で実際の閾値（100回/1000本/1000枚）と
+   一致していないが、意図的にそのまま維持している。 */
 const ACHIEVEMENTS = [
   /* 初体験（横画面: 左列上段） */
   { id:'first_shot',    icon:'🎯', name:'はじめての一射',    desc:'矢を初めて放った'                    },
@@ -2002,8 +2017,9 @@ function update() {
     return;
   }
   if (phase === 'tapestart') {
-    /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期 */
-    const tapeRate = bgmSource ? Math.max(0, Math.min(1, bgmSource.playbackRate.value)) : 1;
+    /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期
+       .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算 */
+    const tapeRate = bgmSource ? Math.max(0, Math.min(1, _getBgmRateJS())) : 1;
     for (const w of wheels) w.rot += w.speed * tapeRate;
     /* テープ加速完了（色が完全に戻った）ら射撃解放 */
     if (tapeRate >= 0.99) {
@@ -2210,6 +2226,8 @@ function update() {
       canRestart = true;
       _scheduleWheelPreBuild(); // アイドル時間に次トライのホイールを事前構築
     }
+    /* CONTINUEバッジ表示遅延カウント: draw()側だと120Hz端末で2倍速になるためここで進める */
+    if (canRestart && !isGameOver) _continueShowDelay++;
     /* ゲームオーバー時のみクリック確認必須 */
     if (isGameOver && endTimer > 45) canRestart = true;
     if (reachFlash  > 0) reachFlash  = Math.max(0, reachFlash  - 0.045);
@@ -2706,7 +2724,7 @@ function initGiugiu() {
 }
 
 function updateGiugiu() {
-  /* 外縁から追加投入（最大60個） */
+  /* 外縁から追加投入（最大30個） */
   if (endTimer % 15 === 0 && items.length < 30) {
     const angle = Math.random() * Math.PI * 2;
     const R = Math.hypot(W, H) * 0.55;
@@ -4958,7 +4976,7 @@ function drawFeverBadge() {
 /* ── CONTINUEバッジ（done phase・canRestart時に下部中央表示） ── */
 function drawContinueBadge() {
   if (phase !== 'done' || !canRestart || isGameOver) return;
-  if (++_continueShowDelay < 40) return;
+  if (_continueShowDelay < 40) return; // カウントは update() 側（60fps固定）で行う
 
   /* 呼吸アニメーション（点滅ではなくゆっくり拡縮） */
   const breath = 1 + 0.04 * Math.sin(performance.now() / 500);
@@ -5001,7 +5019,11 @@ function drawAchBanner() {
   if (!ach) return;
   const t = achBannerTimer / 200; // 1→0
   const alpha = t < 0.12 ? t/0.12 : t > 0.85 ? (1-t)/0.15 : 1;
-  const bw = 340, bh = 58, bx = W - bw - 22, by = BAR_Y - bh - 12;
+  /* 縦画面: BAR_Y は横画面用定数のため P_BAR_Y 基準・中央寄せに切り替える
+     （一時表示バナーなので第4ホイール下部との軽い重なりは許容） */
+  const bw = IS_PORTRAIT ? 320 : 340, bh = IS_PORTRAIT ? 52 : 58;
+  const bx = IS_PORTRAIT ? (W - bw) / 2 : W - bw - 22;
+  const by = IS_PORTRAIT ? P_BAR_Y - bh - 8 : BAR_Y - bh - 12;
   ctx.save();
   ctx.globalAlpha = alpha * 0.96;
   roundRect(bx, by, bw, bh, 8);
@@ -5475,7 +5497,7 @@ function cheatShoot(char) {
 
 document.addEventListener('keydown', e=>{
   if (phase === 'startup') {
-    if (e.code === 'Space') { e.preventDefault(); initGame(); }
+    if (e.code === 'Space') { e.preventDefault(); if (!audioCtx) getAudioCtx(); initGame(); }
     return;
   }
   if (isPaused) return;
