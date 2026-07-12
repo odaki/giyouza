@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.72';
+const VERSION = 'v3.73';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -640,7 +640,8 @@ let   _syncHistHead  = 0; // 次の書き込み位置
 let   _syncHistCount = 0; // 有効エントリ数（最大SYNC_HIST_LEN）
 let syncRate     = 0;  // 平均同期率（0-1、計算値）
 let syncRateDisp = 0;  // 表示用同期率（VUメーター式: 上昇速・下降遅）
-let _autoDecayBeatIdx = -1; // ビート自動減衰: 最後に処理したビート番号
+const AUTO_DECAY_BEATS = 3; // ビート自動減衰の周期（拍数）。update/init/onShoot の3箇所で共通使用
+let _autoDecayBeatIdx = -1; // ビート自動減衰: 最後に処理した周期番号
 
 /* syncRateリングバッファへスコアを1件追加し syncRate / 表示カウンタを更新する。
    onShoot() からも、ビート自動減衰からも呼ばれる。 */
@@ -777,6 +778,9 @@ function _scheduleWheelPreBuild() {
   const build = () => {
     /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
        feverPending/isFever が真の場合は init() 側で再構築（レアケース）。 */
+    /* 二重スケジュール（コールバック発火前に init() が再スケジュール）で
+       2回発火した場合、前回分のOCをプールへ返却してから上書きする */
+    _releaseWheelOCs(_pendingWheels);
     _pendingWheels = WXS.map((x, i) => createWheel(x, WYS[i], null));
   };
   /* requestIdleCallback: iOS Safari未対応のためsetTimeoutでフォールバック */
@@ -1062,6 +1066,12 @@ function getAudioCtx() {
    ユーザーアクティベーション内で new AudioContext() すると iOS が即 running にする。
    AudioBuffer（bgmBuffer, _noiseBuffer）は Context 非依存なので再利用可能。 */
 function _recreateAudioGraph() {
+  /* 旧Contextに属する bgmSource 参照を破棄。残すと startBGM() が「再生中」と誤認して
+     早期リターンし、interrupted 復帰後に BGM が二度と戻らなくなる */
+  _destroyBGMSource();
+  /* ジングル進行中なら次発音時刻をリセット（旧Context時刻のままだと
+     新Contextの currentTime が追いつくまでジングルが停止する） */
+  if (jingleScheduler) jingleNextTime = 0;
   try { audioCtx.close(); } catch(_e) {}
   audioCtx  = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
@@ -1955,6 +1965,8 @@ function init(fromStartup, fromGameOver) {
       w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
     }
   } else {
+    /* フィーバー時等、事前構築分を使わない場合はOCをプールへ返却（リーク防止） */
+    _releaseWheelOCs(_pendingWheels);
     wheels = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
   }
   _pendingWheels = null;
@@ -1986,7 +1998,7 @@ function init(fromStartup, fromGameOver) {
   betLocked   = false;
   shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
   /* done フェーズ中に経過したビートをミスとして数えないようリセット */
-  _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2)) : -1;
+  _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS)) : -1;
   isMissResult = false;
   /* missPopups / payoutPopups はトライをまたいで自然フェードアウトするため init でクリアしない */
   /* スローイベント: 通常トライ切り替え時にBGMテンポをなめらかに変化させる
@@ -2003,6 +2015,7 @@ function init(fromStartup, fromGameOver) {
   }
   /* ベットが所持コインを超えていたら最大払える額に下げる */
   if (coins !== undefined) clampBet();
+  for (const g of worms) g._dead = true; // プールに返却してからクリア（リーク防止）
   worms      = [];
   for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
   uzaTexts   = [];
@@ -2172,7 +2185,7 @@ function update() {
      done/shooting/tapestart/startup フェーズは対象外（プレイヤーの責任ではない）
      shootGuard > 0 の初期保護期間も除外 */
   if ((phase === 'idle' || phase === 'reach') && shootGuard <= 0 && BGM_BEAT > 0) {
-    const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 3));
+    const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS));
     if (_autoDecayBeatIdx >= 0 && _curBeat > _autoDecayBeatIdx) {
       /* フレーム落ち等で複数期間分まとめて来た場合は最大4件に制限 */
       const _missed = Math.min(_curBeat - _autoDecayBeatIdx, 4);
@@ -2527,6 +2540,9 @@ function initWorms() {
 }
 
 function spawnWorm() {
+  /* initWorms の setTimeout がトライ切替後に遅れて発火した場合のガード
+     （次トライの worms 配列に描画されない worm を push しプールスロットを占有するのを防ぐ） */
+  if (phase !== 'done' || hitType !== 'uyouyo') return;
   const side = Math.floor(Math.random()*4);
   let x, y, angle;
   if      (side===0){ x=Math.random()*W; y=-40;   angle= Math.PI/2; }
@@ -5110,7 +5126,7 @@ function drawSlowHandBadge() {
 
 function drawBeatBonusBadge() {
   if (phase === 'startup' || phase === 'tapestart' || isGameOver) return;
-  if (syncChain < 100) return;
+  if (syncChain < BEAT_BONUS_CHAIN) return;
 
   /* BETバー直下・同期メーターと同じ高さに配置（B案: 下部エリア） */
   const by = IS_PORTRAIT ? P_BAR_Y + P_BAR_H + 2 : BAR_Y + BAR_H + 2;
@@ -5696,7 +5712,7 @@ function onShoot(_inputAudioTime){
     /* リングバッファへ追記 + syncRate更新（_pushSyncScore共通ヘルパー） */
     _pushSyncScore(score);
     /* このビートは発射済みとしてマーク（auto-decayが二重にカウントしないよう） */
-    _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * 2)) : -1;
+    _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS)) : -1;
     /* JUST/GOOD/OK 演出: 16回分のバッファが埋まり連続してsyncRate≥0.5になってから表示 */
     if (_syncHistCount >= SYNC_HIST_LEN && syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
       if (score >= 0.667) {        // ±33ms以内 → JUST
