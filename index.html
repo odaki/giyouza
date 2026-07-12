@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.73';
+const VERSION = 'v3.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -850,20 +850,6 @@ function onBeatGrid() {
   return ph4 < 0.25 || ph4 > 0.75;
 }
 
-/* 表示遅延補正: outputLatency（デバイス実測）+ rAF描画(~16ms) + モニター表示(~16ms) の合計
-   AudioContext生成後に updateSyncTimingOffset() で実測値に更新される
-   ビートパルス先読み表示 & 入力評価の巻き戻しに共通使用 */
-let SYNC_TIMING_OFFSET = 0; // 入力タイミング評価補正値（0 = 補正なし）
-
-function updateSyncTimingOffset() {
-  if (!audioCtx) return;
-  /* getOutputTimestamp() 未対応環境のみ補正値を設定する。
-     対応環境は contextTime が outputLatency を吸収済みのため初期値 0 のまま。 */
-  if (typeof audioCtx.getOutputTimestamp !== 'function') {
-    SYNC_TIMING_OFFSET = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-  }
-}
-
 /* event.timeStamp（入力物理発生時刻）をオーディオ時刻に換算する
    getOutputTimestamp() 未サポート環境は audioCtx.currentTime にフォールバック */
 function inputEventToAudioTime(eventTimeStamp) {
@@ -884,8 +870,7 @@ function inputEventToAudioTime(eventTimeStamp) {
    audioCtx.currentTime は outputLatency 分だけ未来の予約時刻であり、
    ビジュアルタイミング基準として使うと遅延する。
    getOutputTimestamp().contextTime は現在スピーカーから出ている音の時刻なので
-   これを基準に描画パイプライン遅延（≈2フレーム）だけ先読みすれば視覚と音が一致する。
-   SYNC_TIMING_OFFSET は入力判定専用（用途が異なる）なのでここでは使わない。 */
+   これを基準に描画パイプライン遅延（≈2フレーム）だけ先読みすれば視覚と音が一致する。 */
 let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx初期化後に動的更新
 
 /* outputLatency + baseLatency + _BEAT_DISPLAY_ADVANCE = TARGET になるよう動的設定 */
@@ -1048,10 +1033,10 @@ function getAudioCtx() {
         startBGM();
       }
     }).catch(e => { console.warn('BGM render failed:', e); });
-    /* AudioContext生成直後にデバイス遅延を実測してオフセット更新
+    /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
        resume()後に値が確定するので少し待って再計測 */
-    updateSyncTimingOffset();    _updateBeatDisplayAdvance();
-    setTimeout(() => { updateSyncTimingOffset(); _updateBeatDisplayAdvance(); }, 500);
+    _updateBeatDisplayAdvance();
+    setTimeout(_updateBeatDisplayAdvance, 500);
     /* ホワイトノイズバッファを事前生成（最長ノイズ使用: reach_jackpot dur=0.3+0.05=0.35s → 0.45s確保）
        playNoise() はこのバッファを参照するだけでフレームごとのランダム生成ループが不要になる */
     _buildNoiseBuffer();
