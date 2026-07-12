@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.71';
+const VERSION = 'v3.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -172,6 +172,14 @@ function _prebuildStaticLayers() {
   const oc2 = oc.getContext('2d');
   oc2.scale(_dpr, _dpr);
 
+  /* 背景グラジェントも焼き込み（draw() 冒頭の全画面 fillRect を排除） */
+  const bg = oc2.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#145c24');
+  bg.addColorStop(0.5, '#0f5020');
+  bg.addColorStop(1, '#0a3d18');
+  oc2.fillStyle = bg;
+  oc2.fillRect(0, 0, W, H);
+
   /* 雲を描く */
   for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
 
@@ -189,6 +197,12 @@ function _prebuildStaticLayers() {
     oc2.drawImage(lc, 0, 0, W, H); // CSSピクセルサイズを明示（省略するとDPR倍になり消える）
     oc2.globalAlpha = 1;
   }
+  /* 上下の金帯も焼き込み（毎フレームの fillRect×4 を排除） */
+  oc2.fillStyle = Y;
+  oc2.fillRect(0, 0, W, 6); oc2.fillRect(0, H - 6, W, 6);
+  oc2.globalAlpha = 0.4;
+  oc2.fillRect(0, 8, W, 3); oc2.fillRect(0, H - 11, W, 3);
+  oc2.globalAlpha = 1;
   _staticLayerCanvas = oc;
 }
 
@@ -216,6 +230,59 @@ function _initBetLabelWidth() {
     : `bold 28px 'Hiragino Mincho ProN',serif`;
   _cachedBetLabelW = ctx.measureText('BET').width;
   ctx.restore();
+}
+
+/* ── 大型テキストのプリレンダ（毎フレームのグリフラスタライズを排除） ──
+   コイン数値(60px)・BET数値(42/46px)は文字列が変わった時だけ OC に描画し、
+   毎フレームは drawImage 1回にする。カウントアップアニメ中は毎フレーム
+   再描画になるが、静止時（大半の時間）のラスタライズコストがゼロになる。 */
+const _COINS_FONT   = `bold 60px 'Hiragino Mincho ProN',serif`;
+const _COINS_TEXT_H = 72;
+let _coinsTextOC = null, _coinsTextW = 0, _coinsTextColor = '', _coinsTextStr = '';
+function _ensureCoinsTextOC(color) {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (_coinsTextOC && _coinsTextStr === _cachedCoinsStr && _coinsTextColor === color) return _coinsTextOC;
+  ctx.save(); ctx.font = _COINS_FONT;
+  const tw = Math.ceil(ctx.measureText(_cachedCoinsStr).width) + 8;
+  ctx.restore();
+  /* 幅が足りない時のみ再確保（桁数増加時）。既存が大きければ clearRect で再利用 */
+  if (!_coinsTextOC || _coinsTextOC.width < tw * _dpr) {
+    _coinsTextOC = new OffscreenCanvas(tw * _dpr, _COINS_TEXT_H * _dpr);
+  }
+  const c = _coinsTextOC.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, _coinsTextOC.width, _coinsTextOC.height);
+  c.scale(_dpr, _dpr);
+  c.font = _COINS_FONT;
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillStyle = color;
+  c.fillText(_cachedCoinsStr, tw / 2, _COINS_TEXT_H / 2);
+  _coinsTextW = tw; _coinsTextColor = color; _coinsTextStr = _cachedCoinsStr;
+  return _coinsTextOC;
+}
+
+const _BET_FONT   = IS_PORTRAIT
+  ? `bold 42px 'Hiragino Mincho ProN',serif`
+  : `bold 46px 'Hiragino Mincho ProN',serif`;
+const _BET_TEXT_H = 56;
+let _betTextOC = null, _betTextStr = '';
+function _ensureBetTextOC() {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (_betTextOC && _betTextStr === _cachedBetStr) return _betTextOC;
+  const tw = Math.ceil(_cachedBetNumW) + 8; // _updateDisplayCaches で計測済み
+  if (!_betTextOC || _betTextOC.width < tw * _dpr) {
+    _betTextOC = new OffscreenCanvas(tw * _dpr, _BET_TEXT_H * _dpr);
+  }
+  const c = _betTextOC.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, _betTextOC.width, _betTextOC.height);
+  c.scale(_dpr, _dpr);
+  c.font = _BET_FONT;
+  c.textAlign = 'left'; c.textBaseline = 'middle';
+  c.fillStyle = Y;
+  c.fillText(_cachedBetStr, 4, _BET_TEXT_H / 2);
+  _betTextStr = _cachedBetStr;
+  return _betTextOC;
 }
 
 /* drawBottomBar/drawCoinHeader の先頭で呼ぶ。変化がなければ即 return */
@@ -272,8 +339,16 @@ function _itemAlloc() {
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
-/* items.sort() に毎フレーム渡す comparator。定数化でクロージャ生成ゼロ */
-const _cmpItemY    = (a, b) => a.y - b.y;
+/* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
+   Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
+function _insertionSortY(a) {
+  for (let i = 1; i < a.length; i++) {
+    const v = a[i], vy = v.y;
+    let j = i - 1;
+    while (j >= 0 && a[j].y > vy) { a[j + 1] = a[j]; j--; }
+    a[j + 1] = v;
+  }
+}
 /* 毎フレーム呼ばれる swapRemove の pred を定数化してクロージャ生成ゼロに */
 const _predParticle  = p => p.life > 0 && p.r > 0.3;
 const _predTimer     = p => p.timer > 0;
@@ -317,6 +392,78 @@ const _SYNC_RGB_TABLE = (() => {
 let _cachedSyncPctVal = -1, _cachedSyncPctStr = '';
 let _cachedSyncChainVal = -1, _cachedSyncChainStr = '';
 
+/* ══ shadowBlur 排除用プリレンダスプライト群 ══
+   shadowBlur は Canvas 2D 最重量級の GPU 操作。起動時に一度だけスプライトへ
+   焼き込み、毎フレームは drawImage のみにする。 */
+
+/* ── アクティブホイールのグロー光輪: bp(0-1) を 8段階に量子化 ──
+   スプライトは「グローのみ」を含む（shadowOffset トリックで本体リングを画面外に置き、
+   影＝グローだけをスプライト内に落とす）。クリスプな 3px リング本体は
+   毎フレーム stroke で描く（ブラーなしの stroke は安価）。 */
+const _GLOW_LEVELS = 8;
+const _wheelGlowSprites = (() => {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  const arr = [];
+  const OFF = 4096; // 本体リングを画面外へ追い出すオフセット
+  for (let i = 0; i < _GLOW_LEVELS; i++) {
+    const blur = 50 + (i / (_GLOW_LEVELS - 1)) * 40;
+    const half = Math.ceil(WR + 2 + blur * 0.9 + 8);
+    const oc = new OffscreenCanvas(half * 2, half * 2);
+    const c  = oc.getContext('2d');
+    c.translate(half - OFF, half);
+    c.shadowColor = Y; c.shadowBlur = blur; c.shadowOffsetX = OFF;
+    c.strokeStyle = Y; c.lineWidth = 3;
+    c.beginPath(); c.arc(0, 0, WR + 2, 0, Math.PI * 2); c.stroke();
+    arr.push({ oc, half });
+  }
+  return arr;
+})();
+
+/* ── ポインタ三角形スプライト: 状態別（inactive / locked / active×4段階） ──
+   三角形はホイール中心基準のローカル座標で固定なので、
+   バウンディングボックス＋グロー余白ぶんのスプライトに焼き込む。 */
+const _PTR_PAD = 44; // グロー余白（最大blur36 + マージン）
+function _buildPointerSprite(fill, glow, blur) {
+  const bx0 = IS_PORTRAIT ? WR + 5 : -13;
+  const by0 = IS_PORTRAIT ? -12    : -WR - 28;
+  const bw  = IS_PORTRAIT ? 21 : 26;
+  const bh  = IS_PORTRAIT ? 24 : 23;
+  const cw = bw + _PTR_PAD * 2, ch = bh + _PTR_PAD * 2;
+  const oc = new OffscreenCanvas(Math.ceil(cw * _dpr), Math.ceil(ch * _dpr));
+  const c  = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(_PTR_PAD - bx0, _PTR_PAD - by0); // ローカル座標 → スプライト座標
+  if (blur > 0) { c.shadowColor = glow; c.shadowBlur = blur; }
+  c.fillStyle = fill;
+  c.beginPath();
+  if (IS_PORTRAIT) { c.moveTo(WR+5,0); c.lineTo(WR+26,-12); c.lineTo(WR+26,12); }
+  else             { c.moveTo(0,-WR-5); c.lineTo(-13,-WR-28); c.lineTo(13,-WR-28); }
+  c.closePath(); c.fill();
+  return { oc, ox: bx0 - _PTR_PAD, oy: by0 - _PTR_PAD, w: cw, h: ch };
+}
+const _pointerSprites = (typeof OffscreenCanvas === 'undefined') ? null : {
+  inactive: _buildPointerSprite(YD, null, 0),
+  locked:   _buildPointerSprite('#cc2200', '#ff4422', 18),
+  active:   [0,1,2,3].map(i => _buildPointerSprite(Y, Y, 18 + (i / 3) * 18)),
+};
+
+/* ── ギギギギ火花のグロースプライト: 色別3種 ──
+   毎フレーム最大256個 × shadowBlur=6 の save/restore を drawImage に置換。 */
+const _GIGI_SPRITE_R = 4, _GIGI_SPRITE_HALF = 14; // 描画半径4 + グロー余白10
+const _gigiSparkSprites = (() => {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  const m = {};
+  for (const col of ['#fff', '#ffaa00', '#ff4400']) {
+    const oc = new OffscreenCanvas(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
+    const c  = oc.getContext('2d');
+    c.shadowColor = col; c.shadowBlur = 6;
+    c.fillStyle = col;
+    c.beginPath(); c.arc(_GIGI_SPRITE_HALF, _GIGI_SPRITE_HALF, _GIGI_SPRITE_R, 0, Math.PI * 2); c.fill();
+    m[col] = oc;
+  }
+  return m;
+})();
+
 /* ── 中当たりエフェクト用プール群 ──
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
    rainDrops:  最大レート20/frame×寿命30f ≈ 600 + 波紋20 → 800
@@ -349,7 +496,22 @@ const _uzaPool  = _makePool(160, () =>
 const _PART_POOL_SIZE = 512;
 const _partPool = [];
 for (let _i = 0; _i < _PART_POOL_SIZE; _i++) {
-  _partPool.push({ x:0, y:0, vx:0, vy:0, color:'', life:0, r:0, _dead:true });
+  _partPool.push({ x:0, y:0, vx:0, vy:0, color:'', ci:0, _ab:0, life:0, r:0, _dead:true });
+}
+
+/* ── パーティクル色レジストリ ──
+   描画を「色×アルファ段階」でバッチ化して GPU フラッシュを削減するため、
+   色文字列 → 連番ID を保持する（パレットは固定なので高々20色程度） */
+const _partColorList = [];
+const _partColorIdx  = Object.create(null);
+function _partColorId(color) {
+  let id = _partColorIdx[color];
+  if (id === undefined) {
+    id = _partColorList.length;
+    _partColorList.push(color);
+    _partColorIdx[color] = id;
+  }
+  return id;
 }
 /* プールから死んでいるエントリを確保して返す。満杯の場合は新規生成 */
 function _partAlloc() {
@@ -366,7 +528,8 @@ function _partAlloc() {
 function spawnParticle(x, y, vx, vy, color, life, r) {
   const p = _partAlloc();
   p.x = x; p.y = y; p.vx = vx; p.vy = vy;
-  p.color = color; p.life = life; p.r = r; p._dead = false;
+  p.color = color; p.ci = _partColorId(color); // バッチ描画用の色ID
+  p.life = life; p.r = r; p._dead = false;
   particles.push(p);
 }
 /* GC削減: filter()の代わりにswap-and-popでdeadな要素をインプレース除去
@@ -578,10 +741,34 @@ let _pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
 let _pendingWheels        = null;  // 事前構築済みホイール（null=未構築）
 let _pendingWheelScheduled= false; // スケジュール済みフラグ（重複防止）
 const _freeWheelOCs       = [];    // 解放済みOCプール（再利用でGCゼロ）
+const _freeResultOCs      = [];    // 結果文字OCプール（固定サイズで再利用）
 
 function _releaseWheelOCs(ws) {
   if (!ws) return;
-  for (const w of ws) if (w?._oc) { _freeWheelOCs.push(w._oc); w._oc = null; }
+  for (const w of ws) {
+    if (w?._oc)    { _freeWheelOCs.push(w._oc);    w._oc    = null; }
+    if (w?._resOC) { _freeResultOCs.push(w._resOC); w._resOC = null; }
+  }
+}
+
+/* 結果文字（44px + グロー）を OC へ一度だけ描画する。
+   色・グロー強度は syncScore 依存だが、ロック時に確定するため再描画不要。 */
+const _RESULT_OC_HALF = 52; // 44px 文字 + 最大グロー30 を収める半径
+function _buildResultOC(w) {
+  if (typeof OffscreenCanvas === 'undefined') return;
+  const sz = _RESULT_OC_HALF * 2 * _dpr;
+  const oc = _freeResultOCs.pop() || new OffscreenCanvas(sz, sz);
+  const c  = oc.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, sz, sz);
+  c.scale(_dpr, _dpr);
+  const [fillC, glowC] = _syncBarColor(w.syncScore);
+  c.font = `bold 44px 'Hiragino Mincho ProN',serif`;
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.shadowColor = glowC; c.shadowBlur = 10 + w.syncScore * 20;
+  c.fillStyle = fillC;
+  c.fillText(w.result, _RESULT_OC_HALF, _RESULT_OC_HALF);
+  w._resOC = oc;
 }
 
 function _scheduleWheelPreBuild() {
@@ -1956,7 +2143,8 @@ function createWheel(x, y, feverChar) {
     resultPop: 0,
     hasArrow:  false,
     syncScore: 0.5,
-    _oc: null, // OffscreenCanvas（事前描画済みセグメント+文字+ハブ）
+    _oc:     null, // OffscreenCanvas（事前描画済みセグメント+文字+ハブ）
+    _resOC:  null, // 結果文字OC（ロック時に _buildResultOC で生成）
   };
   _buildWheelOC(w);
   return w;
@@ -2520,7 +2708,7 @@ function updateItems() {
 
     /* アイテム同士の円衝突（yソート済みスイープ: 遠いペアの判定を打ち切り）
        n=240時 約14万ペア/フレーム → 近傍ペアのみに削減 */
-    items.sort(_cmpItemY); // イテレーションごとに位置修正が入るため都度ソート（ほぼ整列済みで安価）
+    _insertionSortY(items); // イテレーションごとに位置修正が入るため都度ソート（ほぼ整列済みで実質O(n)）
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
       if (a._flush) continue; // 落下中は衝突スキップ
@@ -2576,7 +2764,7 @@ function updateItems() {
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
   swapRemove(items, _predItem, _deadify);
   /* updateの末尾でソートしておくことでdrawItems側でのslice+sortを排除 */
-  items.sort(_cmpItemY);
+  _insertionSortY(items);
 }
 
 /* ギヨウザ本体形状を任意のコンテキストへ描画する共通関数。
@@ -2788,7 +2976,7 @@ function updateGiugiu() {
   /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス）
      updateItems と同じ yソート済みスイープで近傍ペアのみ判定 */
   for (let iter = 0; iter < ITERS; iter++) {
-    items.sort(_cmpItemY);
+    _insertionSortY(items);
     for (let i = 0; i < items.length; i++) {
       const a = items[i], ra = a.size * 0.52;
       const yLimit = ra + RMAX_ITEM_R;
@@ -2825,7 +3013,7 @@ function updateGiugiu() {
     }
   }
 
-  items.sort(_cmpItemY);
+  _insertionSortY(items);
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
@@ -2867,16 +3055,24 @@ function drawGigigigi() {
     ctx.fillRect(x, y, w, 1 + Math.random()*4);
   }
 
-  /* 火花 */
+  /* 火花: プリレンダ済みグロースプライトを drawImage（shadowBlur・save/restore なし） */
   for (const s of gigiSparks) {
-    ctx.save();
-    ctx.globalAlpha = (s.life / 24) * intensity;
-    ctx.fillStyle = s.color;
-    ctx.shadowColor = s.color;
-    ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
-    ctx.restore();
+    ctx.globalAlpha = Math.min(1, (s.life / 24) * intensity);
+    const sp = _gigiSparkSprites && _gigiSparkSprites[s.color];
+    if (sp) {
+      const half = _GIGI_SPRITE_HALF * (s.r / _GIGI_SPRITE_R);
+      ctx.drawImage(sp, s.x - half, s.y - half, half * 2, half * 2);
+    } else {
+      /* フォールバック: OffscreenCanvas 未対応時 */
+      ctx.save();
+      ctx.fillStyle = s.color;
+      ctx.shadowColor = s.color;
+      ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
   }
+  ctx.globalAlpha = 1;
 
   /* RGBずれ */
   ctx.globalAlpha = 0.05 * intensity;
@@ -3641,14 +3837,12 @@ function draw() {
     if (f !== _lastFilter) { canvas.style.filter = _lastFilter = f; }
   }
 
-  /* 背景（グラジェントはfitCanvas時にキャッシュ済み） */
-  ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
-
-  /* 吉祥雲 + 獅子: OffscreenCanvas キャッシュを使用（利用可能な場合）
-     キャッシュ未構築（古いブラウザ等）はフォールバックで通常描画 */
+  /* 背景 + 吉祥雲 + 獅子 + 上下帯: すべて焼き込み済みの静的レイヤー1枚を drawImage
+     キャッシュ未構築（OffscreenCanvas 未対応の古いブラウザ）はフォールバックで通常描画 */
   if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
   } else {
+    ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
     for (const c of CLOUDS) drawCloud(c.x,c.y,c.s,c.a,c.r);
     if (!IS_PORTRAIT) {
       ctx.globalAlpha = 0.6;
@@ -3656,11 +3850,10 @@ function draw() {
       drawShishi(983, 360, 0.82, true);
       ctx.globalAlpha = 1;
     }
+    /* 上下帯 */
+    ctx.fillStyle=Y; ctx.fillRect(0,0,W,6); ctx.fillRect(0,H-6,W,6);
+    ctx.globalAlpha=0.4; ctx.fillRect(0,8,W,3); ctx.fillRect(0,H-11,W,3); ctx.globalAlpha=1;
   }
-
-  /* 上下帯 */
-  ctx.fillStyle=Y; ctx.fillRect(0,0,W,6); ctx.fillRect(0,H-6,W,6);
-  ctx.globalAlpha=0.4; ctx.fillRect(0,8,W,3); ctx.fillRect(0,H-11,W,3); ctx.globalAlpha=1;
 
   /* 弓 (縦画面のみ) */
   if (IS_PORTRAIT && (phase==='idle'||phase==='reach')) drawBow();
@@ -3673,14 +3866,32 @@ function draw() {
   /* 飛ぶ矢 (3D遠近法) */
   if (phase==='shooting') drawArrow3D();
 
-  /* particles */
-  ctx.save();
-  for (const p of particles) {
-    ctx.globalAlpha=Math.min(1,p.life/25);
-    ctx.fillStyle=p.color;
-    ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(0.1,p.r),0,Math.PI*2); ctx.fill();
+  /* particles: 色×アルファ4段階でバッチ化して1色1fill（GPUフラッシュ最大512→数十回に削減）
+     アルファは4段階量子化（フェード25フレームで十分滑らか） */
+  if (particles.length > 0) {
+    ctx.save();
+    for (const p of particles) {
+      const a = Math.min(0.999, p.life / 25);
+      p._ab = (a * 4) | 0; // 0-3
+    }
+    const nc = _partColorList.length;
+    for (let ab = 3; ab >= 0; ab--) {
+      ctx.globalAlpha = (ab + 1) / 4;
+      for (let ci = 0; ci < nc; ci++) {
+        let started = false;
+        for (let k = 0; k < particles.length; k++) {
+          const p = particles[k];
+          if (p._ab !== ab || p.ci !== ci) continue;
+          if (!started) { ctx.beginPath(); started = true; }
+          const r = Math.max(0.1, p.r);
+          ctx.moveTo(p.x + r, p.y);
+          ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+        }
+        if (started) { ctx.fillStyle = _partColorList[ci]; ctx.fill(); }
+      }
+    }
+    ctx.globalAlpha=1; ctx.restore();
   }
-  ctx.globalAlpha=1; ctx.restore();
 
   if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
   drawCoinHeader();
@@ -3930,10 +4141,19 @@ function drawWheel(i) {
          8〜12セグ × 4操作 = 32〜48 GPU ブラーパス/フレーム → Input Delay 17〜27ms の原因
      新: 外周リングを1ストロークするだけ = 1 GPU ブラーパス/フレーム */
   if (active) {
-    ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
-    ctx.shadowColor=Y; ctx.shadowBlur=50+bp*40;
-    ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
-    ctx.shadowBlur=0; // セグメント描画前にリセット
+    if (_wheelGlowSprites) {
+      /* プリレンダ済みグロー（bp 8段階量子化）+ クリスプなリング本体 */
+      const g = _wheelGlowSprites[Math.min(_GLOW_LEVELS - 1, (bp * _GLOW_LEVELS) | 0)];
+      ctx.drawImage(g.oc, -g.half, -g.half);
+      ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
+      ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
+    } else {
+      /* フォールバック: OffscreenCanvas 未対応時のみ shadowBlur を使用 */
+      ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
+      ctx.shadowColor=Y; ctx.shadowBlur=50+bp*40;
+      ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
+      ctx.shadowBlur=0; // セグメント描画前にリセット
+    }
   }
 
   /* セグメント・文字・ハブ: 事前描画済み OffscreenCanvas を回転して貼る
@@ -3970,32 +4190,48 @@ function drawWheel(i) {
   ctx.strokeStyle='rgba(200,168,0,0.35)'; ctx.lineWidth=1.5; ctx.stroke();
 
 
-  if (active || w.locked) {
-    ctx.shadowColor = w.locked ? '#ff4422' : Y;
-    ctx.shadowBlur  = 18 + bp * 18;
-  }
-  /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き) */
-  if (IS_PORTRAIT) {
-    ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
+  /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き)
+     プリレンダ済みスプライト（グロー込み）を状態別に選択して drawImage */
+  if (_pointerSprites) {
+    const sp = w.locked ? _pointerSprites.locked
+             : active   ? _pointerSprites.active[Math.min(3, (bp * 4) | 0)]
+             : _pointerSprites.inactive;
+    ctx.drawImage(sp.oc, sp.ox, sp.oy, sp.w, sp.h);
   } else {
-    ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
+    /* フォールバック: OffscreenCanvas 未対応時のみ shadowBlur を使用 */
+    if (active || w.locked) {
+      ctx.shadowColor = w.locked ? '#ff4422' : Y;
+      ctx.shadowBlur  = 18 + bp * 18;
+    }
+    if (IS_PORTRAIT) {
+      ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
+    } else {
+      ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
+    }
+    ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : YD);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
-  ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : YD);
-  ctx.fill();
-  ctx.shadowBlur = 0;
 
   if (w.result) {
+    /* 結果文字はロック時に一度だけ OC へ焼き込み（グロー＋グリフラスタライズは1回のみ）
+       毎フレームは drawImage 1回。ポップ拡縮は drawImage のスケールで再現する */
+    if (!w._resOC) _buildResultOC(w);
     const pop=Math.max(0.01,easeOutBack(Math.min(1,w.resultPop)));
-    /* 結果文字色: シンクメーターと同じ _syncBarColor を使用 */
-    const [fillC, glowC] = _syncBarColor(w.syncScore);
-    const blur = 10 + w.syncScore * 20; // スコアに応じてグロー強度も変化
     ctx.save();
     if (IS_PORTRAIT) ctx.translate(WR+58, 0); else ctx.translate(0, WR+58);
     ctx.scale(pop,pop);
-    ctx.font=`bold 44px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.shadowColor=glowC; ctx.shadowBlur=blur;
-    ctx.fillStyle=fillC; ctx.fillText(w.result,0,0); ctx.restore();
+    if (w._resOC) {
+      ctx.drawImage(w._resOC, -_RESULT_OC_HALF, -_RESULT_OC_HALF, _RESULT_OC_HALF*2, _RESULT_OC_HALF*2);
+    } else {
+      /* フォールバック: OffscreenCanvas 未対応時 */
+      const [fillC, glowC] = _syncBarColor(w.syncScore);
+      ctx.font=`bold 44px 'Hiragino Mincho ProN',serif`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.shadowColor=glowC; ctx.shadowBlur=10 + w.syncScore * 20;
+      ctx.fillStyle=fillC; ctx.fillText(w.result,0,0);
+    }
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -4126,12 +4362,18 @@ function drawCoinHeader() {
   ctx.fillStyle = mainColor;
   ctx.fillText('所持ギヨウザ', px + 8, py + 6);
 
-  /* コイン数（大） */
+  /* コイン数（大）: プリレンダOC を drawImage（静止時のグリフラスタライズをゼロに） */
   ctx.globalAlpha = blink;
-  ctx.font = `bold 60px 'Hiragino Mincho ProN',serif`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = mainColor;
-  ctx.fillText(_cachedCoinsStr, cx, py + ph / 2 - 1);
+  const _cOC = _ensureCoinsTextOC(mainColor);
+  if (_cOC) {
+    ctx.drawImage(_cOC, 0, 0, _coinsTextW * _dpr, _COINS_TEXT_H * _dpr,
+      cx - _coinsTextW / 2, py + ph / 2 - 1 - _COINS_TEXT_H / 2, _coinsTextW, _COINS_TEXT_H);
+  } else {
+    ctx.font = _COINS_FONT;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = mainColor;
+    ctx.fillText(_cachedCoinsStr, cx, py + ph / 2 - 1);
+  }
 
   /* ベストスコア（小・右下） */
   if (bestCoins > coins) {
@@ -4176,8 +4418,14 @@ function drawBottomBar() {
   ctx.textAlign = 'left';
   ctx.font = `bold 28px 'Hiragino Mincho ProN',serif`;
   ctx.fillText('BET', startX, cy);
-  ctx.font = `bold 46px 'Hiragino Mincho ProN',serif`;
-  ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
+  const _bOC = _ensureBetTextOC();
+  if (_bOC) {
+    ctx.drawImage(_bOC, 0, 0, _bOC.width, _BET_TEXT_H * _dpr,
+      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, _bOC.width / _dpr, _BET_TEXT_H);
+  } else {
+    ctx.font = _BET_FONT;
+    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
+  }
 
   /* バージョン表示 */
   ctx.font = '11px monospace';
@@ -4226,8 +4474,14 @@ function drawPortraitBottomBar() {
   ctx.textAlign = 'left';
   ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
   ctx.fillText('BET', startX, cy);
-  ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
-  ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
+  const _bOCp = _ensureBetTextOC();
+  if (_bOCp) {
+    ctx.drawImage(_bOCp, 0, 0, _bOCp.width, _BET_TEXT_H * _dpr,
+      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, _bOCp.width / _dpr, _BET_TEXT_H);
+  } else {
+    ctx.font = _BET_FONT;
+    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
+  }
 
   /* バージョン */
   ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
