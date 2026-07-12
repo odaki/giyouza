@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.70';
+const VERSION = 'v3.71';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1825,6 +1825,7 @@ function init(fromStartup, fromGameOver) {
   gigiSparks  = [];
   for (const g of yoyos) g._dead = true;
   yoyos       = [];
+  for (const g of ghosts) _releaseGhost(g); // キャンバスをプールへ返却
   ghosts      = [];
   for (const o of rainDrops)  o._dead = true;
   rainDrops   = [];
@@ -2449,6 +2450,9 @@ function spawnItem() {
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
+/* アイテム衝突半径の上限: makeItem の size 上限(34+8=42) × 0.52
+   yソート済みスイープの打ち切り判定（break）に使用 */
+const RMAX_ITEM_R  = 42 * 0.52;
 
 
 /* ────────────────────────────────────────────────────────────
@@ -2514,18 +2518,23 @@ function updateItems() {
       }
     }
 
-    /* アイテム同士の円衝突 */
+    /* アイテム同士の円衝突（yソート済みスイープ: 遠いペアの判定を打ち切り）
+       n=240時 約14万ペア/フレーム → 近傍ペアのみに削減 */
+    items.sort(_cmpItemY); // イテレーションごとに位置修正が入るため都度ソート（ほぼ整列済みで安価）
     for (let i = 0; i < items.length; i++) {
       const a = items[i];
       if (a._flush) continue; // 落下中は衝突スキップ
       const ra = a.size * 0.52;
+      const yLimit = ra + RMAX_ITEM_R; // これ以上yが離れたら以降のjは全て非衝突
       for (let j = i + 1; j < items.length; j++) {
         const b  = items[j];
+        const dy = b.y - a.y; // ソート済みなので dy >= 0
+        if (dy >= yLimit) break; // スイープ打ち切り
         if (b._flush) continue;
         const rb = b.size * 0.52;
         const minD = ra + rb;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        if (Math.abs(dx) >= minD || Math.abs(dy) >= minD) continue; // 安価な事前チェック
+        const dx = b.x - a.x;
+        if (Math.abs(dx) >= minD || dy >= minD) continue; // 安価な事前チェック
         const d2 = dx*dx + dy*dy;
         if (d2 >= minD*minD || d2 < 0.001) continue;
 
@@ -2776,15 +2785,21 @@ function updateGiugiu() {
     g.rot    += g.rotSpd;
   }
 
-  /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス） */
+  /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス）
+     updateItems と同じ yソート済みスイープで近傍ペアのみ判定 */
   for (let iter = 0; iter < ITERS; iter++) {
+    items.sort(_cmpItemY);
     for (let i = 0; i < items.length; i++) {
       const a = items[i], ra = a.size * 0.52;
+      const yLimit = ra + RMAX_ITEM_R;
       for (let j = i + 1; j < items.length; j++) {
-        const b  = items[j], rb = b.size * 0.52;
+        const b  = items[j];
+        const dy = b.y - a.y; // ソート済みなので dy >= 0
+        if (dy >= yLimit) break;
+        const rb = b.size * 0.52;
         const minD = ra + rb;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        if (Math.abs(dx) >= minD || Math.abs(dy) >= minD) continue;
+        const dx = b.x - a.x;
+        if (Math.abs(dx) >= minD || dy >= minD) continue;
         const d2 = dx*dx + dy*dy;
         if (d2 >= minD*minD || d2 < 0.001) continue;
         const dist = Math.sqrt(d2);
@@ -2919,7 +2934,14 @@ function drawYoyoyoyo() {
 }
 
 /* ════════════════ ウウウウ: 幽霊 ════════════════ */
-function initUuuu() { ghosts = []; }
+/* ゴーストキャンバスプール: spawnGhost ごとの canvas 生成（GC・バッキングストア確保）を回避 */
+const _freeGhostCanvases = [];
+const _releaseGhost = g => { if (g._oc) { _freeGhostCanvases.push(g._oc); g._oc = null; } };
+
+function initUuuu() {
+  for (const g of ghosts) _releaseGhost(g);
+  ghosts = [];
+}
 
 /* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
    ギヨウザ本体を青白グラデーション+半透明で描き、天使の輪と幽霊の尾を追加する */
@@ -2929,9 +2951,11 @@ function _makeGhostCanvas(r) {
   const haloH  = r * 0.9;  // 輪の上端までの余白
   const tailH  = r * 1.0;  // 尾の長さ
   const sz     = Math.ceil((bodyH + haloH + tailH) * 2 + r * 2.4);
-  const oc     = document.createElement('canvas');
-  oc.width = sz; oc.height = sz;
+  /* プールから再利用（なければ新規生成）。サイズ一致時は clearRect のみで再利用 */
+  const oc     = _freeGhostCanvases.pop() || document.createElement('canvas');
   const c2     = oc.getContext('2d');
+  if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
+  else { c2.clearRect(0, 0, sz, sz); }
   const cx     = sz / 2;
   /* ギヨウザ中心 y（天使の輪分だけ下げる） */
   const cy     = haloH + r * 0.6 + 4;
@@ -3020,7 +3044,7 @@ function updateUuuu() {
     else if (g.y < fadeZone) g.alpha = Math.max(0, g.alpha - 0.025);
     if (g.y < -g.r * 3) g.alive = false;
   }
-  swapRemove(ghosts, _predAlive);
+  swapRemove(ghosts, _predAlive, _releaseGhost); // キャンバスをプールへ返却
 }
 
 function drawUuuu() {
