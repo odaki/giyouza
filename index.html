@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.74';
+const VERSION = 'v3.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -556,10 +556,13 @@ let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音�
 let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニメ用: suspended中も進む）
 let _arrowProgressAtPause = -1; // ポーズ時に shooting 中だった場合のarrowProgress保存値
 const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
-let shootGuard = 0;    // init直後の誤射防止フレームカウンタ
+/* 入力ブロック系の時間ガードは wall-clock（performance.now）基準にする。
+   フレームカウンタだと rAF 停止中（document.hidden 等）に update() が走らず
+   永久に失効しないため（v3.74 検証時に発覚した凍結の再発防止） */
+let shootGuardUntil = 0;    // init直後の誤射防止期限（performance.now() ms）
 let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
 let slowRampEndTime = 0;   // スローランプ終了のaudioCtx時刻（0=ランプなし）
-let slowHandLockFrames = 0; // スローハンド発動直後の入力ロックフレーム数
+let slowHandLockUntil = 0; // スローハンド発動直後の入力ロック期限（performance.now() ms）
 let slowHandPopTimer  = 0; // バッジポップアニメーション（発動時に25→0カウントダウン）
 /* グレースケール: AudioParam.value が setValueCurveAtTime 中に intrinsic 値を返す
    ブラウザ実装差異を回避するため JS 側で独立管理 */
@@ -1854,7 +1857,7 @@ function playStartJingle(onEnd) {
 function _doAutoReset(inputAudioTime) {
   const fire = pendingShoot;
   init();
-  shootGuard = 0;
+  shootGuardUntil = 0;
   if (fire) { pendingShoot = false; onShoot(inputAudioTime); }
 }
 
@@ -1981,7 +1984,7 @@ function init(fromStartup, fromGameOver) {
   _jackpotAutoReset  = false;
   canRestart  = false; _continueShowDelay = 0;
   betLocked   = false;
-  shootGuard  = 6; // 約100ms間（6フレーム）射撃ブロック
+  shootGuardUntil = performance.now() + 100; // 約100ms間 射撃ブロック（wall-clock基準）
   /* done フェーズ中に経過したビートをミスとして数えないようリセット */
   _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS)) : -1;
   isMissResult = false;
@@ -1991,7 +1994,7 @@ function init(fromStartup, fromGameOver) {
   if (!fromStartup && !fromGameOver && bgmSource) {
     if (isSlowSpin && !prevSlowSpin) {
       rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // 通常→スロー: BET対応速度へ、ランプ中は射撃・BET変更ロック
-      slowHandLockFrames = 60; // 約1秒: バッジ・テンポ変化に気づくまで入力ロック
+      slowHandLockUntil = performance.now() + 1000; // 約1秒: バッジ・テンポ変化に気づくまで入力ロック（wall-clock基準）
       slowHandPopTimer   = 25; // バッジポップアニメーション開始
       playSE('slow_hand');     // 発動SE
     } else if (!isSlowSpin && prevSlowSpin) {
@@ -2162,14 +2165,13 @@ function update() {
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
-  if (shootGuard > 0) shootGuard--;
   /* ── ビート自動減衰: idle/reach 中に3拍経過するたびにスコア0.25を追加 ──
      3拍単位にすることで6拍おきに射つプレイヤーまでdecayが発生しない。
      アイドル時のペナルティ(0.25)は悪いタイミングでの射撃(0〜0.3)より軽く設定し
      「何もしない」より「ヘタな射ち」のほうが痛くなるよう差別化する。
      done/shooting/tapestart/startup フェーズは対象外（プレイヤーの責任ではない）
-     shootGuard > 0 の初期保護期間も除外 */
-  if ((phase === 'idle' || phase === 'reach') && shootGuard <= 0 && BGM_BEAT > 0) {
+     shootGuardUntil 未経過の初期保護期間も除外 */
+  if ((phase === 'idle' || phase === 'reach') && performance.now() >= shootGuardUntil && BGM_BEAT > 0) {
     const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS));
     if (_autoDecayBeatIdx >= 0 && _curBeat > _autoDecayBeatIdx) {
       /* フレーム落ち等で複数期間分まとめて来た場合は最大4件に制限 */
@@ -2178,7 +2180,6 @@ function update() {
     }
     _autoDecayBeatIdx = _curBeat;
   }
-  if (slowHandLockFrames > 0) slowHandLockFrames--;
   if (slowHandPopTimer  > 0) slowHandPopTimer--;
   if (syncJustTimer     > 0) syncJustTimer--;
   /* syncRateDisp: VUメーター式（上昇は速く・下降はゆっくり） */
@@ -5659,9 +5660,9 @@ function onShoot(_inputAudioTime){
   /* リーチ発動直後はエフェクト・SEを見せるため入力ロック */
   if (phase === 'reach' && reachTimer < REACH_LOCK_FRAMES) return;
   /* スローハンド発動直後はバッジ・テンポ変化に気づくまで入力ロック */
-  if (slowHandLockFrames > 0) return;
+  if (performance.now() < slowHandLockUntil) return;
   if (curIdx>=4) return;
-  if (shootGuard > 0) return; // init直後の誤射ブロック
+  if (performance.now() < shootGuardUntil) return; // init直後の誤射ブロック
   /* ── ビートシンクスコアを最初にキャプチャ（以降の処理による時刻ズレを防ぐ） ── */
   const _syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(_inputAudioTime) : null;
   /* 最初の矢: ベット確定 & コイン消費 & 実績 */
@@ -5737,7 +5738,7 @@ function handleGameClick(inputAudioTime) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
-        init(); shootGuard = 0; pendingShoot = false; onShoot(inputAudioTime);
+        init(); shootGuardUntil = 0; pendingShoot = false; onShoot(inputAudioTime);
       }
       return;
     }
@@ -5748,7 +5749,7 @@ function handleGameClick(inputAudioTime) {
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
-      init(); shootGuard = 0;
+      init(); shootGuardUntil = 0;
     }
     return;
   }
