@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.78';
+const VERSION = 'v3.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -866,7 +866,8 @@ function onBeatGrid() {
    これを基準に描画パイプライン遅延（≈2フレーム）だけ先読みすれば視覚と音が一致する。 */
 let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx初期化後に動的更新
 
-/* outputLatency + baseLatency + _BEAT_DISPLAY_ADVANCE = TARGET になるよう動的設定 */
+/* 表示先読みの目標値（描画パイプライン補償）: リングは計算からrAF描画・合成を経て
+   約2〜4フレーム後に発光するため、その分だけ位相を先読みして計算する */
 const _BEAT_ADVANCE_TARGET = 4 / 60; // ≈66.7ms（4フレーム分）
 let _hwLatency = 0; // 実効出力遅延のキャッシュ（毎フレーム読み取りを避ける）
 let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経路変更追従・演出系なのでフレーム基準で可）
@@ -892,7 +893,10 @@ function _updateBeatDisplayAdvance() {
     }
   }
   _hwLatency = hw + _LATENCY_TRIM;
-  _BEAT_DISPLAY_ADVANCE = Math.max(0, _BEAT_ADVANCE_TARGET - _hwLatency);
+  /* 表示先読みは「描画パイプライン遅延（rAF→合成→画面 ≈2〜4フレーム）」の補償であり、
+     音声出力遅延とは独立した定数。旧実装の max(0, TARGET - hw) は Bluetooth
+     （hw≈200ms）で先読みが0に潰れ、リングが描画パイプラインぶん音より遅れて見えた（v3.79修正） */
+  _BEAT_DISPLAY_ADVANCE = _BEAT_ADVANCE_TARGET;
 }
 
 /* BGM ループ長をサンプル単位に量子化した実ループ長（秒）。
@@ -1001,7 +1005,9 @@ function getBeatPulse() {
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
 function calcSyncScore(atPerfMs) {
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0.5;
-  /* getBeatPulseと同じ rawPos を使うことで「リングのピーク = JUST」に正確に一致させる。
+  /* 判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
+     表示先読み _BEAT_DISPLAY_ADVANCE は描画パイプライン補償なので判定には含めない
+     — リング自体が表示遅延を経て光るため、見た目のピークと判定グリッドは体感上一致する。
      最後の積算tickから入力までの経過は performance クロック同士で補間する
      （出力タイムラインとスケジュールタイムラインを混在させると Bluetooth 遅延環境で
       extra が常に0へクランプされ、tick量子化バイアス＋ジッターが判定に乗る）。
@@ -1010,7 +1016,7 @@ function calcSyncScore(atPerfMs) {
   const nowPerf = (atPerfMs ?? performance.now()) / 1000;
   const extra   = Math.max(0, Math.min(nowPerf - _bgmAccumLastPerf, 0.1)); // 最後のstepから入力までの差分
   const audioPos = _bgmAccumAudioTime + extra * rate;
-  const rawPos   = audioPos + (_BEAT_DISPLAY_ADVANCE - _hwLatency + _JUDGE_TRIM) * rate; // 表示と同一基準+判定較正
+  const rawPos   = audioPos + (_JUDGE_TRIM - _hwLatency) * rate; // 聴取基準 + 判定較正
   const loopN    = Math.floor(rawPos / _bgmQuantizedLoopDur);
   const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
   /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
