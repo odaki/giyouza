@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.76';
+const VERSION = 'v3.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -878,10 +878,27 @@ let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx�
 
 /* outputLatency + baseLatency + _BEAT_DISPLAY_ADVANCE = TARGET になるよう動的設定 */
 const _BEAT_ADVANCE_TARGET = 4 / 60; // ≈66.7ms（4フレーム分）
-let _hwLatency = 0; // outputLatency + baseLatency のキャッシュ（毎フレーム読み取りを避ける）
+let _hwLatency = 0; // 実効出力遅延のキャッシュ（毎フレーム読み取りを避ける）
+let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経路変更追従・演出系なのでフレーム基準で可）
+/* 手動遅延補正（?lat=ms URLパラメータ、負値も可）:
+   iOS Safari は outputLatency 未実装（WebKitにFIXMEあり）のため、AirPods 等
+   Bluetooth の出力遅延（150〜250ms）を検出できない。ビートリングと音のズレを
+   感じる場合に ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
+const _LATENCY_TRIM = (parseFloat(new URLSearchParams(location.search).get('lat')) || 0) / 1000;
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
-  _hwLatency = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+  let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
+  /* outputLatency 未実装環境（Safari）向け: getOutputTimestamp から実効出力遅延を推定。
+     currentTime（スケジュール済み時刻）− contextTime（今スピーカーから出ている音の時刻）
+     が Bluetooth を含む出力チェーン遅延。取得できて hw より大きければ採用する */
+  if (typeof audioCtx.getOutputTimestamp === 'function' && audioCtx.state === 'running') {
+    const ts = audioCtx.getOutputTimestamp();
+    if (ts && ts.contextTime > 0) {
+      const eff = audioCtx.currentTime - ts.contextTime;
+      if (eff > hw && eff < 1.0) hw = eff; // 異常値（停止直後等）は除外
+    }
+  }
+  _hwLatency = hw + _LATENCY_TRIM;
   _BEAT_DISPLAY_ADVANCE = Math.max(0, _BEAT_ADVANCE_TARGET - _hwLatency);
 }
 
@@ -2165,6 +2182,11 @@ function update() {
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
+  /* 実効出力遅延を約2秒ごとに再計測（AirPods 接続・切断などの経路変更に追従） */
+  if (audioCtx && ++_latencyRefreshCnt >= 120) {
+    _latencyRefreshCnt = 0;
+    _updateBeatDisplayAdvance();
+  }
   /* ── ビート自動減衰: idle/reach 中に3拍経過するたびにスコア0.25を追加 ──
      3拍単位にすることで6拍おきに射つプレイヤーまでdecayが発生しない。
      アイドル時のペナルティ(0.25)は悪いタイミングでの射撃(0〜0.3)より軽く設定し
