@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.77';
+const VERSION = 'v3.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -853,21 +853,11 @@ function onBeatGrid() {
   return ph4 < 0.25 || ph4 > 0.75;
 }
 
-/* event.timeStamp（入力物理発生時刻）をオーディオ時刻に換算する
-   getOutputTimestamp() 未サポート環境は audioCtx.currentTime にフォールバック */
-function inputEventToAudioTime(eventTimeStamp) {
-  if (!audioCtx) return null;
-  if (typeof audioCtx.getOutputTimestamp === 'function') {
-    const ts = audioCtx.getOutputTimestamp();
-    /* ts.performanceTime: performance.now()ベース（ms単位）
-       ts.contextTime:     対応するオーディオ時刻（秒単位） */
-    if (ts && ts.performanceTime > 0) {
-      return ts.contextTime + (eventTimeStamp - ts.performanceTime) / 1000;
-    }
-  }
-  /* フォールバック: ハンドラ実行時のcurrentTime（数ms遅れの可能性あり） */
-  return audioCtx.currentTime;
-}
+/* 入力の時刻は event.timeStamp（performance.now() 基準 ms）のまま扱い、
+   calcSyncScore 内で performance クロック同士で補間する。
+   旧実装の inputEventToAudioTime（getOutputTimestamp 換算）は出力タイムラインと
+   スケジュールタイムライン（currentTime）を混在させており、Bluetooth 遅延環境で
+   サブフレーム補間が常に0へクランプされる判定バイアスを生んでいたため廃止（v3.78） */
 
 /* ビジュアルビート表示用の「今聴いている音声時刻」を取得する。
    audioCtx.currentTime は outputLatency 分だけ未来の予約時刻であり、
@@ -885,6 +875,9 @@ let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経�
    Bluetooth の出力遅延（150〜250ms）を検出できない。ビートリングと音のズレを
    感じる場合に ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
 const _LATENCY_TRIM = (parseFloat(new URLSearchParams(location.search).get('lat')) || 0) / 1000;
+/* 入力判定専用の較正（?jlat=ms、正の値で判定グリッドを早める。表示には影響しない）:
+   「音に合わせて押すとJUSTが遅れて出る（離す頃に判定される）」場合に指定して較正する */
+const _JUDGE_TRIM = (parseFloat(new URLSearchParams(location.search).get('jlat')) || 0) / 1000;
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
   let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
@@ -921,6 +914,7 @@ function _updateBgmQuantizedLoopDur() {
    対策: 毎フレーム playbackRate × Δt を積算し、実際の音声バッファ位置を追跡する。 */
 let _bgmAccumAudioTime = 0;    // BGMバッファ内積算再生位置（秒）
 let _bgmAccumLastWall  = null; // 最後に積算した audioCtx.currentTime
+let _bgmAccumLastPerf  = 0;    // 最後に積算した performance.now()/1000（入力評価のサブフレーム補間用）
 
 /* ── JS側レート追跡 ───────────────────────────────────────────────────────────
    AudioParam.value は setValueCurveAtTime 実行中に古い値を返すブラウザ実装差異があり
@@ -961,6 +955,7 @@ function _getBgmRateJS() {
 function _bgmAccumReset() {
   _bgmAccumAudioTime = 0;
   _bgmAccumLastWall  = audioCtx ? audioCtx.currentTime : null;
+  _bgmAccumLastPerf  = performance.now() / 1000;
 }
 
 function _bgmAccumStep() {
@@ -968,6 +963,7 @@ function _bgmAccumStep() {
   const now = audioCtx.currentTime;
   const dt  = now - _bgmAccumLastWall;
   _bgmAccumLastWall = now;
+  _bgmAccumLastPerf = performance.now() / 1000;
   if (dt <= 0) return;
   /* dt > 10s: タブ長時間非表示など AudioContext が止まっていたケース → スキップ
      jackpot/reach_jackpot SE（2〜2.5s）はここに含めず正常に積算する */
@@ -1001,17 +997,20 @@ function getBeatPulse() {
 }
 
 /* 現在の入力タイミングがビートにどれだけ近いかを 0-1 で返す
-   atTime: inputEventToAudioTime() で換算した入力時刻（省略時は currentTime）
+   atPerfMs: 入力イベントの timeStamp（performance.now() 基準 ms、省略時は現在時刻）
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
-function calcSyncScore(atTime) {
+function calcSyncScore(atPerfMs) {
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0.5;
   /* getBeatPulseと同じ rawPos を使うことで「リングのピーク = JUST」に正確に一致させる。
-     atTimeまでの追加積算をレートで補外し、getBeatPulseと同じ (_BEAT_DISPLAY_ADVANCE - hw) 補正を適用。 */
+     最後の積算tickから入力までの経過は performance クロック同士で補間する
+     （出力タイムラインとスケジュールタイムラインを混在させると Bluetooth 遅延環境で
+      extra が常に0へクランプされ、tick量子化バイアス＋ジッターが判定に乗る）。
+     _JUDGE_TRIM（?jlat）は判定グリッドのみを較正する（表示には影響しない） */
   const rate    = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
-  const wallNow = atTime ?? audioCtx.currentTime;
-  const extra   = Math.max(0, Math.min(wallNow - _bgmAccumLastWall, 0.1)); // 最後のstepから入力までの差分
+  const nowPerf = (atPerfMs ?? performance.now()) / 1000;
+  const extra   = Math.max(0, Math.min(nowPerf - _bgmAccumLastPerf, 0.1)); // 最後のstepから入力までの差分
   const audioPos = _bgmAccumAudioTime + extra * rate;
-  const rawPos   = audioPos + (_BEAT_DISPLAY_ADVANCE - _hwLatency) * rate; // getBeatPulseと同一基準
+  const rawPos   = audioPos + (_BEAT_DISPLAY_ADVANCE - _hwLatency + _JUDGE_TRIM) * rate; // 表示と同一基準+判定較正
   const loopN    = Math.floor(rawPos / _bgmQuantizedLoopDur);
   const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
   /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
@@ -1870,12 +1869,12 @@ function playStartJingle(onEnd) {
 /* ════════════════ Init ════════════════ */
 
 /* トライ自動リセット共通処理（ハズレ自動送り・フィーバー大当たり自動送り・クリック即時送りで使用）
-   inputAudioTime: undefined のときは onShoot が currentTime で代替 */
-function _doAutoReset(inputAudioTime) {
+   inputPerfMs: undefined のときは onShoot が performance.now() で代替 */
+function _doAutoReset(inputPerfMs) {
   const fire = pendingShoot;
   init();
   shootGuardUntil = 0;
-  if (fire) { pendingShoot = false; onShoot(inputAudioTime); }
+  if (fire) { pendingShoot = false; onShoot(inputPerfMs); }
 }
 
 /* フィーバー関連状態を一括リセット（initGame / gameOverReset 共通） */
@@ -5810,6 +5809,7 @@ function togglePause() {
             src.start(t, offset);
             bgmPhaseRef = t - _pauseBgmPos;
             _bgmAccumLastWall = t;
+            _bgmAccumLastPerf = performance.now() / 1000;
             bgmGain.gain.cancelScheduledValues(t);
             bgmGain.gain.setValueAtTime(1, t);
           }
@@ -5820,7 +5820,7 @@ function togglePause() {
   }
 }
 
-function onShoot(_inputAudioTime){
+function onShoot(_inputPerfMs){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
   /* リーチ発動直後はエフェクト・SEを見せるため入力ロック */
@@ -5830,7 +5830,7 @@ function onShoot(_inputAudioTime){
   if (curIdx>=4) return;
   if (performance.now() < shootGuardUntil) return; // init直後の誤射ブロック
   /* ── ビートシンクスコアを最初にキャプチャ（以降の処理による時刻ズレを防ぐ） ── */
-  const _syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(_inputAudioTime) : null;
+  const _syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(_inputPerfMs) : null;
   /* 最初の矢: ベット確定 & コイン消費 & 実績 */
   if (curIdx === 0) {
     if (coins < bet) return; // 念のため
@@ -5896,7 +5896,7 @@ function onShoot(_inputAudioTime){
    - tapestart        : 先打ちバッファ登録（解放時に自動発射）
    - shooting(4本目)  : 先打ちバッファ登録（当たりなら即破棄、ハズレなら着弾後に発射）
    その他フェーズ     : 無視 */
-function handleGameClick(inputAudioTime) {
+function handleGameClick(inputPerfMs) {
   if (phase === 'done') {
     if (isGameOver) { if (canRestart) gameOverReset(); return; }
     if (isMissResult) {
@@ -5904,14 +5904,14 @@ function handleGameClick(inputAudioTime) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
-        init(); shootGuardUntil = 0; pendingShoot = false; onShoot(inputAudioTime);
+        init(); shootGuardUntil = 0; pendingShoot = false; onShoot(inputPerfMs);
       }
       return;
     }
     /* フィーバー大当たり: クリックで即時リセット＋pendingShoot引き継ぎ */
     if (_jackpotAutoReset) {
       pendingShoot = true;
-      _doAutoReset(inputAudioTime); return;
+      _doAutoReset(inputPerfMs); return;
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
@@ -5926,7 +5926,7 @@ function handleGameClick(inputAudioTime) {
      ただし AudioContext が suspended の場合は currentTime が止まるためロックを免除する */
   if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
       && audioCtx.currentTime < slowRampEndTime) return;
-  onShoot(inputAudioTime); // idle / reach
+  onShoot(inputPerfMs); // idle / reach
 }
 
 const CHEAT_MAP = { 'KeyG':'ギ', 'KeyY':'ヨ', 'KeyU':'ウ', 'KeyZ':'ザ' };
@@ -5952,7 +5952,7 @@ document.addEventListener('keydown', e=>{
   }
   if (e.code==='Space') {
     e.preventDefault();
-    handleGameClick();
+    handleGameClick(e.timeStamp);
     return;
   }
   /* カーソル左右でBET変更 */
@@ -5992,8 +5992,8 @@ document.addEventListener('keydown', e=>{
 
 canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
-  /* 入力物理発生時刻をオーディオ時刻に換算（ハンドラ到達前の遅延を補正） */
-  const inputAudioTime = inputEventToAudioTime(e.timeStamp);
+  /* 入力物理発生時刻（performance.now() 基準 ms。ハンドラ到達前の遅延を補正） */
+  const inputPerfMs = e.timeStamp;
   /* _canvasRect キャッシュを使用（getBoundingClientRect() 強制レイアウトを排除） */
   const cx = (e.clientX - _canvasRect.left) * (W / _canvasRect.width);
   const cy = (e.clientY - _canvasRect.top)  * (H / _canvasRect.height);
@@ -6032,14 +6032,14 @@ canvas.addEventListener('mousedown', e=>{
       if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
     }
   }
-  handleGameClick(inputAudioTime);
+  handleGameClick(inputPerfMs);
 });
 
 /* タッチ操作対応（ページ内どこでもタップで反応） */
 document.addEventListener('touchstart', e=>{
   e.preventDefault();
-  /* 入力物理発生時刻をオーディオ時刻に換算 */
-  const inputAudioTime = inputEventToAudioTime(e.timeStamp);
+  /* 入力物理発生時刻（performance.now() 基準 ms） */
+  const inputPerfMs = e.timeStamp;
   const pt = touchToCanvas(e.touches[0]);
   /* 全画面ボタン: 最初にチェック（全フェーズで有効） */
   if (FS_SUPPORTED && hitTest(FS_BTN_RECT, pt.x, pt.y)) { toggleFullscreen(); return; }
@@ -6093,7 +6093,7 @@ document.addEventListener('touchstart', e=>{
     }
   }
 
-  handleGameClick(inputAudioTime);
+  handleGameClick(inputPerfMs);
 }, { passive: false });
 
 /* touchend ハンドラ: START ボタンのゲーム開始処理
