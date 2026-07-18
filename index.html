@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.79';
+const VERSION = 'v3.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5826,6 +5826,27 @@ function togglePause() {
   }
 }
 
+/* ── 発射SEのBGMグリッドスナップ（実験用: ?sesnap=8|4、既定OFF） ──
+   Bluetooth 遅延（≈200ms ≒ BPM152の8分音符1個分）では、即時再生した発射SEが
+   聴感上1グリッド遅れて届き、表拍で撃つと自分の音が裏拍（弱拍）に落ちて
+   不協和に聞こえる。SEをBGMの次グリッドへスナップすると、SEとBGMは同じ
+   出力チェーンを通るため遅延量に関係なく聴感で拍に揃う。
+   sesnap=8: 8分音符グリッド（最大197ms遅れ・裏拍にも乗る）
+   sesnap=4: 4分音符グリッド（最大395ms遅れ・常に強拍に乗る） */
+const _SE_SNAP_DIV = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('sesnap'), 10);
+  return (v === 4 || v === 8) ? v : 0;
+})();
+function _snapShootTime() {
+  if (!_SE_SNAP_DIV || !audioCtx || !bgmSource || _bgmQuantizedLoopDur <= 0) return null;
+  const rate = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
+  if (rate <= 0.01) return null; // テープ停止中はスナップ不能
+  const grid = _SE_SNAP_DIV === 8 ? BGM_BEAT / 2 : BGM_BEAT;
+  const pos  = _bgmAccumAudioTime; // 現在のBGMバッファ位置（スケジュール基準）
+  const next = Math.ceil((pos + 0.005) / grid) * grid; // 5ms余裕を持って次グリッド
+  return audioCtx.currentTime + (next - pos) / rate;
+}
+
 function onShoot(_inputPerfMs){
   /* idle と reach の両フェーズで矢を放てる */
   if (phase!=='idle' && phase!=='reach') return;
@@ -5861,8 +5882,12 @@ function onShoot(_inputPerfMs){
      _arrowStartWallTime: アニメーション進行用（performance.now: suspended中も止まらない）
      _arrowStartAudioTime: 着弾音スケジュール用（audioCtx.currentTime: 音声API基準） */
   _arrowStartWallTime  = performance.now() / 1000;
-  _arrowStartAudioTime = audioCtx ? audioCtx.currentTime + 0.01 : 0;
-  playSE('shoot'); // currentTime + 0.01 で即再生
+  /* 発射SE: 通常は即時、?sesnap 指定時は BGM グリッドへスナップ。
+     着弾音・ミス音は _arrowStartAudioTime 基準なのでスナップに追従し
+     shoot→lock の間隔（ARROW_FLIGHT_SEC）は常に一定に保たれる */
+  const _snapT = _snapShootTime();
+  _arrowStartAudioTime = audioCtx ? (_snapT ?? audioCtx.currentTime + 0.01) : 0;
+  playSE('shoot', _snapT ?? undefined); // スナップなしは currentTime + 0.01 で即再生
   /* ── ビートシンク評価（先頭でキャプチャした値を使用） ── */
   if (_syncScore !== null) {
     const score = _syncScore;
