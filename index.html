@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.84';
+const VERSION = 'v3.85';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2060,7 +2060,12 @@ function clampBet() {
   if (bet > coins) bet = BET_OPTIONS[0]; // 1ギヨウザ以上あれば必ず賭けられる
 }
 
-function fmt(n) { return n.toLocaleString('ja-JP'); }
+/* 数値整形: NumberFormat を1回だけ生成してキャッシュ。
+   toLocaleString は呼ぶたびに内部で NumberFormat を生成するため遅く（実測41倍差）、
+   コインカウントアニメ中は毎フレーム呼ばれるためフレーム落ちの一因になっていた */
+const _NUM_FMT = (typeof Intl !== 'undefined' && Intl.NumberFormat)
+  ? new Intl.NumberFormat('ja-JP') : null;
+function fmt(n) { return _NUM_FMT ? _NUM_FMT.format(n) : n.toLocaleString('ja-JP'); }
 
 function changeBet(dir) {
   /* dir: +1=上げる, -1=下げる */
@@ -2229,7 +2234,10 @@ function update() {
   if (coinsDisp !== coins && phase !== 'startup') {
     const _cd   = coins - coinsDisp;
     const _rate = audioCtx ? _getBgmRateJS() : 1;
-    const _cs   = Math.min(Math.abs(_cd) * 0.08, 2000) * _rate;
+    /* 最低ステップ3/フレーム: 指数減衰の尻尾（1コイン刻みの長期化）を打ち切る。
+       BET100 の減算が約60→24フレームに短縮され、終盤に毎フレーム続いていた
+       カウント文字列生成＋テキストOC再描画の負荷期間が半減する */
+    const _cs   = Math.max(Math.min(Math.abs(_cd) * 0.08, 2000), 3) * _rate;
     if (_cs >= Math.abs(_cd)) { coinsDisp = coins; }
     else { coinsDisp += _cd > 0 ? _cs : -_cs; }
   }
