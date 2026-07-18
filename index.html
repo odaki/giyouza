@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.85';
+const VERSION = 'v3.86';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -882,9 +882,14 @@ let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経�
    Bluetooth の出力遅延（150〜250ms）を検出できない。ビートリングと音のズレを
    感じる場合に ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
 const _LATENCY_TRIM = (parseFloat(new URLSearchParams(location.search).get('lat')) || 0) / 1000;
-/* 入力判定専用の較正（?jlat=ms、正の値で判定グリッドを早める。表示には影響しない）:
-   「音に合わせて押すとJUSTが遅れて出る（離す頃に判定される）」場合に指定して較正する */
-const _JUDGE_TRIM = (parseFloat(new URLSearchParams(location.search).get('jlat')) || 0) / 1000;
+/* 判定の既定バイアス: 人間はビートに合わせてタップすると平均20〜40ms先行して
+   叩く傾向（negative mean asynchrony）があるため、判定グリッドを既定で早める。
+   値は iPad スピーカー実機の較正（2026-07）で +37ms が最適と確認されたもの */
+const _JUDGE_BIAS = 0.037;
+/* 入力判定専用の較正（?jlat=ms、既定バイアスへの加算。正の値で判定グリッドをさらに早める。
+   表示には影響しない。再較正・実験用 */
+const _JUDGE_TRIM = _JUDGE_BIAS +
+  (parseFloat(new URLSearchParams(location.search).get('jlat')) || 0) / 1000;
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
   let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
