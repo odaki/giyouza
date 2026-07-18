@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.81';
+const VERSION = 'v3.82';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -364,6 +364,9 @@ const _predWheelShown = w => !w.result || w.resultPop >= 1;
 /* 発射SE用: Cメジャーアルペジオ音程テーブル（4本の矢 = C→E→G→C'）
    モジュールスコープに置いて playSE 呼び出しごとの配列生成を排除 */
 const _SHOOT_ARPEGIO = [noteHz('C',5), noteHz('E',5), noteHz('G',5), noteHz('C',6)];
+/* 超大当たり連続コイン音: Cメジャーペンタトニック上昇走句（BGMの調に整合） */
+const _COIN_RUN = [noteHz('C',6), noteHz('D',6), noteHz('E',6), noteHz('G',6),
+                   noteHz('A',6), noteHz('C',7), noteHz('D',7), noteHz('E',7)];
 
 /* ── 毎フレーム生成を避けるための描画用ルックアップテーブル ──
    テンプレートリテラルによる毎フレーム文字列アロケーションを排除する。
@@ -1501,9 +1504,9 @@ function playSE(name, atTime) {
       break;
     }
     case 'lock': {
-      /* コツン */
-      playOsc(ctx, 'square', 320, t, 0.04, 0.22, 0.04);
-      playOsc(ctx, 'square', 200, t+0.025, 0.03, 0.15, 0.04);
+      /* コツン（E4→G3: 打撃感を保ちつつ音程だけ調内に調律） */
+      playOsc(ctx, 'square', noteHz('E',4), t, 0.04, 0.22, 0.04);
+      playOsc(ctx, 'square', noteHz('G',3), t+0.025, 0.03, 0.15, 0.04);
       break;
     }
     case 'bet': {
@@ -1513,9 +1516,11 @@ function playSE(name, atTime) {
       break;
     }
     case 'reach': {
-      /* ジャジャーン: 緊張感あるコード */
+      /* ジャジャーン: 緊張感あるコード
+         G7（ドミナントセブンス）: 緊張を作りつつ、約0.9秒後に再開する
+         Cメジャーペンタの BGM へ教科書通りに解決する */
       stopBGM(); // BGM一時停止してSEを際立たせる
-      const chord = [220, 277.18, 329.63, 415.30]; // Am7 風
+      const chord = [noteHz('G',3), noteHz('B',3), noteHz('D',4), noteHz('F',4)]; // G7
       chord.forEach((f, i) => {
         playOsc(ctx, 'sawtooth', f, t + i*0.04, 1.2, 0.18, 0.6);
       });
@@ -1561,9 +1566,9 @@ function playSE(name, atTime) {
         playOsc(ctx, 'square',    f,   t+dt, d, 0.24, 0.08);
         playOsc(ctx, 'sawtooth',  f*2, t+dt, d, 0.10, 0.08);
       });
-      /* 連続コイン音 */
-      for (let i = 0; i < 8; i++)
-        playOsc(ctx, 'sine', noteHz('C',6) * (1 + i*0.05), t + 0.9 + i*0.07, 0.08, 0.22, 0.05);
+      /* 連続コイン音: ペンタトニック上昇走句（旧: 等比5%刻みの半音階的スメアで調外を通過していた） */
+      _COIN_RUN.forEach((f, i) =>
+        playOsc(ctx, 'sine', f, t + 0.9 + i*0.07, 0.08, 0.22, 0.05));
       playNoise(ctx, t, 0.3, 0.35, 100);
       scheduleBGMRestart(2500);
       break;
@@ -1613,15 +1618,16 @@ function playSE(name, atTime) {
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(masterGain ?? ctx.destination);
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(520, t);
-      osc.frequency.exponentialRampToValueAtTime(180, t + 0.65);
+      /* C5→E3 スライド（テープ感を保ちつつ両端を調内に調律） */
+      osc.frequency.setValueAtTime(noteHz('C',5), t);
+      osc.frequency.exponentialRampToValueAtTime(noteHz('E',3), t + 0.65);
       gain.gain.setValueAtTime(0.0001, t);
       gain.gain.linearRampToValueAtTime(0.32, t + 0.05);
       gain.gain.setValueAtTime(0.32, t + 0.20);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
       osc.start(t); osc.stop(t + 0.77);
-      /* 低音の重さを加える */
-      playOsc(ctx, 'triangle', 80, t + 0.05, 0.4, 0.18, 0.25);
+      /* 低音の重さを加える（E2: 調内に調律） */
+      playOsc(ctx, 'triangle', noteHz('E',2), t + 0.05, 0.4, 0.18, 0.25);
       /* 短いノイズバースト（テープのこすれ感） */
       playNoise(ctx, t, 0.06, 0.12, 400);
       break;
