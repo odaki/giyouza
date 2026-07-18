@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.83';
+const VERSION = 'v3.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -380,7 +380,8 @@ const _BEAT_BORDER_COLORS = /* ミュート時枠線: rgba(245,208,32, 0.3〜0.8
 const _RAINBOW_COLORS = Array.from({length:120}, (_,i) => `hsl(${Math.round(i*3)},100%,62%)`);
 const BEAT_BONUS_CHAIN = 100; // BEAT BONUS発動に必要なチェーン数（閾値変更はここだけ）
 const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率（v3.83: 2→4 難易度調整）
-const FEVER_PROB       = 0.60; // 超大当たり後にフィーバーへ移行する確率（v3.83: 0.30→0.60 難易度調整）
+const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率（v3.83: 0.30→0.60 難易度調整）
+const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（v3.84 追加）
 /* 虹色インデックス: performance.now()ベース、約6秒で一周（GCゼロ） */
 function _rainbowIdx() { return ((performance.now() / 50) | 0) % 120; }
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
@@ -2323,6 +2324,8 @@ function update() {
             launchFireworks();
             initItems(_itemBurst(PAYOUT_RATE.jackpot), true);
             playSE('jackpot');
+            /* 通常大当たりからも低確率でフィーバー移行（フィーバー中は _jackpotAutoReset 分岐のため対象外） */
+            if (!feverPending && Math.random() < FEVER_PROB_NORMAL) feverPending = true;
           }
           unlockAch('first_jackpot');
           jackpotCount++;
