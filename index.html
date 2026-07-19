@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.00';
+const VERSION = 'v4.01';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -149,6 +149,12 @@ const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 小当たり④
 
 const WR  = IS_PORTRAIT ? 66  : 95;
 const KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（通常ホイールより小さい）
+/* こんがりリール結果文字（的の下に表示）: フォントサイズは的の大きさに比例させる。
+   KING_RESULT_H はレイアウト側（_initBossBattle）で確保する縦スペースで、
+   ここで使う値と同じ式にしないと表示がゲージ枠にはみ出す／余白が余る */
+const KING_RESULT_GAP  = 6;
+const KING_RESULT_FONT = Math.round(KING_WR * 0.55);
+const KING_RESULT_H    = KING_RESULT_GAP + KING_RESULT_FONT + 4;
 const WXS = IS_PORTRAIT ? [210, 210, 210, 210] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
    コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
@@ -2231,8 +2237,7 @@ function createWheel(x, y, feverChar) {
   return w;
 }
 
-function hitResult(w) {
-  const pointer = IS_PORTRAIT ? 0 : -Math.PI / 2; // 縦画面は右(0)、PC は上(-π/2)
+function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面は右(0)、PC は上(-π/2)。第2引数省略時のみこの既定値を使う
   let local = ((pointer - w.rot) % (Math.PI*2) + Math.PI*2) % (Math.PI*2);
   for (const s of w.segs) {
     if (local >= s.start && local < s.start + s.span) return s.char;
@@ -2303,12 +2308,26 @@ function drawKingReel(w, active) {
   ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
   ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
   ctx.stroke();
-  const pointer = IS_PORTRAIT ? 0 : -Math.PI/2;
-  const px = w.x + Math.cos(pointer)*(KING_WR+7), py = w.y + Math.sin(pointer)*(KING_WR+7);
+  /* ポインタ三角形は画面の向きによらず常に的の真上（当たり位置は hitResult 呼び出し側で
+     常に -PI/2 を渡して揃える）。台座半径は「リング外縁（最大 KING_WR+4.5）に接するが
+     重ならない」よう先端が KING_WR+5 に来る値に調整済み（+7 のままだと先端がリングの
+     内側まで食い込んでいた。実機指摘で発覚） */
+  const pointer = -Math.PI/2;
+  const px = w.x + Math.cos(pointer)*(KING_WR+12), py = w.y + Math.sin(pointer)*(KING_WR+12);
   ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
   ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
   ctx.fillStyle = Y; ctx.fill();
   ctx.restore();
+  /* 当たった文字は的の下に表示（ロック前は何も出さない） */
+  if (w.result) {
+    ctx.save();
+    ctx.translate(w.x, w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2);
+    ctx.font = `bold ${KING_RESULT_FONT}px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)'; ctx.strokeText(w.result, 0, 0);
+    ctx.fillStyle = '#fffde7'; ctx.fillText(w.result, 0, 0);
+    ctx.restore();
+  }
 }
 
 /* ════════════════ Update ════════════════ */
@@ -4204,11 +4223,13 @@ function _initBossBattle() {
      ボスが必要以上に小さく表示される（実機報告で発覚: 縦画面で頭頂が100px以上離れる・
      横画面でボスが小さすぎる、の双方が同根）。 */
   const VISUAL_TOP_RATIO = 0.40, VISUAL_BOTTOM_RATIO = 0.56;
-  const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_D - GAP_REEL_PANEL;
+  /* KING_RESULT_H: 的の下に当たった文字を表示するための縦スペース（drawKingReel参照）。
+     ここで確保しないと文字がゲージ枠に重なる */
+  const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_D - KING_RESULT_H - GAP_REEL_PANEL;
   const scale = Math.min(1, availH / (s * (VISUAL_TOP_RATIO + VISUAL_BOTTOM_RATIO))); // 空き高さに収まる縮小率（拡大はしない）
   const visualTopOffset = s * VISUAL_TOP_RATIO * scale;
   const by = headerBottom + visualTopOffset;
-  const reelY = panelTop - GAP_REEL_PANEL - KING_WR; // ゲージ枠から固定隙間の下端基準
+  const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
   const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY));
   _king = {
@@ -4314,7 +4335,7 @@ function _renderKingBody() {
 function _kingReelShoot(inputPerfMs) {
   if (phase !== 'boss' || !_king || _king.reelIdx >= 4) return;
   const w = _king.reels[_king.reelIdx];
-  w.result = hitResult(w);
+  w.result = hitResult(w, -Math.PI/2); // 的の三角ポインタは常に真上（drawKingReel参照）
   w.locked = true;
   w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
   playSE('lock');
