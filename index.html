@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.91';
+const VERSION = 'v3.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -824,6 +824,9 @@ const BTN_TOP   = 11 + BTN_M; // = 21
 const BTN_RIGHT = BTN_M;      // = 10 (旧32から変更)
 const BTN_GAP   = BTN_M;      // = 10 (旧8から変更)
 const BTN_X       = W - BTN_RIGHT - BTN_SIZE; // 右端を起点に縦並び
+/* コインヘッダー寸法（drawCoinHeader と共有。キングギヨウザのレイアウト計算にも使用） */
+const COIN_HEADER_W = 390, COIN_HEADER_H = 78;
+const COIN_HEADER_BOTTOM_Y = BTN_TOP + COIN_HEADER_H; // ヘッダー下端のy座標
 const MUTE_BTN    = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE, h: BTN_SIZE };
 const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
 const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP,                        w: BTN_SIZE, h: BTN_SIZE }; // 左上
@@ -4059,7 +4062,12 @@ function _initBossBattle() {
      ボス下端〜ゲージ上端の間に砲台の場所を確保する。
      旧実装（by=H/2固定）はボスがキャンバス縦幅をほぼ占領し、砲台がゲージパネルの
      背景（砲台より後に描画される）に埋もれて見えなくなっていた（実機報告で発覚）。 */
-  const headerBottom = BTN_TOP + 78 + 15; // コインヘッダー下端(y座標) + 余白
+  /* ボス上端〜ヘッダー下端の余白: 縦画面は左右の隙間（コインヘッダーの左右マージン）と、
+     横画面は外枠〜コインヘッダーの隙間（BTN_M。BTN_TOPは内枠厚み11pxを含む絶対Y座標であり
+     「隙間」そのものではないため誤り。BTN_M=10が実際の枠〜コンテンツの余白）と、
+     それぞれ同じ量にする（実機要望による） */
+  const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
+  const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
   const panelTop      = (IS_PORTRAIT ? P_BAR_Y : BAR_Y) - 15; // こんがりゲージ上端 - 余白
   const TURRET_H = 44, GAP_BOSS_TURRET = 16, GAP_TURRET_PANEL = 14;
   const availH = panelTop - headerBottom - GAP_BOSS_TURRET - GAP_TURRET_PANEL - TURRET_H;
@@ -4979,7 +4987,7 @@ function drawCoinHeader() {
   ctx.globalAlpha = blink;
 
   /* 背景パネル */
-  const pw = 390, ph = 78, px = cx - pw / 2, py = BTN_TOP;
+  const pw = COIN_HEADER_W, ph = COIN_HEADER_H, px = cx - pw / 2, py = BTN_TOP;
   roundRect(px, py, pw, ph, 10);
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
   ctx.fill();
