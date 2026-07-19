@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.99';
+const VERSION = 'v4.00';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3948,7 +3948,22 @@ function _buildBossOC() {
   const c = oc.getContext('2d');
   c.drawImage(bodyOC, 0, 0);
   c.drawImage(faceOC, 0, 0);
-  _bossOC = { oc, bodyOC, faceOC, half };
+  /* 焼き目模様の位置は本体ジオメトリに紐づく固定データなのでここで1回だけ決める
+     （焼き餃子らしい斑な焼き色を出す。実際の描画・こんがり進行との連動は
+     _renderKingBody 側。「不自然にならない範囲で」というユーザー要望に基づき、
+     個々の被弾焦げ跡より大きく・薄く・数を絞ってある） */
+  const pattern = [];
+  for (let i = 0; i < KING_PATTERN_COUNT; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.sqrt(Math.random());
+    pattern.push({
+      lx:  Math.cos(ang) * s * 0.48 * rad,
+      ly:  s * 0.08 + Math.sin(ang) * s * 0.40 * rad,
+      r:   s * 0.16 + Math.random() * s * 0.08,
+      rot: Math.random() * Math.PI * 2,
+    });
+  }
+  _bossOC = { oc, bodyOC, faceOC, half, pattern };
 }
 
 /* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
@@ -4098,8 +4113,10 @@ function drawBossOmen() {
    ボスからの攻撃・被弾・敗北は M3 で実装する。 */
 const KING_MARK_COUNT = 40; // 焼き目スタンプの総数（=満了で勝利）
 const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消えるまでの実時間（wall-clock）
-const KING_TONE_COLOR = '#4a2810'; // こんがり100%到達時の全身色（焦茶色）
-const KING_TONE_MAX_ALPHA = 0.8;   // 全身トーンの最大重ね掛け強度（下地の陰影を少し残す）
+const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
+const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
+const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
+const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
 let _king = null;       // { liveOC, half, marks, revealed, bx, by, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _bossVictoryTimer = 0;
@@ -4254,6 +4271,19 @@ function _renderKingBody() {
     lc.globalAlpha = pct * KING_TONE_MAX_ALPHA;
     lc.fillStyle = KING_TONE_COLOR;
     lc.fillRect(-_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  }
+  /* 焼き目模様: 被弾と無関係に固定位置へ、こんがり進行と共に薄く滲むように出す
+     （焼き餃子らしい斑を演出。個々の被弾焦げ跡より大きく・薄いので主張しすぎない） */
+  if (pct > 0 && _scorchBlotSprite) {
+    lc.globalAlpha = pct * KING_PATTERN_MAX_ALPHA;
+    for (const p of _bossOC.pattern) {
+      lc.save();
+      lc.translate(p.lx, p.ly);
+      lc.rotate(p.rot);
+      const sc = p.r / 26;
+      lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
+      lc.restore();
+    }
   }
   for (const { m, alpha } of active) {
     lc.save();
