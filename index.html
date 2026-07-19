@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.94';
+const VERSION = 'v3.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2258,7 +2258,7 @@ function _createKingReel(x, y) {
   const w = {
     x, y, segs,
     rot:    Math.random() * Math.PI * 2,
-    speed:  Math.random() * 0.08 + 0.18,
+    speed:  (Math.random() * 0.08 + 0.18) * 0.5, // 通常ホイールの半分の回転速度
     locked: false,
     result: null,
     _oc:    null,
