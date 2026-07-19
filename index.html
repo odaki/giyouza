@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.98';
+const VERSION = 'v3.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3889,27 +3889,10 @@ function _spawnOmenGhost() {
 }
 
 /* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
-function _buildBossOC() {
-  if (_bossOC || typeof OffscreenCanvas === 'undefined') return;
-  const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
-  const half = Math.ceil(s * 0.75);
-  const oc = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
-  const c  = oc.getContext('2d');
-  c.scale(_dpr, _dpr);
-  c.translate(half, half);
-  /* 本体は通常サイズ(42)で組んで scale 変換で拡大する。
-     _drawGyozaBody の線幅は小サイズ用の絶対値のため、直接 s=300 で描くと
-     ひだ・輪郭が細すぎて「白い卵」に見える（scale なら線幅も比例して太る） */
-  const REF = 42, kk = s / REF;
-  const grd = c.createRadialGradient(-REF*0.18, -REF*0.12, 0, 0, REF*0.08, REF*0.62);
-  grd.addColorStop(0, 'hsl(46,50%,80%)');
-  grd.addColorStop(0.6, 'hsl(40,52%,64%)');
-  grd.addColorStop(1, 'hsl(35,45%,48%)');
-  c.save();
-  c.scale(kk, kk);
-  _drawGyozaBody(c, REF, 0, 0, grd);
-  c.restore();
-  /* 怒り顔: 白目+黒瞳+吊り眉（内側が下がる）+ へ字口 */
+/* 怒り顔（白目+黒瞳+吊り眉+へ字口）。呼び出し側で scale(_dpr)+translate(half,half)
+   適用済みの論理座標系であること前提（_buildBossOC から分離。理由は _buildBossOC
+   のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る） */
+function _drawKingFace(c, s) {
   const ex = s*0.16, ey = s*0.06, er = s*0.055;
   for (const sx of [-1, 1]) {
     c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
@@ -3927,7 +3910,45 @@ function _buildBossOC() {
   c.moveTo(-s*0.09, s*0.26);
   c.quadraticCurveTo(0, s*0.19, s*0.09, s*0.26);
   c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
-  _bossOC = { oc, half };
+}
+
+function _buildBossOC() {
+  if (_bossOC || typeof OffscreenCanvas === 'undefined') return;
+  const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
+  const half = Math.ceil(s * 0.75);
+  const REF = 42, kk = s / REF;
+  const mkOC = () => new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する
+     （目鼻口眉はトーンの影響を受けさせず、白目の白さで焦げ色とのコントラストを
+     出したいというユーザー要望に基づく。_renderKingBody 参照）。
+     本体は通常サイズ(42)で組んで scale 変換で拡大する。
+     _drawGyozaBody の線幅は小サイズ用の絶対値のため、直接 s=300 で描くと
+     ひだ・輪郭が細すぎて「白い卵」に見える（scale なら線幅も比例して太る） */
+  const bodyOC = mkOC();
+  const bc = bodyOC.getContext('2d');
+  bc.scale(_dpr, _dpr);
+  bc.translate(half, half);
+  const grd = bc.createRadialGradient(-REF*0.18, -REF*0.12, 0, 0, REF*0.08, REF*0.62);
+  grd.addColorStop(0, 'hsl(46,50%,80%)');
+  grd.addColorStop(0.6, 'hsl(40,52%,64%)');
+  grd.addColorStop(1, 'hsl(35,45%,48%)');
+  bc.save();
+  bc.scale(kk, kk);
+  _drawGyozaBody(bc, REF, 0, 0, grd);
+  bc.restore();
+  /* 顔レイヤー（透明地に目鼻口眉のみ）: トーン合成の後に毎回このレイヤーだけ
+     上描きし、常に元の色を保証する */
+  const faceOC = mkOC();
+  const fc = faceOC.getContext('2d');
+  fc.scale(_dpr, _dpr);
+  fc.translate(half, half);
+  _drawKingFace(fc, s);
+  /* 通常表示（予告演出など）用に body+face を1枚に合成したもの（従来どおり） */
+  const oc = mkOC();
+  const c = oc.getContext('2d');
+  c.drawImage(bodyOC, 0, 0);
+  c.drawImage(faceOC, 0, 0);
+  _bossOC = { oc, bodyOC, faceOC, half };
 }
 
 /* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
@@ -4225,7 +4246,7 @@ function _renderKingBody() {
      フェード完了直後にボスが透明になる不具合の真因）。明示的にリセットする。 */
   lc.globalCompositeOperation = 'source-over';
   lc.globalAlpha = 1;
-  lc.drawImage(_bossOC.oc, 0, 0); // 常に素のスプライトから再構成（永続焼き込みではない）
+  lc.drawImage(_bossOC.bodyOC, 0, 0); // 顔なし本体レイヤーから再構成（永続焼き込みではない）
   lc.scale(_dpr, _dpr);
   lc.translate(_king.half, _king.half);
   lc.globalCompositeOperation = 'source-atop'; // ボス本体のアルファ内にのみ合成
@@ -4243,6 +4264,13 @@ function _renderKingBody() {
     lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
     lc.restore();
   }
+  /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けない常に元の色で最後に上描きする
+     （白目の白さと焦げ色とのコントラストを保つユーザー要望）。ラスタコピーのため
+     論理座標系ではなく等倍(identity)に戻してから描く */
+  lc.setTransform(1, 0, 0, 1, 0, 0);
+  lc.globalCompositeOperation = 'source-over';
+  lc.globalAlpha = 1;
+  lc.drawImage(_bossOC.faceOC, 0, 0);
   _king._toneRenderedPct = pct;
   _king._toneHadActive = active.length > 0;
   return _king.liveOC;
