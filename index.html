@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.90';
+const VERSION = 'v3.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4054,10 +4054,23 @@ function _initBossBattle() {
       rot: Math.random() * Math.PI * 2,
     });
   }
+  /* 縦レイアウトを実寸から動的計算する（マジックナンバーの縦横別ハードコード禁止）。
+     コインヘッダー下端〜こんがりゲージ上端の実際の空き高さにボスを収まるよう縮小し、
+     ボス下端〜ゲージ上端の間に砲台の場所を確保する。
+     旧実装（by=H/2固定）はボスがキャンバス縦幅をほぼ占領し、砲台がゲージパネルの
+     背景（砲台より後に描画される）に埋もれて見えなくなっていた（実機報告で発覚）。 */
+  const headerBottom = BTN_TOP + 78 + 15; // コインヘッダー下端(y座標) + 余白
+  const panelTop      = (IS_PORTRAIT ? P_BAR_Y : BAR_Y) - 15; // こんがりゲージ上端 - 余白
+  const TURRET_H = 44, GAP_BOSS_TURRET = 16, GAP_TURRET_PANEL = 14;
+  const availH = panelTop - headerBottom - GAP_BOSS_TURRET - GAP_TURRET_PANEL - TURRET_H;
+  const scale = Math.min(1, availH / (half * 2)); // 空き高さに収まる縮小率（拡大はしない）
+  const dispHalf = half * scale;
+  const by = headerBottom + dispHalf;
+  const ty = by + dispHalf + GAP_BOSS_TURRET + TURRET_H / 2;
   _king = {
-    liveOC, half, marks, revealed: 0,
-    bx: W / 2, by: H / 2 - (IS_PORTRAIT ? 60 : 0),
-    tx: W / 2, ty: H - (IS_PORTRAIT ? 90 : 60),
+    liveOC, half, marks, revealed: 0, scale,
+    bx: W / 2, by,
+    tx: W / 2, ty,
   };
   _kingLasers = [];
   phase = 'boss';
@@ -4121,8 +4134,8 @@ function drawBossBattle() {
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
     ctx.restore();
   }
-  /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ） */
-  const breath = 1 + 0.02 * Math.sin(performance.now() / 300);
+  /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用） */
+  const breath = _king.scale * (1 + 0.02 * Math.sin(performance.now() / 300));
   ctx.save();
   ctx.translate(_king.bx, _king.by); ctx.scale(breath, breath);
   ctx.drawImage(_king.liveOC, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
