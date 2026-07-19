@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.93';
+const VERSION = 'v3.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -128,11 +128,15 @@ const _WHEEL_HUB_GRD = (() => {
   return g;
 })();
 
-const SEG_D = { 'ギ':'#7b1a1a', 'ヨ':'#164d28', 'ウ':'#7a4e00', 'ザ':'#1a2e5a' };
-const SEG_L = { 'ギ':'#c0392b', 'ヨ':'#27ae60', 'ウ':'#e8a000', 'ザ':'#2471a3' };
+const SEG_D = { 'ギ':'#7b1a1a', 'ヨ':'#164d28', 'ウ':'#7a4e00', 'ザ':'#1a2e5a',
+  'こ':'#5c3a1e', 'ん':'#6e2f12', 'が':'#4a2408', 'り':'#7a4a10' };
+const SEG_L = { 'ギ':'#c0392b', 'ヨ':'#27ae60', 'ウ':'#e8a000', 'ザ':'#2471a3',
+  'こ':'#c98a42', 'ん':'#e08a3c', 'が':'#a8611f', 'り':'#f0a94a' };
 
 const CHARS  = ['ギ', 'ヨ', 'ウ', 'ザ'];
 const TARGET   = ['ギ', 'ヨ', 'ウ', 'ザ'];  // 大当たり
+const KING_CHARS  = ['こ', 'ん', 'が', 'り'];
+const KING_TARGET = ['こ', 'ん', 'が', 'り'];  // キングギヨウザへの焼き攻撃
 const UYOUYO   = ['ウ', 'ヨ', 'ウ', 'ヨ'];  // 中当たり①
 const GIUGIU   = ['ギ', 'ウ', 'ギ', 'ウ'];  // 中当たり②
 const YOYOYOYO = ['ヨ', 'ヨ', 'ヨ', 'ヨ'];  // 中当たり③
@@ -144,6 +148,7 @@ const GIGIGIGI = ['ギ', 'ギ', 'ギ', 'ギ'];  // 小当たり③
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 小当たり④
 
 const WR  = IS_PORTRAIT ? 66  : 95;
+const KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（通常ホイールより小さい）
 const WXS = IS_PORTRAIT ? [210, 210, 210, 210] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
    コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
@@ -2235,6 +2240,84 @@ function hitResult(w) {
   return w.segs[w.segs.length - 1].char;
 }
 
+/* こんがりミニリール: キングギヨウザ戦の砲台代わり。createWheel/_buildWheelOC/hitResult と
+   同じ位置判定（wheelの回転角に対する固定ポインタ）をそのまま再利用し、通常ゲームと
+   同じ「1本ずつ順番にタップして止める」操作感にする（OffscreenCanvas必須環境限定のため
+   フォールバック描画は持たない：ボス戦自体が非対応環境では発生しない） */
+function _createKingReel(x, y) {
+  const chars   = [...KING_CHARS].sort(() => Math.random() - 0.5);
+  const weights = chars.map(() => Math.random() * 0.65 + 0.25);
+  const sum     = weights.reduce((a, b) => a + b, 0);
+  let angle = 0;
+  const segs = chars.map((c, i) => {
+    const span = (weights[i] / sum) * Math.PI * 2;
+    const s = { char: c, start: angle, span };
+    angle += span;
+    return s;
+  });
+  const w = {
+    x, y, segs,
+    rot:    Math.random() * Math.PI * 2,
+    speed:  Math.random() * 0.08 + 0.18,
+    locked: false,
+    result: null,
+    _oc:    null,
+  };
+  _buildKingReelOC(w);
+  return w;
+}
+
+function _buildKingReelOC(w) {
+  const ocR = KING_WR + 4;
+  const sz = Math.ceil(ocR * 2 * _dpr);
+  const oc = new OffscreenCanvas(sz, sz);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(ocR, ocR);
+  for (const s of w.segs) {
+    const mid = s.start + s.span / 2;
+    const grd = c.createRadialGradient(
+      Math.cos(mid)*KING_WR*0.3, Math.sin(mid)*KING_WR*0.3, 0, 0, 0, KING_WR);
+    grd.addColorStop(0, SEG_L[s.char]);
+    grd.addColorStop(1, SEG_D[s.char]);
+    c.beginPath(); c.moveTo(0,0); c.arc(0,0,KING_WR, s.start, s.start+s.span); c.closePath();
+    c.fillStyle = grd; c.fill();
+    c.strokeStyle = 'rgba(245,208,32,0.3)'; c.lineWidth = 1; c.stroke();
+    const tx = Math.cos(mid)*KING_WR*0.6, ty = Math.sin(mid)*KING_WR*0.6;
+    c.save();
+    c.translate(tx, ty);
+    c.rotate(mid + Math.PI/2);
+    const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
+    c.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.lineWidth = 2.5; c.strokeStyle = 'rgba(0,0,0,0.88)'; c.strokeText(s.char, 0, 0);
+    c.fillStyle = '#fffde7'; c.fillText(s.char, 0, 0);
+    c.restore();
+  }
+  const hubG = c.createRadialGradient(0,0,0,0,0,KING_WR*0.16);
+  hubG.addColorStop(0,'#fffde7'); hubG.addColorStop(1,YD);
+  c.beginPath(); c.arc(0,0,KING_WR*0.16,0,Math.PI*2); c.fillStyle = hubG; c.fill();
+  w._oc = oc; w._ocR = ocR;
+}
+
+function drawKingReel(w, active) {
+  ctx.save();
+  ctx.translate(w.x, w.y);
+  ctx.rotate(w.rot);
+  ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
+  ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
+  ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
+  ctx.stroke();
+  const pointer = IS_PORTRAIT ? 0 : -Math.PI/2;
+  const px = w.x + Math.cos(pointer)*(KING_WR+7), py = w.y + Math.sin(pointer)*(KING_WR+7);
+  ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
+  ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
+  ctx.fillStyle = Y; ctx.fill();
+  ctx.restore();
+}
+
 /* ════════════════ Update ════════════════ */
 function update() {
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
@@ -4059,7 +4142,7 @@ function _initBossBattle() {
   }
   /* 縦レイアウトを実寸から動的計算する（マジックナンバーの縦横別ハードコード禁止）。
      コインヘッダー下端〜こんがりゲージ上端の実際の空き高さにボスを収まるよう縮小し、
-     ボス下端〜ゲージ上端の間に砲台の場所を確保する。
+     ボス下端〜ゲージ上端の間にこんがりミニリール4連（旧: 砲台）の場所を確保する。
      旧実装（by=H/2固定）はボスがキャンバス縦幅をほぼ占領し、砲台がゲージパネルの
      背景（砲台より後に描画される）に埋もれて見えなくなっていた（実機報告で発覚）。 */
   /* ボス上端〜ヘッダー下端の余白: 縦画面は左右の隙間（コインヘッダーの左右マージン）と、
@@ -4069,24 +4152,28 @@ function _initBossBattle() {
   const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
   const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
   const panelTop      = (IS_PORTRAIT ? P_BAR_Y : BAR_Y) - 15; // こんがりゲージ上端 - 余白
-  const TURRET_H = 44, GAP_BOSS_TURRET = 16, GAP_TURRET_PANEL = 14;
-  const availH = panelTop - headerBottom - GAP_BOSS_TURRET - GAP_TURRET_PANEL - TURRET_H;
-  const scale = Math.min(1, availH / (half * 2)); // 空き高さに収まる縮小率（拡大はしない）
-  const dispHalf = half * scale;
+  const REEL_AREA_H = KING_WR * 2 + 10, GAP_BOSS_REEL = 16, GAP_REEL_PANEL = 14;
   /* half(=0.75s)はスタンプ・呼吸アニメ余裕を含む安全バウンディング半径であり、
-     実際に見えるボスの輪郭（頭頂）はもっと内側。_drawGyozaBody の本体楕円
-     （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から -0.40s と算出できる。
-     dispHalf を隙間計算に使うと見た目の頭頂とヘッダーの間に約(half-0.40s)*scale分の
-     余計な空白ができる（実機報告で発覚: 縦画面で見た目上端が100px以上離れて見えるバグ）。
-     見た目基準で by を置くことで topGap 通りの隙間になる。 */
-  const VISUAL_TOP_RATIO = 0.40;
+     実際に見えるボスの輪郭はもっと内側。_drawGyozaBody の本体楕円
+     （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から-0.40s、裾は+0.56sと算出できる。
+     scale-fit と by の余白計算の両方をこの見た目比率（0.40+0.56=0.96s）基準にする：
+     half基準（1.5s相当）のまま fit させると見た目より遥かに大きい余白込みで縮小され、
+     ボスが必要以上に小さく表示される（実機報告で発覚: 縦画面で頭頂が100px以上離れる・
+     横画面でボスが小さすぎる、の双方が同根）。 */
+  const VISUAL_TOP_RATIO = 0.40, VISUAL_BOTTOM_RATIO = 0.56;
+  const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_AREA_H - GAP_REEL_PANEL;
+  const scale = Math.min(1, availH / (s * (VISUAL_TOP_RATIO + VISUAL_BOTTOM_RATIO))); // 空き高さに収まる縮小率（拡大はしない）
   const visualTopOffset = s * VISUAL_TOP_RATIO * scale;
+  const visualBottomOffset = s * VISUAL_BOTTOM_RATIO * scale;
   const by = headerBottom + visualTopOffset;
-  const ty = by + dispHalf + GAP_BOSS_TURRET + TURRET_H / 2;
+  const reelY = by + visualBottomOffset + GAP_BOSS_REEL + KING_WR;
+  const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
+  const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY));
   _king = {
     liveOC, half, marks, revealed: 0, scale,
     bx: W / 2, by,
-    tx: W / 2, ty,
+    tx: W / 2, ty: reelY,
+    reels, reelIdx: 0,
   };
   _kingLasers = [];
   phase = 'boss';
@@ -4113,10 +4200,41 @@ function _stampKingMarks(upTo) {
   _king.revealed = upTo;
 }
 
-/* タップ発射: calcSyncScore の精度がそのまま焼き目の本数になる（入力補正はしない） */
-function _bossFire(inputPerfMs) {
-  if (phase !== 'boss' || !_king) return;
-  const score = calcSyncScore(inputPerfMs);
+/* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
+   （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
+   4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
+   不一致なら何も起きない。いずれの場合も4本とも即座に再スピンする
+   （ミス時のペナルティは現状なし。将来M3でここに追加する） */
+function _kingReelShoot(inputPerfMs) {
+  if (phase !== 'boss' || !_king || _king.reelIdx >= 4) return;
+  const w = _king.reels[_king.reelIdx];
+  w.result = hitResult(w);
+  w.locked = true;
+  w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
+  playSE('lock');
+  _king.reelIdx++;
+  if (_king.reelIdx >= 4) {
+    const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
+    if (matched) {
+      const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
+      _kingApplyHit(avgScore);
+    }
+    _respinKingReels();
+  }
+}
+
+/* 4本とも即座に再スピン（ヒット・ミス問わず毎回呼ばれる） */
+function _respinKingReels() {
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = _king.reels[i];
+    _king.reels[i] = _createKingReel(x, y);
+  }
+  _king.reelIdx = 0;
+}
+
+/* こんがり一致成立時の焼き攻撃本体。スコア（揃えた4タップの平均精度）の精度が
+   そのまま焼き目の本数になる（入力補正はしない） */
+function _kingApplyHit(score) {
   let reveal = 0, label = '';
   if      (score >= 0.667) { reveal = 3; label = 'JUST!'; }
   else if (score >= 0.333) { reveal = 2; label = 'GOOD';  }
@@ -4132,6 +4250,7 @@ function _bossFire(inputPerfMs) {
 }
 
 function _updateBossBattle() {
+  for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   for (const l of _kingLasers) l.life--;
   swapRemove(_kingLasers, p => p.life > 0);
 }
@@ -4156,15 +4275,8 @@ function drawBossBattle() {
   ctx.translate(_king.bx, _king.by); ctx.scale(breath, breath);
   ctx.drawImage(_king.liveOC, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
   ctx.restore();
-  /* 砲台 */
-  ctx.save();
-  ctx.translate(_king.tx, _king.ty);
-  roundRect(-16, -10, 32, 20, 5);
-  ctx.fillStyle = 'rgba(20,20,20,0.8)'; ctx.fill();
-  ctx.strokeStyle = Y; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, -24);
-  ctx.strokeStyle = Y; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.stroke();
-  ctx.restore();
+  /* こんがりミニリール4連（旧: 砲台） */
+  for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx);
   drawKingCookGauge();
 }
 
@@ -6467,7 +6579,7 @@ function handleGameClick(inputPerfMs) {
     if (_omen && _omen.step >= 7 && _omen.timer > 20) _initBossBattle();
     return;
   }
-  if (phase === 'boss') { _bossFire(inputPerfMs); return; }
+  if (phase === 'boss') { _kingReelShoot(inputPerfMs); return; }
   if (phase === 'bossVictory') {
     if (_bossVictoryTimer > 90) _kingBattleEnd();
     return;
