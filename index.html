@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.95';
+const VERSION = 'v3.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4152,7 +4152,12 @@ function _initBossBattle() {
   const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
   const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
   const panelTop      = (IS_PORTRAIT ? P_BAR_Y : BAR_Y) - 15; // こんがりゲージ上端 - 余白
-  const REEL_AREA_H = KING_WR * 2 + 10, GAP_BOSS_REEL = 16, GAP_REEL_PANEL = 14;
+  const REEL_D = KING_WR * 2, GAP_BOSS_REEL = 16;
+  /* リール下端〜ゲージ枠上端の隙間は、ヘッダー上と対称に「太外枠とのマージン」と
+     同じ量にする（topGap を再利用。実機要望による）。この隙間はリールをゲージ枠から
+     固定量だけ離す下端基準の値であり、ボス側の空きに余裕があっても膨らまない
+     （旧実装はboss基準の積み上げ式で、実際には約24pxまで開いてしまっていた）。 */
+  const GAP_REEL_PANEL = topGap;
   /* half(=0.75s)はスタンプ・呼吸アニメ余裕を含む安全バウンディング半径であり、
      実際に見えるボスの輪郭はもっと内側。_drawGyozaBody の本体楕円
      （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から-0.40s、裾は+0.56sと算出できる。
@@ -4161,12 +4166,11 @@ function _initBossBattle() {
      ボスが必要以上に小さく表示される（実機報告で発覚: 縦画面で頭頂が100px以上離れる・
      横画面でボスが小さすぎる、の双方が同根）。 */
   const VISUAL_TOP_RATIO = 0.40, VISUAL_BOTTOM_RATIO = 0.56;
-  const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_AREA_H - GAP_REEL_PANEL;
+  const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_D - GAP_REEL_PANEL;
   const scale = Math.min(1, availH / (s * (VISUAL_TOP_RATIO + VISUAL_BOTTOM_RATIO))); // 空き高さに収まる縮小率（拡大はしない）
   const visualTopOffset = s * VISUAL_TOP_RATIO * scale;
-  const visualBottomOffset = s * VISUAL_BOTTOM_RATIO * scale;
   const by = headerBottom + visualTopOffset;
-  const reelY = by + visualBottomOffset + GAP_BOSS_REEL + KING_WR;
+  const reelY = panelTop - GAP_REEL_PANEL - KING_WR; // ゲージ枠から固定隙間の下端基準
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
   const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY));
   _king = {
