@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.86';
+const VERSION = 'v3.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -339,6 +339,8 @@ function _itemAlloc() {
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
+/* 落下ギヨウザ（items）専用: 画面外退場をキングギヨウザ蓄積メーターに数えながら返却 */
+const _deadifyCountExit = o => { o._dead = true; kingGyozaMeter++; };
 /* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
    Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
 function _insertionSortY(a) {
@@ -382,6 +384,14 @@ const BEAT_BONUS_CHAIN = 100; // BEAT BONUS発動に必要なチェーン数（�
 const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率（v3.83: 2→4 難易度調整）
 const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率（v3.83: 0.30→0.60 難易度調整）
 const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（v3.84 追加）
+/* ── キングギヨウザ（ボス戦）M1: 蓄積・予兆・出現予告 ── */
+const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
+const KING_OMEN_RATIO      = 0.8;  // 予兆演出（霊の横切り）開始割合
+/* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
+const _KING_DEBUG = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('king'), 10);
+  return isNaN(v) ? null : v;
+})();
 /* 虹色インデックス: performance.now()ベース、約6秒で一周（GCゼロ） */
 function _rainbowIdx() { return ((performance.now() / 50) | 0) % 120; }
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
@@ -738,6 +748,7 @@ let unlockedAch = {}, medAchieved = {};
 let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
 let jackpotCount = 0; // 大当たり累計回数
+let kingGyozaMeter = 0; // 画面外へ退場した落下ギヨウザ累計（キングギヨウザ蓄積・game_stats永続化）
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
@@ -1492,8 +1503,9 @@ function toggleMute() {
   }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
      （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償） */
-  if (!audioMuted && phase !== 'startup' && audioCtx && !bgmSource && !jingleScheduler) {
-    startBGM();
+  if (!audioMuted && phase !== 'startup' && phase !== 'bossOmen' &&
+      audioCtx && !bgmSource && !jingleScheduler) {
+    startBGM(); // 予告中は除外（startBGMはグレースケールを即時解除するため）
   }
 }
 
@@ -1619,6 +1631,18 @@ function playSE(name, atTime) {
       achSeq.forEach((f, i) => playOsc(ctx, 'sine', f, t + i*0.06, 0.15, 0.25, 0.10));
       break;
     }
+    case 'boss_rumble': {
+      /* 地鳴り: 低いA1+低域ノイズ（ボスBGM（Aマイナー予定）の予兆として調内） */
+      playOsc(ctx, 'sine', noteHz('A',1), t, 0.5, 0.4, 0.3);
+      playNoise(ctx, t, 0.35, 0.25, 150);
+      break;
+    }
+    case 'boss_flash': {
+      /* 雷鳴: ノイズバースト+A2 */
+      playNoise(ctx, t, 0.5, 0.4, 400);
+      playOsc(ctx, 'sawtooth', noteHz('A',2), t, 0.3, 0.2, 0.2);
+      break;
+    }
     case 'sync_just': break; // 廃止: 視覚表示（JUST!/GOOD）のみ、SE なし
     case 'slow_hand': {
       /* スローハンド発動: テープが引っかかって遅くなるような"ウォ〜ン"音 */
@@ -1671,16 +1695,20 @@ function lsSaveAch() {
 function lsLoadStats() {
   try {
     const s = localStorage.getItem(LS_STATS);
-    if (!s) return;
-    const o = JSON.parse(s);
-    if (typeof o.playCount    === 'number') playCount    = o.playCount;
-    if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
-    if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
-    if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
+    if (s) {
+      const o = JSON.parse(s);
+      if (typeof o.playCount    === 'number') playCount    = o.playCount;
+      if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
+      if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
+      if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
+      if (typeof o.kingGyozaMeter === 'number') kingGyozaMeter = o.kingGyozaMeter;
+    }
   } catch(e) {}
+  /* デバッグ上書きは保存データ有無に関わらず最後に適用（早期リターン経路を作らない） */
+  if (_KING_DEBUG !== null) kingGyozaMeter = _KING_DEBUG;
 }
 function lsSaveStats() {
-  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor });
+  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter });
   _idle(() => { try { localStorage.setItem(LS_STATS, s); } catch(e) {} });
 }
 function unlockAch(id) {
@@ -1880,6 +1908,9 @@ function playStartJingle(onEnd) {
      ゲームオーバー→リセット後に遅れて届いた可能性がある（競合状態）。
      BGM はすでに起動済みなのでジングルを再生しない。 */
   if (bgmSource) { return; }
+  /* ボス予告への突入と競合した場合は開始しない（init(true)の非同期コールバックが
+     予告開始後に遅れて届くケース。復帰時に startBGMTape が BGM を再開する） */
+  if (phase === 'bossOmen') { return; }
   stopJingle();
   jingleStep    = 0;
   jingleNextTime = audioCtx.currentTime + 0.10;
@@ -2267,6 +2298,10 @@ function update() {
     }
     return;
   }
+  if (phase === 'bossOmen') {
+    _updateBossOmen();
+    return;
+  }
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
@@ -2453,10 +2488,12 @@ function update() {
     const allShown = wheels.every(_predWheelShown);
     /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
     if (!isGameOver && isMissResult && !feverEndedReason && endTimer > minWait && allShown && onBeatGrid()) {
+      if (_maybeStartBossOmen()) return;
       _doAutoReset(); return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（アイテム落下のみ、入力待ちなし） */
     if (_jackpotAutoReset && !isGameOver && endTimer > 30) {
+      if (_maybeStartBossOmen()) return;
       _doAutoReset(); return;
     }
     /* エフェクト終了後: canRestartをセット
@@ -2485,6 +2522,22 @@ function update() {
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
+  /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る */
+  if (!_omenGhost && (phase === 'idle' || phase === 'reach') && !isFever &&
+      kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO &&
+      Math.random() < 1 / 900) {
+    _spawnOmenGhost();
+  }
+  if (_omenGhost) {
+    const g = _omenGhost;
+    g.x += g.vx;
+    g.wobble += 0.04;
+    g.y += Math.sin(g.wobble) * 0.5;
+    if ((g.vx > 0 && g.x > W + 60) || (g.vx < 0 && g.x < -60)) {
+      _freeGhostCanvases.push(g.oc);
+      _omenGhost = null;
+    }
+  }
   /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
   if (items.length > 0 && phase !== 'done') updateItems();
 
@@ -2871,8 +2924,8 @@ function updateItems() {
     }
   }
 
-  /* 画面外に完全に出たものをプールに返却しつつ除去 */
-  swapRemove(items, _predItem, _deadify);
+  /* 画面外に完全に出たものをプールに返却しつつ除去（キングギヨウザ蓄積を計数） */
+  swapRemove(items, _predItem, _deadifyCountExit);
   /* updateの末尾でソートしておくことでdrawItems側でのslice+sortを排除 */
   _insertionSortY(items);
 }
@@ -3722,6 +3775,209 @@ function drawUzaFlash() {
   }
 }
 
+/* ════════════════ キングギヨウザ 出現予告（M1） ════════════════
+   蓄積メーター（画面外へ退場した落下ギヨウザ累計）が閾値に達すると、
+   トライの区切りで出現予告演出（phase='bossOmen'）が発動する。
+   演出構造（暗転→タメ台詞→収束→変身）は桃鉄キングボンビー誕生を参考にした
+   オリジナル。M1では戦闘は未実装で、誕生後タップで見送って通常モードへ復帰する。 */
+
+const _OMEN_LINES = ['……おや？', 'たべのこされた ギヨウザたちが……', 'うらみを つのらせて……', '……くる。'];
+const _OMEN_LINE_FRAMES = 80; // 台詞1行あたりの表示フレーム数（タメ）
+let _omen = null;      // { step, timer, items, flash } 予告演出の状態（null=非表示）
+let _omenGhost = null; // 予兆の霊 { x, y, vx, wobble, oc, sz, cy }
+let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト（初回出現時に生成）
+
+/* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
+function _spawnOmenGhost() {
+  if (typeof OffscreenCanvas === 'undefined' && !document.createElement) return;
+  const fromLeft = Math.random() < 0.5;
+  const { oc, sz, cy } = _makeGhostCanvas(22 + Math.random() * 10);
+  _omenGhost = {
+    x: fromLeft ? -50 : W + 50,
+    y: 60 + Math.random() * (H * 0.5),
+    vx: (fromLeft ? 1 : -1) * (1.2 + Math.random() * 0.8),
+    wobble: Math.random() * Math.PI * 2,
+    oc, sz, cy,
+  };
+}
+
+/* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
+function _buildBossOC() {
+  if (_bossOC || typeof OffscreenCanvas === 'undefined') return;
+  const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
+  const half = Math.ceil(s * 0.75);
+  const oc = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  const c  = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(half, half);
+  /* 本体は通常サイズ(42)で組んで scale 変換で拡大する。
+     _drawGyozaBody の線幅は小サイズ用の絶対値のため、直接 s=300 で描くと
+     ひだ・輪郭が細すぎて「白い卵」に見える（scale なら線幅も比例して太る） */
+  const REF = 42, kk = s / REF;
+  const grd = c.createRadialGradient(-REF*0.18, -REF*0.12, 0, 0, REF*0.08, REF*0.62);
+  grd.addColorStop(0, 'hsl(46,50%,80%)');
+  grd.addColorStop(0.6, 'hsl(40,52%,64%)');
+  grd.addColorStop(1, 'hsl(35,45%,48%)');
+  c.save();
+  c.scale(kk, kk);
+  _drawGyozaBody(c, REF, 0, 0, grd);
+  c.restore();
+  /* 怒り顔: 白目+黒瞳+吊り眉（内側が下がる）+ へ字口 */
+  const ex = s*0.16, ey = s*0.06, er = s*0.055;
+  for (const sx of [-1, 1]) {
+    c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
+    c.fillStyle = '#fff'; c.fill();
+    c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = 2; c.stroke();
+    c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15, er*0.45, 0, Math.PI*2);
+    c.fillStyle = '#1a1a1a'; c.fill();
+    c.beginPath();
+    c.moveTo(sx*(ex + er*1.2), ey - er*2.4);
+    c.lineTo(sx*(ex - er*1.2), ey - er*1.2);
+    c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02; c.lineCap = 'round'; c.stroke();
+  }
+  /* へ字口 */
+  c.beginPath();
+  c.moveTo(-s*0.09, s*0.26);
+  c.quadraticCurveTo(0, s*0.19, s*0.09, s*0.26);
+  c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
+  _bossOC = { oc, half };
+}
+
+/* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
+function _maybeStartBossOmen() {
+  if (kingGyozaMeter < KING_GYOZA_THRESHOLD) return false;
+  if (isFever || feverPending || isGameOver) return false;
+  _startBossOmen();
+  return true;
+}
+
+function _startBossOmen() {
+  pendingShoot = false;
+  _releaseWheelOCs(_pendingWheels); _pendingWheels = null; _pendingWheelScheduled = false;
+  if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
+  for (const g of items) g._dead = true; items = [];
+  missPopups = []; payoutPopups = []; // 暗転下に残ポップアップが透けないようクリア
+  _buildBossOC();
+  _omen = { step: 0, timer: 0, items: [], flash: 0 };
+  phase = 'bossOmen';
+  stopBGMTape(1600);      // 世界が止まる（テープストップ+グレースケール）
+  grayRateTarget = 0.001; // 無音起動（bgmSourceなし）でもグレースケールは進める
+  playSE('boss_rumble');
+}
+
+function _updateBossOmen() {
+  const o = _omen;
+  if (!o) { phase = 'idle'; return; }
+  o.timer++;
+  if (o.flash > 0) o.flash -= 0.05;
+  if (o.step === 0) {
+    /* 暗転 */
+    if (o.timer > 50) { o.step = 1; o.timer = 0; o.flash = 0.25; playSE('boss_rumble'); }
+  } else if (o.step >= 1 && o.step <= 4) {
+    /* 台詞1〜4を1行ずつ */
+    if (o.timer > _OMEN_LINE_FRAMES) {
+      o.step++; o.timer = 0;
+      if (o.step <= 4) { o.flash = 0.25; playSE('boss_rumble'); }
+      if (o.step === 5) {
+        /* 収束開始: 画面外から霊ギヨウザが逆流 */
+        playSE('boss_flash');
+        const R = Math.hypot(W, H) * 0.6;
+        for (let i = 0; i < 44; i++) {
+          const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2;
+          o.items.push(makeItem(W/2 + Math.cos(ang)*R, H/2 + Math.sin(ang)*R, 0, 0));
+        }
+      }
+    }
+  } else if (o.step === 5) {
+    /* 中央へ収束 */
+    const cx = W/2, cy = H/2 - (IS_PORTRAIT ? 60 : 0);
+    for (const g of o.items) {
+      g.x += (cx - g.x) * 0.06;
+      g.y += (cy - g.y) * 0.06;
+      g.rot += 0.15;
+    }
+    if (o.timer > 110) {
+      o.step = 6; o.timer = 0; o.flash = 1;
+      for (const g of o.items) g._dead = true;
+      o.items = [];
+      grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
+      playSE('boss_flash');
+    }
+  } else if (o.step === 6) {
+    /* 誕生フラッシュ+タイトル */
+    if (o.timer > 90) { o.step = 7; o.timer = 0; }
+  }
+  /* step7: ボス鎮座（M1はタップで見送り待ち。handleGameClick が _omenDepart を呼ぶ） */
+}
+
+/* M1: ボスを見送って通常モードへ復帰（ゲームオーバー復帰と同じテープ加速演出） */
+function _omenDepart() {
+  kingGyozaMeter = 0;
+  lsSaveStats();
+  if (_omen) { for (const g of _omen.items) g._dead = true; }
+  _omen = null;
+  if (audioCtx) audioCtx.resume().catch(() => {});
+  startBGMTape();
+  grayRateTarget = 1.0;
+  init(false, true);
+  phase = 'tapestart';
+}
+
+function drawBossOmen() {
+  if (phase !== 'bossOmen' || !_omen) return;
+  const o = _omen;
+  ctx.save();
+  /* 暗幕 */
+  const dark = (o.step === 0 ? Math.min(1, o.timer / 50) : 1) * 0.88;
+  ctx.fillStyle = `rgba(2,4,8,${dark})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  /* 台詞（過去行は薄く残して積む） */
+  if (o.step >= 1 && o.step <= 4) {
+    const fsL = IS_PORTRAIT ? 22 : 26;
+    const lineY0 = H * 0.30, lineDy = fsL * 2.2;
+    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
+    for (let i = 0; i < o.step && i < _OMEN_LINES.length; i++) {
+      const isCur = (i === o.step - 1);
+      ctx.globalAlpha = isCur ? Math.min(1, o.timer / 20) : 0.5;
+      const col = i === 3 ? '#ff6655' : '#e8e2d0';
+      outText(_OMEN_LINES[i], W/2, lineY0 + i*lineDy, col, 'rgba(0,0,0,0.9)', 6);
+    }
+    ctx.globalAlpha = 1;
+  }
+  /* 収束する霊ギヨウザ */
+  if (o.step === 5) for (const g of o.items) drawOneItem(g);
+  /* 誕生〜鎮座 */
+  if (o.step >= 6 && _bossOC) {
+    const bx = W/2, by = H/2 - (IS_PORTRAIT ? 60 : 0);
+    const appear = o.step === 6 ? Math.min(1, o.timer / 25) : 1;
+    const breath = 1 + 0.02 * Math.sin(performance.now() / 300);
+    const k = appear * breath;
+    ctx.save();
+    ctx.translate(bx, by); ctx.scale(k, k);
+    ctx.drawImage(_bossOC.oc, -_bossOC.half, -_bossOC.half, _bossOC.half*2, _bossOC.half*2);
+    ctx.restore();
+    ctx.font = `bold ${IS_PORTRAIT ? 28 : 40}px 'Hiragino Mincho ProN',serif`;
+    outText('キングギヨウザ たんじょう！！', W/2, by - _BOSS_S*0.62,
+      '#ffdd55', 'rgba(60,0,0,0.9)', 8);
+    if (o.step === 7) {
+      ctx.globalAlpha = 0.5 + 0.4 * Math.sin(o.timer * 0.08);
+      ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+      outText('（ボス戦は開発中 — タップで見送る）', W/2, H - 60,
+        '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
+      ctx.globalAlpha = 1;
+    }
+  }
+  /* 雷鳴フラッシュ */
+  if (o.flash > 0) {
+    ctx.globalAlpha = Math.min(1, o.flash);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
 /* ════════════════ 吉祥雲 ════════════════ */
 /* _drawCloudTo: 任意のコンテキストに雲を描く（OffscreenCanvas 事前描画用）
    drawCloud: メインcanvasへの呼び出し（_staticLayerCanvas が利用可能なら使わない） */
@@ -3981,6 +4237,14 @@ function draw() {
   /* ホイール */
   for (let i=0;i<4;i++) drawWheel(i);
 
+  /* キングギヨウザ予兆の霊（半透明で画面を横切る） */
+  if (_omenGhost) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.drawImage(_omenGhost.oc, _omenGhost.x - _omenGhost.sz / 2, _omenGhost.y - _omenGhost.cy);
+    ctx.restore();
+  }
+
   /* 飛ぶ矢 (3D遠近法) */
   if (phase==='shooting') drawArrow3D();
 
@@ -4052,6 +4316,9 @@ function draw() {
 
   /* スタートアップ画面 */
   drawStartup();
+
+  /* キングギヨウザ出現予告（全画面演出・ボタン類より下、バッジ類より上） */
+  drawBossOmen();
 
   /* ビートシンクメーター＋JUST演出 */
   drawSyncMeter();
@@ -5257,6 +5524,7 @@ function drawSyncJust() {
 function drawSlowHandBadge() {
   if (phase === 'startup') return;
   if (phase === 'tapestart') return; // ゲームオーバー復帰アニメーション中は非表示
+  if (phase === 'bossOmen') return; // 予告のテープストップでグレー化してもバッジは出さない
   if (isGameOver) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
@@ -5931,6 +6199,11 @@ function onShoot(_inputPerfMs){
    - shooting(4本目)  : 先打ちバッファ登録（当たりなら即破棄、ハズレなら着弾後に発射）
    その他フェーズ     : 無視 */
 function handleGameClick(inputPerfMs) {
+  if (phase === 'bossOmen') {
+    /* M1: 誕生完了後（step7）のタップで見送り復帰。演出中は入力を無視 */
+    if (_omen && _omen.step >= 7) _omenDepart();
+    return;
+  }
   if (phase === 'done') {
     if (isGameOver) { if (canRestart) gameOverReset(); return; }
     if (isMissResult) {
@@ -5938,17 +6211,20 @@ function handleGameClick(inputPerfMs) {
       for (const w of wheels) { if (w.result) w.resultPop = 1; }
       pendingShoot = true;
       if (canRestart) {
+        if (_maybeStartBossOmen()) return;
         init(); shootGuardUntil = 0; pendingShoot = false; onShoot(inputPerfMs);
       }
       return;
     }
     /* フィーバー大当たり: クリックで即時リセット＋pendingShoot引き継ぎ */
     if (_jackpotAutoReset) {
+      if (_maybeStartBossOmen()) return;
       pendingShoot = true;
       _doAutoReset(inputPerfMs); return;
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
+      if (_maybeStartBossOmen()) return;
       init(); shootGuardUntil = 0;
     }
     return;
