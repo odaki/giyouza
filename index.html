@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v3.92';
+const VERSION = 'v3.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4073,7 +4073,15 @@ function _initBossBattle() {
   const availH = panelTop - headerBottom - GAP_BOSS_TURRET - GAP_TURRET_PANEL - TURRET_H;
   const scale = Math.min(1, availH / (half * 2)); // 空き高さに収まる縮小率（拡大はしない）
   const dispHalf = half * scale;
-  const by = headerBottom + dispHalf;
+  /* half(=0.75s)はスタンプ・呼吸アニメ余裕を含む安全バウンディング半径であり、
+     実際に見えるボスの輪郭（頭頂）はもっと内側。_drawGyozaBody の本体楕円
+     （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から -0.40s と算出できる。
+     dispHalf を隙間計算に使うと見た目の頭頂とヘッダーの間に約(half-0.40s)*scale分の
+     余計な空白ができる（実機報告で発覚: 縦画面で見た目上端が100px以上離れて見えるバグ）。
+     見た目基準で by を置くことで topGap 通りの隙間になる。 */
+  const VISUAL_TOP_RATIO = 0.40;
+  const visualTopOffset = s * VISUAL_TOP_RATIO * scale;
+  const by = headerBottom + visualTopOffset;
   const ty = by + dispHalf + GAP_BOSS_TURRET + TURRET_H / 2;
   _king = {
     liveOC, half, marks, revealed: 0, scale,
