@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.06';
+const VERSION = 'v4.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4162,7 +4162,12 @@ const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（�
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
 const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
 const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
-const KING_RESULT_HOLD_SEC = 1.0;  // 4本確定後、結果（4文字）を表示したまま次トライへ進むまでの実時間（wall-clock）
+/* KING_RESULT_MIN_WAIT: 4本確定後、結果表示を最小何フレーム保持するか。
+   通常モードの的判定（phase==='done'のminWait、2582行目付近）と同じ考え方:
+   ハズレは短く、当たりは少し長く。実際の解放はここに onBeatGrid() の
+   BGM拍グリッド同期を重ねる（_updateBossBattle）ため、体感の待ち時間は
+   通常モードの「ハズレ次弾」と揃う */
+const KING_RESULT_MIN_WAIT = { miss: 2, hit: 24 };
 /* ボス本体楕円（_drawGyozaBody: 中心=+0.08s、縦半径=0.48s）から見た目の頭頂・裾を
    割り出した比率（中心からの距離、s基準）。_initBossBattleのレイアウト計算と
    drawBossVictoryの勝利文言の位置決めの両方で使う共通値のためモジュール定数にする。 */
@@ -4275,7 +4280,7 @@ function _initBossBattle() {
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
-    reels, reelIdx: 0, respinAt: null,
+    reels, reelIdx: 0, resultTimer: null, resultMatched: false,
   };
   _kingLasers = [];
   phase = 'boss';
@@ -4372,8 +4377,9 @@ function _renderKingBody() {
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
    （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
    4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
-   不一致なら何も起きない。いずれの場合も4本の結果文字を KING_RESULT_HOLD_SEC の間
-   表示したまま静止させ、その後に再スピンする（_updateBossBattle が respinAt を監視）。
+   不一致なら何も起きない。いずれの場合も4本の結果文字を表示したまま静止させ、
+   その後に再スピンする（_updateBossBattle が resultTimer を監視。解放条件は
+   通常モードの的判定＝KING_RESULT_MIN_WAIT + onBeatGrid() と同じ仕様）。
    確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
    （ミス時のペナルティは現状なし。将来M3でここに追加する） */
 function _kingReelShoot(inputPerfMs) {
@@ -4390,7 +4396,8 @@ function _kingReelShoot(inputPerfMs) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
       _kingApplyHit(avgScore);
     }
-    _king.respinAt = performance.now() + KING_RESULT_HOLD_SEC * 1000; // 結果表示後に再スピン
+    _king.resultMatched = matched;
+    _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
   }
 }
 
@@ -4432,11 +4439,18 @@ function _easeKingXform() {
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   _easeKingXform();
-  /* 4本確定後の結果表示保持(wall-clock。document.hidden で rAF が止まっても
-     復帰後に正しく経過時間で解放されるようフレームカウンタは使わない) */
-  if (_king.respinAt !== null && performance.now() >= _king.respinAt) {
-    _king.respinAt = null;
-    _respinKingReels();
+  /* 4本確定後の結果表示保持: 通常モードの的判定（endTimer + onBeatGrid()、2582行目
+     付近）と同じ仕様に合わせる。ハズレ待ち時間が長くBGMとも同期していないという
+     実機指摘で、wall-clockの固定待ち時間（旧KING_RESULT_HOLD_SEC）から、
+     フレームカウンタ+BGM拍グリッド同期の解放条件に変更した。演奏・演出の進行に
+     紐づくゲートなのでフレームカウンタが正しい（CLAUDE.md参照） */
+  if (_king.resultTimer !== null) {
+    _king.resultTimer++;
+    const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
+    if (_king.resultTimer > minWait && onBeatGrid()) {
+      _king.resultTimer = null;
+      _respinKingReels();
+    }
   }
   for (const l of _kingLasers) l.life--;
   swapRemove(_kingLasers, p => p.life > 0);
