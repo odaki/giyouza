@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.01';
+const VERSION = 'v4.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4136,6 +4136,7 @@ const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（�
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
 const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
 const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
+const KING_RESULT_HOLD_SEC = 1.0;  // 4本確定後、結果（4文字）を表示したまま次トライへ進むまでの実時間（wall-clock）
 let _king = null;       // { liveOC, half, marks, revealed, bx, by, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _bossVictoryTimer = 0;
@@ -4236,7 +4237,7 @@ function _initBossBattle() {
     liveOC, half, marks, revealed: 0, scale,
     bx: W / 2, by,
     tx: W / 2, ty: reelY,
-    reels, reelIdx: 0,
+    reels, reelIdx: 0, respinAt: null,
   };
   _kingLasers = [];
   phase = 'boss';
@@ -4330,7 +4331,9 @@ function _renderKingBody() {
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
    （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
    4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
-   不一致なら何も起きない。いずれの場合も4本とも即座に再スピンする
+   不一致なら何も起きない。いずれの場合も4本の結果文字を KING_RESULT_HOLD_SEC の間
+   表示したまま静止させ、その後に再スピンする（_updateBossBattle が respinAt を監視）。
+   確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
    （ミス時のペナルティは現状なし。将来M3でここに追加する） */
 function _kingReelShoot(inputPerfMs) {
   if (phase !== 'boss' || !_king || _king.reelIdx >= 4) return;
@@ -4346,7 +4349,7 @@ function _kingReelShoot(inputPerfMs) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
       _kingApplyHit(avgScore);
     }
-    _respinKingReels();
+    _king.respinAt = performance.now() + KING_RESULT_HOLD_SEC * 1000; // 結果表示後に再スピン
   }
 }
 
@@ -4378,6 +4381,12 @@ function _kingApplyHit(score) {
 
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
+  /* 4本確定後の結果表示保持（wall-clock。document.hidden で rAF が止まっても
+     復帰後に正しく経過時間で解放されるようフレームカウンタは使わない） */
+  if (_king.respinAt !== null && performance.now() >= _king.respinAt) {
+    _king.respinAt = null;
+    _respinKingReels();
+  }
   for (const l of _kingLasers) l.life--;
   swapRemove(_kingLasers, p => p.life > 0);
 }
