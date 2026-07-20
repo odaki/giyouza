@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.07';
+const VERSION = 'v4.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4080,7 +4080,7 @@ function _updateBossOmen() {
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 function _kingBattleEnd() {
-  _king = null; _kingLasers = [];
+  _king = null; _kingLasers = []; _kingCharFlights = [];
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
   if (audioCtx) audioCtx.resume().catch(() => {});
@@ -4176,8 +4176,17 @@ const KING_VISUAL_TOP_RATIO = 0.40, KING_VISUAL_BOTTOM_RATIO = 0.56;
    ジャンプをなくすための指数収束レート（1フレームあたりの残差縮小率）。
    アニメーション進行に紐づく演出のためフレームカウンタ基準（wall-clockにしない）。 */
 const KING_XFORM_EASE = 0.12;
+/* 決定文字の飛翔演出（矢を射る／リールを確定させる操作とは独立のバックグラウンド
+   演出。通常モードの missPopups/payoutPopups と同じ「配列に積んで毎フレーム
+   自走・自然消滅」方式）。的が確定するたび(1本ロックごと)にキャラを1体スポーンし、
+   ボス付近まで飛ばして待機、4本目の判定が出た時点で未解決分すべてに結果
+   （こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる）を伝える。 */
+const KING_CHAR_FLY_FRAMES = 16;        // 飛行（接近）にかかるフレーム数
+const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
+const KING_CHAR_BOUNCE_FRAMES = 24;     // ハズレ: 跳ね返ってから消えるまで
 let _king = null;       // { liveOC, half, marks, revealed, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
+let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
 let _bossVictoryTimer = 0;
 let _scorchBlotSprite = null;
 
@@ -4283,6 +4292,7 @@ function _initBossBattle() {
     reels, reelIdx: 0, resultTimer: null, resultMatched: false,
   };
   _kingLasers = [];
+  _kingCharFlights = [];
   phase = 'boss';
   startBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰）
 }
@@ -4374,6 +4384,23 @@ function _renderKingBody() {
   return _king.liveOC;
 }
 
+/* 的の下に出た結果文字を1体スポーンし、ボス付近まで飛ばす。的が1本ロックされる
+   たびに呼ぶ（1〜3本目はまだこんがり成立/不成立が分からないため、着弾後は
+   'wait' 状態でボス付近に留まる。4本目のロックで結果が判明したら resolve を
+   全未解決分にまとめて設定＝_kingReelShoot 側）。着地点はボス本体の現在の
+   表示位置（dbx/dby）基準の乱数オフセット（ボスがまだ誕生演出から収束中でも
+   自然に見えるよう毎回そのときの位置を使う） */
+function _spawnKingCharFlight(w) {
+  const jx = (Math.random() - 0.5) * _BOSS_S * 0.3;
+  const jy = (Math.random() - 0.5) * _BOSS_S * 0.24;
+  _kingCharFlights.push({
+    char: w.result,
+    sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
+    tx: _king.dbx + jx, ty: _king.dby + jy,
+    state: 'fly', frames: 0, resolve: null,
+  });
+}
+
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
    （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
    4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
@@ -4381,7 +4408,10 @@ function _renderKingBody() {
    その後に再スピンする（_updateBossBattle が resultTimer を監視。解放条件は
    通常モードの的判定＝KING_RESULT_MIN_WAIT + onBeatGrid() と同じ仕様）。
    確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
-   （ミス時のペナルティは現状なし。将来M3でここに追加する） */
+   （ミス時のペナルティは現状なし。将来M3でここに追加する）。
+   決定した文字はここで即バックグラウンドの飛翔演出（_spawnKingCharFlight）に渡す。
+   演出自体は _updateKingCharFlights が矢を射る操作（リールのロック）とは無関係に
+   毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える */
 function _kingReelShoot(inputPerfMs) {
   if (phase !== 'boss' || !_king || _king.reelIdx >= 4) return;
   const w = _king.reels[_king.reelIdx];
@@ -4389,6 +4419,7 @@ function _kingReelShoot(inputPerfMs) {
   w.locked = true;
   w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
   playSE('lock');
+  _spawnKingCharFlight(w);
   _king.reelIdx++;
   if (_king.reelIdx >= 4) {
     const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
@@ -4398,6 +4429,10 @@ function _kingReelShoot(inputPerfMs) {
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
+    /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。
+       こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる */
+    const resolveAs = matched ? 'stick' : 'bounce';
+    for (const f of _kingCharFlights) if (f.resolve === null) f.resolve = resolveAs;
   }
 }
 
@@ -4436,9 +4471,48 @@ function _easeKingXform() {
   _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
 }
 
+/* ハズレ確定の文字を、着地点から跳ね返り軌道へ切り替える（重力落下+減速） */
+function _startKingCharBounce(f) {
+  f.state = 'bounce'; f.frames = 0;
+  f.bx = f.tx; f.by = f.ty;
+  const ang = Math.atan2(f.sy - f.ty, f.sx - f.tx) + (Math.random() - 0.5) * 0.7;
+  const spd = 3.5 + Math.random() * 1.5;
+  f.bvx = Math.cos(ang) * spd; f.bvy = Math.sin(ang) * spd - 2;
+}
+
+/* 決定文字の飛翔演出を1フレーム進める。的のロック（_kingReelShoot）や
+   resultTimer による再スピン待ちとは無関係に毎回呼ぶ＝背景処理として自走する */
+function _updateKingCharFlights() {
+  for (const f of _kingCharFlights) {
+    if (f.state === 'fly') {
+      f.frames++;
+      if (f.frames >= KING_CHAR_FLY_FRAMES) {
+        if (f.resolve === 'bounce') _startKingCharBounce(f);
+        else if (f.resolve === 'stick') { f.state = 'stick'; f.frames = 0; }
+        else { f.state = 'wait'; f.frames = 0; } // 結果未確定: ボス付近で待機
+      }
+    } else if (f.state === 'wait') {
+      f.frames++;
+      if (f.resolve === 'bounce') _startKingCharBounce(f);
+      else if (f.resolve === 'stick') { f.state = 'stick'; f.frames = 0; }
+    } else if (f.state === 'stick') {
+      f.frames++;
+    } else if (f.state === 'bounce') {
+      f.frames++;
+      f.bx += f.bvx; f.by += f.bvy; f.bvy += 0.18; f.bvx *= 0.985;
+    }
+  }
+  swapRemove(_kingCharFlights, f => {
+    if (f.state === 'stick')  return f.frames < KING_CHAR_STICK_FADE_FRAMES;
+    if (f.state === 'bounce') return f.frames < KING_CHAR_BOUNCE_FRAMES;
+    return true; // fly/wait は常に残す
+  });
+}
+
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   _easeKingXform();
+  _updateKingCharFlights();
   /* 4本確定後の結果表示保持: 通常モードの的判定（endTimer + onBeatGrid()、2582行目
      付近）と同じ仕様に合わせる。ハズレ待ち時間が長くBGMとも同期していないという
      実機指摘で、wall-clockの固定待ち時間（旧KING_RESULT_HOLD_SEC）から、
@@ -4454,6 +4528,38 @@ function _updateBossBattle() {
   }
   for (const l of _kingLasers) l.life--;
   swapRemove(_kingLasers, p => p.life > 0);
+}
+
+/* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
+   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで
+   跳ね返って落下フェード */
+function drawKingCharFlights() {
+  if (_kingCharFlights.length === 0) return;
+  ctx.save();
+  ctx.font = `bold ${KING_RESULT_FONT}px 'Hiragino Mincho ProN',serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)';
+  for (const f of _kingCharFlights) {
+    let x, y, alpha = 1;
+    if (f.state === 'fly') {
+      const e = 1 - (1 - Math.min(1, f.frames / KING_CHAR_FLY_FRAMES)) ** 2; // ease-out
+      x = f.sx + (f.tx - f.sx) * e;
+      y = f.sy + (f.ty - f.sy) * e - Math.sin(e * Math.PI) * 18; // 弧を描いて飛ぶ
+    } else if (f.state === 'wait') {
+      x = f.tx; y = f.ty + Math.sin(f.frames * 0.12) * 2;
+    } else if (f.state === 'stick') {
+      x = f.tx; y = f.ty;
+      alpha = 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES;
+    } else { // bounce
+      x = f.bx; y = f.by;
+      alpha = Math.max(0, 1 - f.frames / KING_CHAR_BOUNCE_FRAMES);
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = f.resolve === 'bounce' ? '#ff8866' : f.resolve === 'stick' ? '#ffdd55' : '#fffde7';
+    ctx.strokeText(f.char, x, y);
+    ctx.fillText(f.char, x, y);
+  }
+  ctx.restore();
 }
 
 function drawBossBattle() {
@@ -4478,6 +4584,8 @@ function drawBossBattle() {
   const bodySrc = _renderKingBody();
   ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
   ctx.restore();
+  /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
+  drawKingCharFlights();
   /* こんがりミニリール4連（旧: 砲台） */
   for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx);
   drawKingCookGauge();
@@ -4518,6 +4626,9 @@ function _startBossVictory() {
 function _updateBossVictory() {
   _bossVictoryTimer++;
   if (_king) _easeKingXform();
+  /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
+     あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
+  _updateKingCharFlights();
   if (_bossVictoryTimer % 6 === 0 && _king) {
     spawnParticle(
       _king.bx + (Math.random() - 0.5) * _BOSS_S * 0.7, _king.by - _BOSS_S * 0.3,
@@ -4537,6 +4648,7 @@ function drawBossVictory() {
     ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
     ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
     ctx.restore();
+    drawKingCharFlights();
   }
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
