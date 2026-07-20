@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.26';
+const VERSION = 'v4.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3920,7 +3920,7 @@ function drawUzaFlash() {
    演出構造（暗転→タメ台詞→収束→変身）は桃鉄キングボンビー誕生を参考にした
    オリジナル。M1では戦闘は未実装で、誕生後タップで見送って通常モードへ復帰する。 */
 
-const _OMEN_LINES = ['……おや？', 'そとにこぼれた ギヨウザたちが……', 'ちからを あわせて……', '……くる。'];
+const _OMEN_LINES = ['……おや？', 'ギヨウザたちが……', 'ちからを あわせて……', '……くる。'];
 const _OMEN_LINE_FRAMES = 80; // 台詞1行あたりの表示フレーム数（タメ）
 let _omen = null;      // { step, timer, items, flash } 予告演出の状態（null=非表示）
 let _omenGhost = null; // 予兆の霊 { x, y, vx, wobble, oc, sz, cy }
