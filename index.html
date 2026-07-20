@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.12';
+const VERSION = 'v4.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3993,22 +3993,7 @@ function _buildBossOC() {
   const c = oc.getContext('2d');
   c.drawImage(bodyOC, 0, 0);
   c.drawImage(faceOC, 0, 0);
-  /* 焼き目模様の位置は本体ジオメトリに紐づく固定データなのでここで1回だけ決める
-     （焼き餃子らしい斑な焼き色を出す。実際の描画・こんがり進行との連動は
-     _renderKingBody 側。「不自然にならない範囲で」というユーザー要望に基づき、
-     個々の被弾焦げ跡より大きく・薄く・数を絞ってある） */
-  const pattern = [];
-  for (let i = 0; i < KING_PATTERN_COUNT; i++) {
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.sqrt(Math.random());
-    pattern.push({
-      lx:  Math.cos(ang) * s * 0.48 * rad,
-      ly:  s * 0.08 + Math.sin(ang) * s * 0.40 * rad,
-      r:   s * 0.16 + Math.random() * s * 0.08,
-      rot: Math.random() * Math.PI * 2,
-    });
-  }
-  _bossOC = { oc, bodyOC, faceOC, half, pattern };
+  _bossOC = { oc, bodyOC, faceOC, half };
 }
 
 /* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
@@ -4158,10 +4143,14 @@ function drawBossOmen() {
    ボスからの攻撃・被弾・敗北は M3 で実装する。 */
 const KING_MARK_COUNT = 40; // 焼き目スタンプの総数（=満了で勝利）
 const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消えるまでの実時間（wall-clock）
+/* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
+   残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
+   以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
+   文字が飛んでいった先（＝実際の焦げ跡）と模様の位置が一致しないという
+   実機指摘で廃止し、焦げ跡自身が薄れながら痕を残す方式に統一した */
+const KING_MARK_RESIDUAL_ALPHA = 0.14;
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
-const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
-const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
 /* KING_RESULT_MIN_WAIT: 4本確定後、結果表示を最小何フレーム保持するか。
    通常モードの的判定（phase==='done'のminWait、2582行目付近）と同じ考え方:
    ハズレは短く、当たりは少し長く。実際の解放はここに onBeatGrid() の
@@ -4324,19 +4313,27 @@ function _claimKingMarks(count) {
 function _renderKingBody() {
   const pct = _king.revealed / _king.marks.length;
   const now = performance.now();
-  const active = [];
+  /* 焦げ跡は「フェード中」(t<1、毎フレーム再合成が必要)と「フェード完了後も
+     ごくごく薄く残る永続痕」(t>=1、KING_MARK_RESIDUAL_ALPHA固定)の2状態。
+     以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別レイヤーで
+     重ねていたが、文字が飛んでいった先（＝実際の焦げ跡）と模様の位置が
+     一致しないという実機指摘で廃止し、焦げ跡自身が薄れながら痕を残す
+     方式に統一した（永続痕＝settledがそのまま「焼き目模様」を兼ねる） */
+  let activeCount = 0, settledCount = 0;
   for (const m of _king.marks) {
     if (m.revealedAt == null) continue;
-    const t = Math.min(1, (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
-    if (t < 1) active.push({ m, alpha: 1 - t });
+    const t = (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000);
+    if (t < 1) activeCount++; else settledCount++;
   }
-  if (pct <= 0 && active.length === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
+  if (pct <= 0 && activeCount === 0 && settledCount === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
   /* 再合成スキップの条件は pct 一致だけでは不十分: 前回まだフェード中の焦げ跡が
-     残っていた（_toneHadActive）場合、今回 active が0になっていても「焦げ跡を
-     消し切る」1回の再合成をしないと古い焦げ跡が残ったままキャッシュされてしまう
-     （実機検証で発覚: フェード完了直後の1フレームが欠落しボスが直前フレームの
-     まま固まる不具合）。 */
-  if (active.length === 0 && _king._toneRenderedPct === pct && !_king._toneHadActive) return _king.liveOC;
+     残っていた（_toneHadActive）場合、今回activeCountが0になっていても「焦げ跡を
+     残痕アルファまで落とし切る」1回の再合成をしないと古い焦げ跡が残ったままキャッシュ
+     されてしまう（実機検証で発覚: フェード完了直後の1フレームが欠落しボスが直前
+     フレームのまま固まる不具合）。settledCountの増加も同様に再合成トリガーにする
+     （新たに永続痕入りした焦げ跡を反映するため）。 */
+  if (activeCount === 0 && _king._toneRenderedPct === pct && !_king._toneHadActive &&
+      _king._settledCount === settledCount) return _king.liveOC;
   const lc = _king.liveOC.getContext('2d');
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.clearRect(0, 0, _king.liveOC.width, _king.liveOC.height);
@@ -4356,20 +4353,13 @@ function _renderKingBody() {
     lc.fillStyle = KING_TONE_COLOR;
     lc.fillRect(-_king.half, -_king.half, _king.half * 2, _king.half * 2);
   }
-  /* 焼き目模様: 被弾と無関係に固定位置へ、こんがり進行と共に薄く滲むように出す
-     （焼き餃子らしい斑を演出。個々の被弾焦げ跡より大きく・薄いので主張しすぎない） */
-  if (pct > 0 && _scorchBlotSprite) {
-    lc.globalAlpha = pct * KING_PATTERN_MAX_ALPHA;
-    for (const p of _bossOC.pattern) {
-      lc.save();
-      lc.translate(p.lx, p.ly);
-      lc.rotate(p.rot);
-      const sc = p.r / 26;
-      lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
-      lc.restore();
-    }
-  }
-  for (const { m, alpha } of active) {
+  /* 焦げ跡本体: revealedAtがある全マーク（フェード中＋永続痕）を毎回描く。
+     alphaはt=0で1.0→t=1でKING_MARK_RESIDUAL_ALPHAへ線形補間し、以降そこで
+     下げ止まる（消え切らずごくごく薄く残る） */
+  for (const m of _king.marks) {
+    if (m.revealedAt == null) continue;
+    const t = Math.min(1, (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
+    const alpha = 1 - (1 - KING_MARK_RESIDUAL_ALPHA) * t;
     lc.save();
     lc.translate(m.lx, m.ly);
     lc.rotate(m.rot);
@@ -4389,7 +4379,8 @@ function _renderKingBody() {
   lc.globalAlpha = 1;
   _drawKingFace(lc, _BOSS_S, pct);
   _king._toneRenderedPct = pct;
-  _king._toneHadActive = active.length > 0;
+  _king._toneHadActive = activeCount > 0;
+  _king._settledCount = settledCount;
   return _king.liveOC;
 }
 
