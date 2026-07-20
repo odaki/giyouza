@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.25';
+const VERSION = 'v4.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -165,10 +165,11 @@ let KING_RESULT_H    = KING_RESULT_GAP + KING_RESULT_FONT + 4;
 /* こんがりリールの文字配分（%）: 4本の的それぞれが独立に、狙って命中させた
    文字の比率を少しずつ増やしていく（ユーザー要望）。的ごとに履歴を分けて
    持つ必要があるため _king.charWeights（4的ぶんの配分オブジェクト配列）で
-   管理する。最小/最大は FEVER中の通常ホイール比率（97%/1%、createWheel参照）
-   と揃えた */
-const KING_WEIGHT_MIN  = 1;
-const KING_WEIGHT_MAX  = 97;
+   管理する。当初はFEVER中の通常ホイール比率（97%/1%、createWheel参照）と
+   揃えていたが、ユーザー要望でさらに極端な偏り（0.1%/99.7%）まで許容する
+   よう変更した */
+const KING_WEIGHT_MIN  = 0.1;
+const KING_WEIGHT_MAX  = 99.7;
 const KING_WEIGHT_STEP = 2; // 命中のたびに命中文字の比率へ加算する量（%）
 const WXS = IS_PORTRAIT ? [210, 210, 210, 210] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
