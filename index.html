@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.02';
+const VERSION = 'v4.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4137,7 +4137,11 @@ const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度
 const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
 const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
 const KING_RESULT_HOLD_SEC = 1.0;  // 4本確定後、結果（4文字）を表示したまま次トライへ進むまでの実時間（wall-clock）
-let _king = null;       // { liveOC, half, marks, revealed, bx, by, tx, ty }
+/* KING_XFORM_EASE: 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれの
+   ジャンプをなくすための指数収束レート（1フレームあたりの残差縮小率）。
+   アニメーション進行に紐づく演出のためフレームカウンタ基準（wall-clockにしない）。 */
+const KING_XFORM_EASE = 0.12;
+let _king = null;       // { liveOC, half, marks, revealed, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _bossVictoryTimer = 0;
 let _scorchBlotSprite = null;
@@ -4233,9 +4237,14 @@ function _initBossBattle() {
   const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
   const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY));
+  /* dbx/dby/dscale は誕生演出（_omen step6-7）での鎮座位置・等倍スケールを初期値にし、
+     ここから戦闘位置(bx,by,scale)へ毎フレーム収束させる（_easeKingXform）。
+     こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする（実機報告で発覚）。 */
+  const omenBy = H / 2 - (IS_PORTRAIT ? 60 : 0);
   _king = {
     liveOC, half, marks, revealed: 0, scale,
     bx: W / 2, by,
+    dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
     reels, reelIdx: 0, respinAt: null,
   };
@@ -4379,10 +4388,20 @@ function _kingApplyHit(score) {
   if (_king.revealed >= _king.marks.length) _startBossVictory();
 }
 
+/* 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれのジャンプをなくすための
+   表示トランスフォーム収束。bx/by/scaleは各フェーズが確定させる「目標値」、
+   dbx/dby/dscaleは毎フレーム目標へ指数収束する「現在の表示値」。 */
+function _easeKingXform() {
+  _king.dbx += (_king.bx - _king.dbx) * KING_XFORM_EASE;
+  _king.dby += (_king.by - _king.dby) * KING_XFORM_EASE;
+  _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
+}
+
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
-  /* 4本確定後の結果表示保持（wall-clock。document.hidden で rAF が止まっても
-     復帰後に正しく経過時間で解放されるようフレームカウンタは使わない） */
+  _easeKingXform();
+  /* 4本確定後の結果表示保持(wall-clock。document.hidden で rAF が止まっても
+     復帰後に正しく経過時間で解放されるようフレームカウンタは使わない) */
   if (_king.respinAt !== null && performance.now() >= _king.respinAt) {
     _king.respinAt = null;
     _respinKingReels();
@@ -4405,10 +4424,11 @@ function drawBossBattle() {
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
     ctx.restore();
   }
-  /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用） */
-  const breath = _king.scale * (1 + 0.02 * Math.sin(performance.now() / 300));
+  /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用）。
+     位置・スケールは dbx/dby/dscale（誕生演出からの収束中の表示値）を使う */
+  const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
   ctx.save();
-  ctx.translate(_king.bx, _king.by); ctx.scale(breath, breath);
+  ctx.translate(_king.dbx, _king.dby); ctx.scale(breath, breath);
   const bodySrc = _renderKingBody();
   ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
   ctx.restore();
@@ -4444,12 +4464,14 @@ function drawKingCookGauge() {
 function _startBossVictory() {
   phase = 'bossVictory';
   _bossVictoryTimer = 0;
+  if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
   launchFireworks();
   playSE('jackpot');
 }
 
 function _updateBossVictory() {
   _bossVictoryTimer++;
+  if (_king) _easeKingXform();
   if (_bossVictoryTimer % 6 === 0 && _king) {
     spawnParticle(
       _king.bx + (Math.random() - 0.5) * _BOSS_S * 0.7, _king.by - _BOSS_S * 0.3,
@@ -4466,7 +4488,7 @@ function drawBossVictory() {
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, W, H);
   if (_king) {
     ctx.save();
-    ctx.translate(_king.bx, _king.by);
+    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
     ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
     ctx.restore();
   }
