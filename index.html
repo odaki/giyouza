@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.08';
+const VERSION = 'v4.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4183,7 +4183,11 @@ const KING_XFORM_EASE = 0.12;
    （こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる）を伝える。 */
 const KING_CHAR_FLY_FRAMES = 16;        // 飛行（接近）にかかるフレーム数
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
-const KING_CHAR_BOUNCE_FRAMES = 24;     // ハズレ: 跳ね返ってから消えるまで
+/* ハズレは弾け飛んで画面外に出るまでフェードせず表示し続ける（ユーザー指摘:
+   途中でフェードアウトするのは違う、画面外に消えるまで見えていてほしい）。
+   MAX_FRAMESは万一画面外に出ない角度になった場合の保険上限（通常は発火しない） */
+const KING_CHAR_BOUNCE_MAX_FRAMES = 180;
+const KING_CHAR_OFFSCREEN_MARGIN = 60;
 let _king = null;       // { liveOC, half, marks, revealed, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
@@ -4471,13 +4475,21 @@ function _easeKingXform() {
   _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
 }
 
-/* ハズレ確定の文字を、着地点から跳ね返り軌道へ切り替える（重力落下+減速） */
+/* ハズレ確定の文字を、着地点から跳ね返り軌道へ切り替える（重力落下、水平方向は
+   減速させない＝画面外まで確実に弾け飛ばすため。速度もstickの吸い込みより
+   勢いをつけている） */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
   f.bx = f.tx; f.by = f.ty;
   const ang = Math.atan2(f.sy - f.ty, f.sx - f.tx) + (Math.random() - 0.5) * 0.7;
-  const spd = 3.5 + Math.random() * 1.5;
-  f.bvx = Math.cos(ang) * spd; f.bvy = Math.sin(ang) * spd - 2;
+  const spd = 6 + Math.random() * 3;
+  f.bvx = Math.cos(ang) * spd; f.bvy = Math.sin(ang) * spd - 3;
+}
+
+/* 跳ね返り中の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
+function _isKingCharOffscreen(f) {
+  return f.bx < -KING_CHAR_OFFSCREEN_MARGIN || f.bx > W + KING_CHAR_OFFSCREEN_MARGIN ||
+         f.by < -KING_CHAR_OFFSCREEN_MARGIN || f.by > H + KING_CHAR_OFFSCREEN_MARGIN;
 }
 
 /* 決定文字の飛翔演出を1フレーム進める。的のロック（_kingReelShoot）や
@@ -4499,12 +4511,12 @@ function _updateKingCharFlights() {
       f.frames++;
     } else if (f.state === 'bounce') {
       f.frames++;
-      f.bx += f.bvx; f.by += f.bvy; f.bvy += 0.18; f.bvx *= 0.985;
+      f.bx += f.bvx; f.by += f.bvy; f.bvy += 0.2;
     }
   }
   swapRemove(_kingCharFlights, f => {
     if (f.state === 'stick')  return f.frames < KING_CHAR_STICK_FADE_FRAMES;
-    if (f.state === 'bounce') return f.frames < KING_CHAR_BOUNCE_FRAMES;
+    if (f.state === 'bounce') return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_BOUNCE_MAX_FRAMES;
     return true; // fly/wait は常に残す
   });
 }
@@ -4532,7 +4544,8 @@ function _updateBossBattle() {
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
    待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで
-   跳ね返って落下フェード */
+   跳ね返って落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で
+   消えるのではなく画面外に弾け飛ぶまで見えていてほしい） */
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
@@ -4550,9 +4563,8 @@ function drawKingCharFlights() {
     } else if (f.state === 'stick') {
       x = f.tx; y = f.ty;
       alpha = 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES;
-    } else { // bounce
+    } else { // bounce: 画面外に出るまでフルアルファのまま表示し続ける
       x = f.bx; y = f.by;
-      alpha = Math.max(0, 1 - f.frames / KING_CHAR_BOUNCE_FRAMES);
     }
     ctx.globalAlpha = alpha;
     ctx.fillStyle = f.resolve === 'bounce' ? '#ff8866' : f.resolve === 'stick' ? '#ffdd55' : '#fffde7';
