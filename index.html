@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.19';
+const VERSION = 'v4.20';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4151,7 +4151,12 @@ const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消え�
    （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
 const KING_GOOD_PCT = 0.5;
 const KING_JUST_PCT = 1.0;
-const KING_MARK_JUST_SCALE = 3; // 面積9倍=辺3倍（GOOD基準。面積4倍でもまだ差が分かりにくいという指摘でさらに拡大）
+/* KING_CHAR_JUST_FONT_SCALE: マークされる文字（グリフ）自体の大きさをJUSTで
+   拡大する倍率（面積4倍=辺2倍、GOOD基準）。焦げ跡（スコーチブロット）の
+   面積とは別物（ユーザー指摘: 焦げのサイズを勝手に変えるな、文字の大きさを
+   変えてほしいと言っている、の2点は別々の要素）。焦げ跡側のサイズは常に
+   一定（_createKingMark参照） */
+const KING_CHAR_JUST_FONT_SCALE = 2;
 /* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
    残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
    以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
@@ -4399,22 +4404,23 @@ function _spawnKingCharFlight(w) {
   _kingCharFlights.push({
     char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
-    tier, markRef: tier ? _createKingMark(tier) : null,
+    tier, markRef: tier ? _createKingMark() : null,
     state: 'fly', frames: 0, resolve: null,
   });
 }
 
-/* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布、サイズは精度で変える）。
-   JUSTはGOOD基準で面積4倍＝辺2倍（KING_MARK_JUST_SCALE）。当たりが確定
-   するまでは _king.marks に登録しない「候補」のまま（_spawnKingCharFlight参照） */
-function _createKingMark(tier) {
+/* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布）。サイズはtierに
+   依存しない一定範囲（ユーザー指摘: 焦げの面積とマークされる文字の大きさは
+   別物。文字側のサイズ差はKING_CHAR_JUST_FONT_SCALE・drawKingCharFlights参照）。
+   当たりが確定するまでは _king.marks に登録しない「候補」のまま
+   （_spawnKingCharFlight参照） */
+function _createKingMark() {
   const ang = Math.random() * Math.PI * 2;
   const rad = Math.sqrt(Math.random()); // 円盤上に一様分布
-  const baseR = _BOSS_S * 0.085 + Math.random() * _BOSS_S * 0.045; // GOOD基準サイズ
   return {
     lx:  Math.cos(ang) * _BOSS_S * 0.52 * rad,
     ly:  _BOSS_S * 0.08 + Math.sin(ang) * _BOSS_S * 0.42 * rad,
-    r:   tier === 'just' ? baseR * KING_MARK_JUST_SCALE : baseR,
+    r:   _BOSS_S * 0.085 + Math.random() * _BOSS_S * 0.045,
     rot: Math.random() * Math.PI * 2,
     revealedAt: null,
   };
@@ -4615,11 +4621,13 @@ function _updateBossBattle() {
    画面外に弾け飛ぶまで見えていてほしい）。位置計算は _kingCurrentFlightPos に集約。
    文字色はそのタップのスコア（f.score）で通常モードのSYNCメーターと同じ
    赤〜黄〜緑（_syncBarColor）を使う（ユーザー指摘: OK/GOOD/JUSTの評価に
-   合わせて色を変えたい・通常ゲーム時と同じ仕様にしたい） */
+   合わせて色を変えたい・通常ゲーム時と同じ仕様にしたい）。
+   文字自体の大きさもJUSTでKING_CHAR_JUST_FONT_SCALE倍にする（ユーザー指摘:
+   マークされる文字の大きさと焦げ跡の面積は別物。焦げ跡側は常に一定サイズ）。
+   フォントサイズが1文字ごとに変わるため ctx.font はループ内で設定する */
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
-  ctx.font = `bold ${KING_RESULT_FONT}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)';
   for (const f of _kingCharFlights) {
@@ -4627,6 +4635,8 @@ function drawKingCharFlights() {
     const alpha = f.state === 'stick' ? 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES : 1;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = _syncBarColor(f.score)[0];
+    const fontSize = f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_JUST_FONT_SCALE : KING_RESULT_FONT;
+    ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
     ctx.strokeText(f.char, x, y);
     ctx.fillText(f.char, x, y);
   }
