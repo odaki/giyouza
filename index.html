@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.22';
+const VERSION = 'v4.23';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -871,6 +871,13 @@ const _FS_PATH_EXIT  = new Path2D('M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-
 const BAR_X = 335, BAR_W = 390, BAR_Y = H - 106, BAR_H = 80;
 /* ── BETバーレイアウト定数（縦画面） ── */
 const P_BAR_X = 12, P_BAR_Y = 732, P_BAR_W = W - 24, P_BAR_H = 66;
+/* ── こんがりゲージ（横画面、戦闘中はBETバー位置を差し替えて使用）専用の高さ ──
+   BAR_H(80)はBETバー本来の必要高さで、こんがりゲージには過大（実機要望:
+   「縦幅はもっと狭くて良い」）。底辺（BAR_Y+BAR_H）は据え置きで上端だけ下げる
+   ＝ゲージが縮んだ分、上のリール・ボスの表示領域が広がり「ルーレットが下側に
+   移動」という要望にもつながる（_initBossBattleのpanelTop参照） */
+const KING_GAUGE_H = 50;
+const KING_GAUGE_Y = BAR_Y + BAR_H - KING_GAUGE_H;
 
 /* ベットボタン当たり判定（上下15px余白） */
 const BET_DEC_BTN = { x:BAR_X+1,            y:BAR_Y+1, w:BAR_H-2, h:BAR_H-2 }; // ◀ 1pt隙間
@@ -4304,7 +4311,7 @@ function _initBossBattle() {
      それぞれ同じ量にする（実機要望による） */
   const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
   const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
-  const panelTop      = (IS_PORTRAIT ? P_BAR_Y : BAR_Y) - 15; // こんがりゲージ上端 - 余白
+  const panelTop      = (IS_PORTRAIT ? P_BAR_Y : KING_GAUGE_Y) - 15; // こんがりゲージ上端 - 余白
   const REEL_D = KING_WR * 2, GAP_BOSS_REEL = 16;
   /* リール下端〜ゲージ枠上端の隙間は、ヘッダー上と対称に「太外枠とのマージン」と
      同じ量にする（topGap を再利用。実機要望による）。この隙間はリールをゲージ枠から
@@ -4744,7 +4751,7 @@ function drawKingCookGauge() {
   if (!_king) return;
   const pct = _king.cookPct / 100;
   const mx = IS_PORTRAIT ? 12 : 335, mw = IS_PORTRAIT ? W - 24 : 390;
-  const my = IS_PORTRAIT ? P_BAR_Y : BAR_Y, mh = IS_PORTRAIT ? P_BAR_H : BAR_H;
+  const my = IS_PORTRAIT ? P_BAR_Y : KING_GAUGE_Y, mh = IS_PORTRAIT ? P_BAR_H : KING_GAUGE_H;
   ctx.save();
   roundRect(mx, my, mw, mh, 10);
   ctx.fillStyle = 'rgba(40,20,5,0.75)'; ctx.fill();
