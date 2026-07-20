@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.24';
+const VERSION = 'v4.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4311,7 +4311,13 @@ function _initBossBattle() {
      それぞれ同じ量にする（実機要望による） */
   const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
   const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
-  const panelTop      = (IS_PORTRAIT ? P_BAR_Y : KING_GAUGE_Y) - 15; // こんがりゲージ上端 - 余白
+  /* 横画面: panelTopをゲージ上端そのものにし、リールとの隙間はGAP_REEL_PANEL
+     （topGap=BTN_M、統一マージン）1本だけにする。以前は独立した-15pxが
+     GAP_REEL_PANELと二重に効いて合計25pxの隙間になっていた（実機指摘:
+     「こんがり表示エリアのぎりぎりまで下げられる」「縦横一定の空間」＝
+     他の余白と同じ統一マージンだけにしてほしいという要望）。
+     縦画面は従来どおり-15pxを維持（今回の要望は横画面限定のため） */
+  const panelTop      = IS_PORTRAIT ? P_BAR_Y - 15 : KING_GAUGE_Y; // こんがりゲージ上端 - 余白
   const REEL_D = KING_WR * 2, GAP_BOSS_REEL = 16;
   /* リール下端〜ゲージ枠上端の隙間は、ヘッダー上と対称に「太外枠とのマージン」と
      同じ量にする（topGap を再利用。実機要望による）。この隙間はリールをゲージ枠から
