@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.18';
+const VERSION = 'v4.19';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4151,7 +4151,7 @@ const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消え�
    （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
 const KING_GOOD_PCT = 0.5;
 const KING_JUST_PCT = 1.0;
-const KING_MARK_JUST_SCALE = 2; // 面積4倍=辺2倍（GOOD基準。旧√2倍=面積2倍は差が分かりにくいという指摘で変更）
+const KING_MARK_JUST_SCALE = 3; // 面積9倍=辺3倍（GOOD基準。面積4倍でもまだ差が分かりにくいという指摘でさらに拡大）
 /* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
    残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
    以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
@@ -4204,10 +4204,14 @@ function _buildScorchBlotSprite() {
   const oc = new OffscreenCanvas(sz, sz);
   const c = oc.getContext('2d');
   c.translate(half, half);
+  /* 色・アルファは以前より濃く（コントラスト不足でGOOD/JUSTのサイズ差が
+     ほぼ見えないという実機指摘で強化。フルサイズ書き出しで確認したところ
+     位置・サイズ自体は正しかったが、地の色に対して薄すぎて肉眼でほぼ判別
+     できなかったのが真因だった） */
   const layers = [
-    { r: 26, a: 0.55, col: '90,55,20' },
-    { r: 19, a: 0.60, col: '70,38,12' },
-    { r: 11, a: 0.55, col: '45,20,6'  },
+    { r: 26, a: 0.85, col: '75,42,14' },
+    { r: 19, a: 0.90, col: '50,25,6'  },
+    { r: 11, a: 0.85, col: '25,10,2'  },
   ];
   for (const ly of layers) {
     c.beginPath();
@@ -4358,7 +4362,7 @@ function _renderKingBody() {
     lc.translate(m.lx, m.ly);
     lc.rotate(m.rot);
     const sc = m.r / 26; // スプライト基準半径26に対する倍率
-    lc.globalAlpha = 0.9 * alpha;
+    lc.globalAlpha = alpha; // 0.9掛けは廃止（濃さ不足でサイズ差が見えないという指摘への対応の一環）
     lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
     lc.restore();
   }
