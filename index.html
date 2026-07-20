@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.20';
+const VERSION = 'v4.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -155,6 +155,14 @@ const KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（�
 const KING_RESULT_GAP  = 6;
 const KING_RESULT_FONT = Math.round(KING_WR * 0.55);
 const KING_RESULT_H    = KING_RESULT_GAP + KING_RESULT_FONT + 4;
+/* こんがりリールの文字配分（%）: 4本の的それぞれが独立に、狙って命中させた
+   文字の比率を少しずつ増やしていく（ユーザー要望）。的ごとに履歴を分けて
+   持つ必要があるため _king.charWeights（4的ぶんの配分オブジェクト配列）で
+   管理する。最小/最大は FEVER中の通常ホイール比率（97%/1%、createWheel参照）
+   と揃えた */
+const KING_WEIGHT_MIN  = 1;
+const KING_WEIGHT_MAX  = 97;
+const KING_WEIGHT_STEP = 2; // 命中のたびに命中文字の比率へ加算する量（%）
 const WXS = IS_PORTRAIT ? [210, 210, 210, 210] : [230, 430, 630, 830];
 /* 縦画面: 全要素間隔を G=21px 均等（キャンバス上下マージン21pxと同一）
    コインヘッダ下端(y=99) +21 → W1中心(186) +132 +21 → W2(339) → W3(492) → W4(645) +132 +21 → BETバー上端(732) */
@@ -2249,10 +2257,20 @@ function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面�
    同じ位置判定（wheelの回転角に対する固定ポインタ）をそのまま再利用し、通常ゲームと
    同じ「1本ずつ順番にタップして止める」操作感にする（OffscreenCanvas必須環境限定のため
    フォールバック描画は持たない：ボス戦自体が非対応環境では発生しない） */
-function _createKingReel(x, y) {
+function _createKingReel(x, y, weights) {
   const chars = [...KING_CHARS].sort(() => Math.random() - 0.5);
-  const span  = Math.PI / 2; // 4文字均等（90度ずつ）
-  const segs = chars.map((c, i) => ({ char: c, start: i * span, span }));
+  /* weights（%、KING_CHARS各文字→数値）が渡されればその配分で角度を割る
+     （的ごとの命中履歴で偏らせる。_king.charWeights・_adjustKingCharWeight参照）。
+     合計は理論上100だが、加減算の丸め誤差を吸収するため実際の合計で正規化する
+     （createWheelの重み→角度変換と同じ考え方）。省略時は均等4等分 */
+  const sum = weights ? KING_CHARS.reduce((a, c) => a + weights[c], 0) : 0;
+  let angle = 0;
+  const segs = chars.map(c => {
+    const span = weights ? (weights[c] / sum) * Math.PI * 2 : Math.PI / 2;
+    const seg = { char: c, start: angle, span };
+    angle += span;
+    return seg;
+  });
   const w = {
     x, y, segs,
     rot:    Math.random() * Math.PI * 2,
@@ -4287,7 +4305,11 @@ function _initBossBattle() {
   const by = headerBottom + visualTopOffset;
   const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
-  const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY));
+  /* charWeights: 4的ぶんの文字配分（%）。的ごとに独立管理し、狙って命中させた
+     文字の比率を毎回少しずつ増やしていく（_adjustKingCharWeight）。初期値は
+     4文字均等の25%（ユーザー要望） */
+  const charWeights = [0, 1, 2, 3].map(() => Object.fromEntries(KING_CHARS.map(c => [c, 25])));
+  const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY, charWeights[i]));
   /* dbx/dby/dscale は誕生演出（_omen step6-7）での鎮座位置・等倍スケールを初期値にし、
      ここから戦闘位置(bx,by,scale)へ毎フレーム収束させる（_easeKingXform）。
      こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする（実機報告で発覚）。 */
@@ -4297,7 +4319,7 @@ function _initBossBattle() {
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
-    reels, reelIdx: 0, resultTimer: null, resultMatched: false,
+    reels, reelIdx: 0, resultTimer: null, resultMatched: false, charWeights,
   };
   _kingLasers = [];
   _kingCharFlights = [];
@@ -4467,6 +4489,7 @@ function _kingReelShoot(inputPerfMs) {
   w.locked = true;
   w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
   playSE('lock');
+  _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   _spawnKingCharFlight(w);
   _king.reelIdx++;
   if (_king.reelIdx >= 4) {
@@ -4504,9 +4527,32 @@ function _kingReelShoot(inputPerfMs) {
 function _respinKingReels() {
   for (let i = 0; i < 4; i++) {
     const { x, y } = _king.reels[i];
-    _king.reels[i] = _createKingReel(x, y);
+    _king.reels[i] = _createKingReel(x, y, _king.charWeights[i]); // 的ごとの現在の配分を引き継ぐ
   }
   _king.reelIdx = 0;
+}
+
+/* 的posIdxで文字charが命中した際、その的（他の3的とは独立）の配分を少し
+   偏らせる。命中文字をKING_WEIGHT_STEPぶん増やし（上限KING_WEIGHT_MAX）、
+   増えた分は他の3文字から比例配分で差し引く（下限KING_WEIGHT_MINを維持。
+   下限に達した文字が出た場合は残りをさらに他へ再配分するwhileループ）。
+   毎タップ（結果の当たり外れに関わらず）呼ぶ＝「その的で狙って当てた文字」
+   だけが基準（ユーザー要望） */
+function _adjustKingCharWeight(posIdx, char) {
+  const w = _king.charWeights[posIdx];
+  const target = Math.min(KING_WEIGHT_MAX, w[char] + KING_WEIGHT_STEP);
+  let gain = target - w[char];
+  w[char] = target;
+  if (gain <= 0) return;
+  const others = KING_CHARS.filter(c => c !== char);
+  while (gain > 1e-9) {
+    const reducible = others.filter(c => w[c] > KING_WEIGHT_MIN + 1e-9);
+    if (reducible.length === 0) break; // 他3文字すべて下限＝これ以上削れない
+    const pool = reducible.reduce((a, c) => a + (w[c] - KING_WEIGHT_MIN), 0);
+    const take = Math.min(gain, pool);
+    for (const c of reducible) w[c] -= take * (w[c] - KING_WEIGHT_MIN) / pool;
+    gain -= take;
+  }
 }
 
 /* こんがり一致成立時の焼き攻撃演出（レーザー・SE・JUST/GOOD/OKラベル）。
