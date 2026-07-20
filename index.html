@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.11';
+const VERSION = 'v4.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4447,20 +4447,26 @@ function _kingReelShoot(inputPerfMs) {
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。
-       こんがり=今回予約した焦げ跡の位置へ着地先を上書きし、実際に到達した
-       瞬間（_stickKingChar）にその焦げ跡のフェード表示を開始する（先に焦げが
-       見えてしまう問題の再発防止）。文字と焦げ跡は基本1対1（終盤で焦げ跡の
-       残数が4未満の場合のみ最後の1個を使い回す）
+       こんがり=今回予約した焦げ跡の位置へ着地先を「厳密に」上書きし、実際に
+       到達した瞬間（_stickKingChar）にその焦げ跡のフェード表示を開始する
+       （先に焦げが見えてしまう問題の再発防止）。文字と焦げ跡は基本1対1
+       （終盤で焦げ跡の残数が4未満の場合のみ最後の1個を使い回す）。
+       着地先の座標変換は drawBossBattle でのボス描画（translate(dbx,dby)+
+       scale(breath,breath)）と _renderKingBody 内の焦げ跡描画位置
+       （translate(half,half)してからtranslate(m.lx,m.ly)）を1対1で辿った式。
+       以前ここに乱数ジッターを加えていたため「文字の着地先と焦げの位置が
+       一致しない」という実機指摘につながった（旧実装は焦げ跡が3個以下で
+       複数文字が共有する経路のみを想定した緩和策だったが、常時1対1になった
+       今は不要かつ有害）ため廃止し、厳密に一致させる。
        ハズレ=跳ね返って落ちる（着地先はそのまま） */
+    const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
     const resolveAs = matched ? 'stick' : 'bounce';
     const unresolved = _kingCharFlights.filter(f => f.resolve === null);
     unresolved.forEach((f, i) => {
       if (resolveAs === 'stick' && newMarks.length > 0) {
         const m = newMarks[Math.min(i, newMarks.length - 1)];
-        const jx = (Math.random() - 0.5) * _BOSS_S * 0.06;
-        const jy = (Math.random() - 0.5) * _BOSS_S * 0.06;
-        f.tx = _king.dbx + m.lx * _king.dscale + jx;
-        f.ty = _king.dby + m.ly * _king.dscale + jy;
+        f.tx = _king.dbx + m.lx * breath;
+        f.ty = _king.dby + m.ly * breath;
         f.markRef = m;
       }
       f.resolve = resolveAs;
