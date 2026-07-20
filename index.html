@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.17';
+const VERSION = 'v4.18';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4151,7 +4151,7 @@ const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消え�
    （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
 const KING_GOOD_PCT = 0.5;
 const KING_JUST_PCT = 1.0;
-const KING_MARK_JUST_SCALE = Math.SQRT2; // 面積2倍=辺√2倍（GOOD基準）
+const KING_MARK_JUST_SCALE = 2; // 面積4倍=辺2倍（GOOD基準。旧√2倍=面積2倍は差が分かりにくいという指摘で変更）
 /* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
    残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
    以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
@@ -4393,7 +4393,7 @@ function _renderKingBody() {
 function _spawnKingCharFlight(w) {
   const tier = w.syncScore >= 0.667 ? 'just' : w.syncScore >= 0.333 ? 'good' : null;
   _kingCharFlights.push({
-    char: w.result,
+    char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
     tier, markRef: tier ? _createKingMark(tier) : null,
     state: 'fly', frames: 0, resolve: null,
@@ -4401,7 +4401,7 @@ function _spawnKingCharFlight(w) {
 }
 
 /* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布、サイズは精度で変える）。
-   JUSTはGOOD基準で面積2倍＝辺√2倍（KING_MARK_JUST_SCALE）。当たりが確定
+   JUSTはGOOD基準で面積4倍＝辺2倍（KING_MARK_JUST_SCALE）。当たりが確定
    するまでは _king.marks に登録しない「候補」のまま（_spawnKingCharFlight参照） */
 function _createKingMark(tier) {
   const ang = Math.random() * Math.PI * 2;
@@ -4606,11 +4606,12 @@ function _updateBossBattle() {
 }
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
-   待機、settle=結果確定後、今いる位置から確定した着地先へ滑らかに寄せ直す、
-   stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで跳ね返って
-   落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で消えるのでは
-   なく画面外に弾け飛ぶまで見えていてほしい）。位置計算は _kingCurrentFlightPos
-   に集約（settle遷移の開始点記録と二重実装にならないようにするため） */
+   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで跳ね返って
+   落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で消えるのではなく
+   画面外に弾け飛ぶまで見えていてほしい）。位置計算は _kingCurrentFlightPos に集約。
+   文字色はそのタップのスコア（f.score）で通常モードのSYNCメーターと同じ
+   赤〜黄〜緑（_syncBarColor）を使う（ユーザー指摘: OK/GOOD/JUSTの評価に
+   合わせて色を変えたい・通常ゲーム時と同じ仕様にしたい） */
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
@@ -4621,7 +4622,7 @@ function drawKingCharFlights() {
     const { x, y } = _kingCurrentFlightPos(f);
     const alpha = f.state === 'stick' ? 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES : 1;
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = f.resolve === 'bounce' ? '#ff8866' : f.resolve === 'stick' ? '#ffdd55' : '#fffde7';
+    ctx.fillStyle = _syncBarColor(f.score)[0];
     ctx.strokeText(f.char, x, y);
     ctx.fillText(f.char, x, y);
   }
