@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.14';
+const VERSION = 'v4.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4171,6 +4171,14 @@ const KING_XFORM_EASE = 0.12;
    ボス付近まで飛ばして待機、4本目の判定が出た時点で未解決分すべてに結果
    （こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる）を伝える。 */
 const KING_CHAR_FLY_FRAMES = 16;        // 飛行（接近）にかかるフレーム数
+/* KING_CHAR_SETTLE_FRAMES: 結果確定の瞬間、文字が「今いる位置」から確定した
+   着地先（焦げ跡の実位置、またはハズレ時の跳ね返り起点）へ改めて滑らかに
+   寄せ直すフレーム数。結果確定前(wait状態)の待機位置は焦げ跡よりずっと
+   中心寄りの狭い範囲（jx/jy）に留めているため、確定と同時に瞬間移動させると
+   「文字は中心付近にいたのに焦げは無関係な場所に出た」ように見えてしまう
+   （実機指摘）。瞬間移動を廃止しこの遷移を必ず経由させることで、文字が
+   実際に焦げ跡の位置まで動いていく様子を見せる */
+const KING_CHAR_SETTLE_FRAMES = 12;
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
 /* ハズレは弾け飛んで画面外に出るまでフェードせず表示し続ける（ユーザー指摘:
    途中でフェードアウトするのは違う、画面外に消えるまで見えていてほしい）。
@@ -4418,6 +4426,28 @@ function _kingFlightTargetPos(f) {
   return { x: _king.dbx + f.jx, y: _king.dby + f.jy };
 }
 
+/* 文字の「今」の描画位置を状態に応じて算出する。draw側と、結果確定の瞬間に
+   settle遷移の開始点を記録する側（_kingReelShoot）の両方から呼ぶ共通ロジック
+   （二重実装によるズレを防ぐ） */
+function _kingCurrentFlightPos(f) {
+  if (f.state === 'fly') {
+    const target = _kingFlightTargetPos(f);
+    const e = 1 - (1 - Math.min(1, f.frames / KING_CHAR_FLY_FRAMES)) ** 2; // ease-out
+    return { x: f.sx + (target.x - f.sx) * e, y: f.sy + (target.y - f.sy) * e - Math.sin(e * Math.PI) * 18 };
+  }
+  if (f.state === 'wait') {
+    const target = _kingFlightTargetPos(f);
+    return { x: target.x, y: target.y + Math.sin(f.frames * 0.12) * 2 };
+  }
+  if (f.state === 'settle') {
+    const target = _kingFlightTargetPos(f);
+    const e = 1 - (1 - Math.min(1, f.frames / KING_CHAR_SETTLE_FRAMES)) ** 2;
+    return { x: f.rsx + (target.x - f.rsx) * e, y: f.rsy + (target.y - f.rsy) * e };
+  }
+  if (f.state === 'stick') return _kingFlightTargetPos(f);
+  return { x: f.bx, y: f.by }; // bounce
+}
+
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
    （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
    4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
@@ -4458,18 +4488,25 @@ function _kingReelShoot(inputPerfMs) {
        こんがり=今回予約した焦げ跡を割り当てる（markRef）。着地先の絶対座標は
        ここで固定しない。_kingFlightTargetPos が毎フレーム「今の」ボス位置を
        基準にライブ計算するため、_renderKingBody 内の焦げ跡描画位置と常に
-       厳密一致する（着地先を凍結すると、ボスがまだ誕生演出から戦闘位置へ
-       収束中に素早くタップした場合などにズレる。実機指摘: 「被弾と無関係な
-       位置に焦げが発生する」の真因だった）。文字と焦げ跡は基本1対1
-       （終盤で焦げ跡の残数が4未満の場合のみ最後の1個を使い回す）。
-       ハズレ=跳ね返って落ちる（markRefは割り当てない＝待機用オフセットのまま） */
+       厳密一致する。文字と焦げ跡は基本1対1（終盤で焦げ跡の残数が4未満の
+       場合のみ最後の1個を使い回す）。
+       ハズレ=跳ね返って落ちる（markRefは割り当てない＝待機用オフセットのまま）。
+       いずれの場合も「今いる位置」（_kingCurrentFlightPos、fly中の途中位置でも
+       waitの待機位置でもよい）を起点にsettle状態へ遷移し、KING_CHAR_SETTLE_FRAMES
+       かけて確定した着地先へ滑らかに寄せ直す。結果未確定中の待機位置（jx/jy）は
+       焦げ跡の実位置よりずっと中心寄りの狭い範囲のため、ここで瞬間移動させると
+       「文字は中心付近にいたのに焦げは無関係な場所に出た」ように見えてしまう
+       （実機指摘）ため、必ずこの遷移を経由させる */
     const resolveAs = matched ? 'stick' : 'bounce';
     const unresolved = _kingCharFlights.filter(f => f.resolve === null);
     unresolved.forEach((f, i) => {
+      const cur = _kingCurrentFlightPos(f); // markRef/resolve反映前＝現在地を確定
       if (resolveAs === 'stick' && newMarks.length > 0) {
         f.markRef = newMarks[Math.min(i, newMarks.length - 1)];
       }
       f.resolve = resolveAs;
+      f.rsx = cur.x; f.rsy = cur.y;
+      f.state = 'settle'; f.frames = 0;
     });
   }
 }
@@ -4537,20 +4574,22 @@ function _stickKingChar(f) {
 }
 
 /* 決定文字の飛翔演出を1フレーム進める。的のロック（_kingReelShoot）や
-   resultTimer による再スピン待ちとは無関係に毎回呼ぶ＝背景処理として自走する */
+   resultTimer による再スピン待ちとは無関係に毎回呼ぶ＝背景処理として自走する。
+   結果確定（fly/waitからsettleへの遷移）は _kingReelShoot が直接行うため、
+   ここでのfly/waitは「まだ未確定」の場合のみを扱う */
 function _updateKingCharFlights() {
   for (const f of _kingCharFlights) {
     if (f.state === 'fly') {
       f.frames++;
-      if (f.frames >= KING_CHAR_FLY_FRAMES) {
-        if (f.resolve === 'bounce') _startKingCharBounce(f);
-        else if (f.resolve === 'stick') _stickKingChar(f);
-        else { f.state = 'wait'; f.frames = 0; } // 結果未確定: ボス付近で待機
-      }
+      if (f.frames >= KING_CHAR_FLY_FRAMES) { f.state = 'wait'; f.frames = 0; } // 結果未確定: ボス付近で待機
     } else if (f.state === 'wait') {
       f.frames++;
-      if (f.resolve === 'bounce') _startKingCharBounce(f);
-      else if (f.resolve === 'stick') _stickKingChar(f);
+    } else if (f.state === 'settle') {
+      f.frames++;
+      if (f.frames >= KING_CHAR_SETTLE_FRAMES) {
+        if (f.resolve === 'bounce') _startKingCharBounce(f);
+        else _stickKingChar(f);
+      }
     } else if (f.state === 'stick') {
       f.frames++;
     } else if (f.state === 'bounce') {
@@ -4561,7 +4600,7 @@ function _updateKingCharFlights() {
   swapRemove(_kingCharFlights, f => {
     if (f.state === 'stick')  return f.frames < KING_CHAR_STICK_FADE_FRAMES;
     if (f.state === 'bounce') return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_BOUNCE_MAX_FRAMES;
-    return true; // fly/wait は常に残す
+    return true; // fly/wait/settle は常に残す
   });
 }
 
@@ -4587,9 +4626,11 @@ function _updateBossBattle() {
 }
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
-   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで
-   跳ね返って落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で
-   消えるのではなく画面外に弾け飛ぶまで見えていてほしい） */
+   待機、settle=結果確定後、今いる位置から確定した着地先へ滑らかに寄せ直す、
+   stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで跳ね返って
+   落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で消えるのでは
+   なく画面外に弾け飛ぶまで見えていてほしい）。位置計算は _kingCurrentFlightPos
+   に集約（settle遷移の開始点記録と二重実装にならないようにするため） */
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
@@ -4597,22 +4638,8 @@ function drawKingCharFlights() {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)';
   for (const f of _kingCharFlights) {
-    let x, y, alpha = 1;
-    if (f.state === 'fly') {
-      const target = _kingFlightTargetPos(f); // ライブ計算＝ボスの収束・呼吸に追従
-      const e = 1 - (1 - Math.min(1, f.frames / KING_CHAR_FLY_FRAMES)) ** 2; // ease-out
-      x = f.sx + (target.x - f.sx) * e;
-      y = f.sy + (target.y - f.sy) * e - Math.sin(e * Math.PI) * 18; // 弧を描いて飛ぶ
-    } else if (f.state === 'wait') {
-      const target = _kingFlightTargetPos(f);
-      x = target.x; y = target.y + Math.sin(f.frames * 0.12) * 2;
-    } else if (f.state === 'stick') {
-      const target = _kingFlightTargetPos(f);
-      x = target.x; y = target.y;
-      alpha = 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES;
-    } else { // bounce: 画面外に出るまでフルアルファのまま表示し続ける
-      x = f.bx; y = f.by;
-    }
+    const { x, y } = _kingCurrentFlightPos(f);
+    const alpha = f.state === 'stick' ? 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES : 1;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = f.resolve === 'bounce' ? '#ff8866' : f.resolve === 'stick' ? '#ffdd55' : '#fffde7';
     ctx.strokeText(f.char, x, y);
