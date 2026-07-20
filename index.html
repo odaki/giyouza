@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.16';
+const VERSION = 'v4.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4131,18 +4131,27 @@ function drawBossOmen() {
 }
 
 /* ════════════════ キングギヨウザ 戦闘（M2） ════════════════
-   操作はタイミングのみ（自動照準）。タップの calcSyncScore が焼き目スタンプの
-   本数を決める（JUST=3・GOOD=2・OK=1・NG=0）。全スタンプ開放でこんがり100%＝勝利。
+   操作はタイミングのみ（自動照準）。的（文字）1本ずつのタップ精度で
+   こんがり%が直接決まる（JUST=+1.0%・GOOD=+0.5%・OK以下=+0%、4本平均ではなく
+   個別判定）。「こ・ん・が・り」全一致（当たり）確定時のみ、その4タップぶんの
+   焦げ跡候補が正式に登録される。cookPctが100%でこんがり100%＝勝利。
    個々の焼き目は命中直後は局所的な焦げ跡として見え、実時間で少しずつ薄くなりながら
-   消える。その代わりに全身の色トーンが焦げ色方向へ寄っていき（pct=revealed/marks.length
+   消える。その代わりに全身の色トーンが焦げ色方向へ寄っていき（pct=cookPct/100
    に連動、ゲージ%と常に同期）、100%到達と同時に全身が焦茶色になる。
    焼き目を liveOC へ永続焼き込みしていた旧実装（source-atop 1回焼き込み）から、
    「焦げ跡フェード＋全身トーン」を毎フレーム _renderKingBody() で合成する方式に変更
    （フェード中の焦げ跡がある間のみ再合成。フェード完了後は再合成をスキップして
    前回の合成結果を使い回す＝焦げ跡が無い期間の毎フレームコストはゼロ）。
    ボスからの攻撃・被弾・敗北は M3 で実装する。 */
-const KING_MARK_COUNT = 40; // 焼き目スタンプの総数（=満了で勝利）
 const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消えるまでの実時間（wall-clock）
+/* こんがり%はタップごとの精度で直接積算する方式（ユーザー承認済み）:
+   JUST=+1.0%・GOOD=+0.5%・OK以下=0%（焦げ跡も作らない）。的は4本1組だが、
+   スコアは4本の平均ではなく1本ずつ個別に判定する。焦げ跡は「当たり
+   （こ・ん・が・り全一致）」が確定して初めて正式に生成・カウントする
+   （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
+const KING_GOOD_PCT = 0.5;
+const KING_JUST_PCT = 1.0;
+const KING_MARK_JUST_SCALE = Math.SQRT2; // 面積2倍=辺√2倍（GOOD基準）
 /* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
    残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
    以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
@@ -4170,10 +4179,11 @@ const KING_XFORM_EASE = 0.12;
    自走・自然消滅」方式）。的が確定するたび(1本ロックごと)にキャラを1体スポーンし、
    ボス付近まで飛ばして待機、4本目の判定が出た時点で未解決分すべてに結果
    （こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる）を伝える。
-   着地先は結果が判明する前（1〜3本目）から「その試技が当たった場合に何番目の
-   焦げ跡になるか」（_king.marks[revealed+reelIdx]、クレーム前でも位置は確定済み）
-   を最初から使う。当たれば同じ位置へそのまま吸い込まれ、ハズレればその位置は
-   クレームされず跳ね返るだけなので、結果確定時の位置の作り直しは一切不要 */
+   着地先は結果が判明する前（1〜3本目）から、そのタップ自体の精度（JUST/GOOD）で
+   位置・サイズを確定した焦げ跡候補（_createKingMark）を最初から使う（OK以下は
+   焦げ跡候補なし＝ボス中心へ向かうだけ）。4本目で「こ・ん・が・り」全一致が
+   確定した時点で、各文字の焦げ跡候補を正式に _king.marks へ登録して%を加算する。
+   不一致（ハズレ）ならどのタップも登録されず、そのまま跳ね返るだけ */
 const KING_CHAR_FLY_FRAMES = 16;        // 飛行（接近）にかかるフレーム数
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
 /* ハズレは弾け飛んで画面外に出るまでフェードせず表示し続ける（ユーザー指摘:
@@ -4181,7 +4191,7 @@ const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消える�
    MAX_FRAMESは万一画面外に出ない角度になった場合の保険上限（通常は発火しない） */
 const KING_CHAR_BOUNCE_MAX_FRAMES = 180;
 const KING_CHAR_OFFSCREEN_MARGIN = 60;
-let _king = null;       // { liveOC, half, marks, revealed, bx, by, dbx, dby, dscale, tx, ty }
+let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
 let _bossVictoryTimer = 0;
@@ -4232,17 +4242,9 @@ function _initBossBattle() {
      ここでは領域確保のみ行う（初期状態は _renderKingBody 側で _bossOC.oc を
      そのまま返す高速経路があるため、初期描画は不要）。 */
   const liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
+     （個々の焦げ跡は _createKingMark がタップの都度その場で生成する） */
   const marks = [];
-  for (let i = 0; i < KING_MARK_COUNT; i++) {
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.sqrt(Math.random()); // 円盤上に一様分布
-    marks.push({
-      lx:  Math.cos(ang) * s * 0.52 * rad,
-      ly:  s * 0.08 + Math.sin(ang) * s * 0.42 * rad,
-      r:   s * 0.085 + Math.random() * s * 0.045,
-      rot: Math.random() * Math.PI * 2,
-    });
-  }
   /* 縦レイアウトを実寸から動的計算する（マジックナンバーの縦横別ハードコード禁止）。
      コインヘッダー下端〜こんがりゲージ上端の実際の空き高さにボスを収まるよう縮小し、
      ボス下端〜ゲージ上端の間にこんがりミニリール4連（旧: 砲台）の場所を確保する。
@@ -4282,7 +4284,7 @@ function _initBossBattle() {
      こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする（実機報告で発覚）。 */
   const omenBy = H / 2 - (IS_PORTRAIT ? 60 : 0);
   _king = {
-    liveOC, half, marks, revealed: 0, scale,
+    liveOC, half, marks, cookPct: 0, scale,
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
@@ -4294,28 +4296,16 @@ function _initBossBattle() {
   startBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰）
 }
 
-/* 焦げ跡を count 個「予約」して返す（_king.revealed をここで進めるため、
-   こんがりゲージ%は即座に反映される）。予約した焦げ跡はまだ revealedAt を
-   打たない＝まだフェード表示を始めない。実際にそこへ文字が到達した瞬間
-   （_stickKingChar）までフェード開始を遅らせることで、「文字が飛んでいって
-   いない場所にも焦げが発生している」（＝文字の到着より先に焦げが見えて
-   しまっていた）という実機指摘を解消する */
-function _claimKingMarks(count) {
-  const n = Math.min(count, _king.marks.length - _king.revealed);
-  const claimed = _king.marks.slice(_king.revealed, _king.revealed + n);
-  _king.revealed += n;
-  return claimed;
-}
-
 /* ボス本体の描画元キャンバスを返す（素のスプライト＋全身トーン＋フェード中の焦げ跡）。
-   全身トーンの強さは revealed/marks.length と厳密に連動させる（フェード完了を待たず、
-   ゲージが100%になった瞬間に全身も焦茶色100%になっている必要があるため）。
+   全身トーンの強さは cookPct（タップ精度で直接積算、0〜100）と厳密に連動させる
+   （フェード完了を待たず、ゲージが100%になった瞬間に全身も焦茶色100%になっている
+   必要があるため）。
    個々の焦げ跡は revealedAt からの経過時間（wall-clock）でアルファを減衰させ、
    フェード仕切りの局所的な焦げ跡だけを別途上描きする。
    フェード中の焦げ跡が1つも無ければ再合成をスキップし、素のスプライト（pct=0）または
    前回合成済みの liveOC（pct>0 かつ全焦げ跡が消え切った定常状態）をそのまま返す。 */
 function _renderKingBody() {
-  const pct = _king.revealed / _king.marks.length;
+  const pct = _king.cookPct / 100;
   const now = performance.now();
   /* 焦げ跡は「フェード中」(t<1、毎フレーム再合成が必要)と「フェード完了後も
      ごくごく薄く残る永続痕」(t>=1、KING_MARK_RESIDUAL_ALPHA固定)の2状態。
@@ -4392,31 +4382,49 @@ function _renderKingBody() {
    たびに呼ぶ（1〜3本目はまだこんがり成立/不成立が分からないため、着弾後は
    'wait' 状態でボス付近に留まる。4本目のロックで結果が判明したら resolve を
    全未解決分にまとめて設定＝_kingReelShoot 側）。
-   着地先（markRef）はこの時点で確定させる。_king.marks は40個ぶん位置が
-   戦闘開始時にすべて決まっているため、「この試技が当たった場合に何番目の
-   焦げ跡になるか」（_king.revealed + そのリールの番号＝_king.reelIdx、
-   クレーム自体は4本目確定時のまま）は結果が判明する前から分かる。ハズレの
-   可能性を考慮した仮位置ではなく最初から確定位置を使うことで、結果確定時に
-   位置を作り直す必要が一切なくなる（実機指摘: 待機中は中心寄りの仮位置にして
-   結果確定時に本来の位置へ動かす実装をしていたが、そもそも最初から本来の
-   位置に配置してほしいという要望だった） */
+   着地先（markRef）はこの時点で確定させる。タップ自体の精度（score）で
+   JUST/GOODが決まった瞬間に、位置とサイズ込みの焦げ跡候補を _createKingMark
+   で生成して持たせる（OK以下は候補なし＝null、ボス中心へ向かうだけ）。
+   まだ _king.marks には登録しない（当たり確定＝「こ・ん・が・り」全一致まで
+   正式な焦げ跡にはしない。_kingReelShoot 参照）。結果が判明する前から確定
+   位置を使うことで、結果確定時に位置を作り直す必要が一切なくなる（実機指摘:
+   待機中は中心寄りの仮位置にして結果確定時に本来の位置へ動かす実装を
+   していたが、そもそも最初から本来の位置に配置してほしいという要望だった） */
 function _spawnKingCharFlight(w) {
-  const idx = Math.min(_king.revealed + _king.reelIdx, _king.marks.length - 1);
+  const tier = w.syncScore >= 0.667 ? 'just' : w.syncScore >= 0.333 ? 'good' : null;
   _kingCharFlights.push({
     char: w.result,
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
-    markRef: _king.marks[idx],
+    tier, markRef: tier ? _createKingMark(tier) : null,
     state: 'fly', frames: 0, resolve: null,
   });
 }
 
-/* 文字の着地先（＝焦げ跡markRefの実位置）を「今の」ボス表示位置（dbx/dby、
-   呼吸アニメ込みのbreath）を基準に毎回ライブ計算する。_renderKingBody内の
+/* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布、サイズは精度で変える）。
+   JUSTはGOOD基準で面積2倍＝辺√2倍（KING_MARK_JUST_SCALE）。当たりが確定
+   するまでは _king.marks に登録しない「候補」のまま（_spawnKingCharFlight参照） */
+function _createKingMark(tier) {
+  const ang = Math.random() * Math.PI * 2;
+  const rad = Math.sqrt(Math.random()); // 円盤上に一様分布
+  const baseR = _BOSS_S * 0.085 + Math.random() * _BOSS_S * 0.045; // GOOD基準サイズ
+  return {
+    lx:  Math.cos(ang) * _BOSS_S * 0.52 * rad,
+    ly:  _BOSS_S * 0.08 + Math.sin(ang) * _BOSS_S * 0.42 * rad,
+    r:   tier === 'just' ? baseR * KING_MARK_JUST_SCALE : baseR,
+    rot: Math.random() * Math.PI * 2,
+    revealedAt: null,
+  };
+}
+
+/* 文字の着地先（＝焦げ跡markRefの実位置。markRefが無い＝OK以下のタップは
+   焦げを残さずボス中心へ向かうだけ）を「今の」ボス表示位置（dbx/dby、呼吸
+   アニメ込みのbreath）を基準に毎回ライブ計算する。_renderKingBody内の
    焦げ跡描画と同じ座標変換。凍結せず毎フレーム計算し直すことで、ボスがまだ
    誕生演出から戦闘位置へ収束中でも常に実際の描画位置に追従する */
 function _kingFlightTargetPos(f) {
   const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
-  return { x: _king.dbx + f.markRef.lx * breath, y: _king.dby + f.markRef.ly * breath };
+  if (f.markRef) return { x: _king.dbx + f.markRef.lx * breath, y: _king.dby + f.markRef.ly * breath };
+  return { x: _king.dbx, y: _king.dby };
 }
 
 /* 文字の「今」の描画位置を状態に応じて算出する（draw側から呼ぶ） */
@@ -4455,13 +4463,22 @@ function _kingReelShoot(inputPerfMs) {
     const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
     if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
-      /* 焦げ跡は常に文字と同数（4個、終盤で残数が足りない場合のみそれ以下）を
-         クレームする。文字のmarkRefはスポーン時点で既にこれと同じ焦げ跡を
-         指しているため（_spawnKingCharFlight参照）、ここでの割り当て直しは
-         不要。スコアはレーザー色・SE・ラベル表示のみに使う（_kingApplyHit参照） */
-      _claimKingMarks(4);
+      /* こんがり%はタップごとの精度で直接積算する（JUST=+1.0%・GOOD=+0.5%・
+         OK以下=0%）。今回の4タップぶんの候補焦げ跡（スポーン時に
+         _createKingMarkで生成済み、_spawnKingCharFlight参照）を、当たりが
+         確定したこの時点で初めて _king.marks へ正式登録する（不一致なら
+         登録されず消える＝「文字が飛んでいっていない場所に焦げが発生する」
+         を避けるための設計を踏襲）。スコア平均（avgScore）はレーザー色・SE・
+         JUST/GOOD/OKラベル表示のみに使う（_kingApplyHit参照。%やサイズには
+         使わない＝1本ずつ個別判定という要望のため） */
+      const thisAttempt = _kingCharFlights.filter(f => f.resolve === null);
+      for (const f of thisAttempt) {
+        if (!f.markRef) continue; // OK以下のタップは焦げ跡なし
+        _king.marks.push(f.markRef);
+        _king.cookPct = Math.min(100, _king.cookPct + (f.tier === 'just' ? KING_JUST_PCT : KING_GOOD_PCT));
+      }
       _kingApplyHit(avgScore);
-      if (_king.revealed >= _king.marks.length) _startBossVictory();
+      if (_king.cookPct >= 100) _startBossVictory();
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
@@ -4483,9 +4500,9 @@ function _respinKingReels() {
 }
 
 /* こんがり一致成立時の焼き攻撃演出（レーザー・SE・JUST/GOOD/OKラベル）。
-   焦げ跡の予約数はもう score に連動しない（常に4個＝文字の数、
-   _kingReelShoot の _claimKingMarks 参照）。score はここでの見た目の
-   フィードバック（レーザー色・SE・ラベル）にのみ使う */
+   こんがり%・焦げ跡サイズはタップ個別の精度で決まる（_spawnKingCharFlight・
+   _kingReelShoot参照）。ここでのscore（4タップ平均）は見た目のフィードバック
+   （レーザー色・SE・ラベル）にのみ使う */
 function _kingApplyHit(score) {
   let label = '';
   if      (score >= 0.667) label = 'JUST!';
@@ -4643,7 +4660,7 @@ function drawBossBattle() {
 /* こんがりゲージ: BETバーと同じ位置・寸法（戦闘中はBETバーを非表示にして差し替える） */
 function drawKingCookGauge() {
   if (!_king) return;
-  const pct = _king.revealed / _king.marks.length;
+  const pct = _king.cookPct / 100;
   const mx = IS_PORTRAIT ? 12 : 335, mw = IS_PORTRAIT ? W - 24 : 390;
   const my = IS_PORTRAIT ? P_BAR_Y : BAR_Y, mh = IS_PORTRAIT ? P_BAR_H : BAR_H;
   ctx.save();
