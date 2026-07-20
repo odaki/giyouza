@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.03';
+const VERSION = 'v4.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3908,11 +3908,16 @@ function _spawnOmenGhost() {
 }
 
 /* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
-/* 怒り顔（白目+黒瞳+吊り眉+へ字口）。呼び出し側で scale(_dpr)+translate(half,half)
+/* 表情（白目+黒瞳+眉+口）。呼び出し側で scale(_dpr)+translate(half,half)
    適用済みの論理座標系であること前提（_buildBossOC から分離。理由は _buildBossOC
-   のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る） */
-function _drawKingFace(c, s) {
+   のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
+   pct（こんがり進行度 0〜1）で吊り眉+へ字口（怒り）から、やや下がった眉+U字口
+   （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。 */
+function _drawKingFace(c, s, pct = 0) {
   const ex = s*0.16, ey = s*0.06, er = s*0.055;
+  const browDrop = s * 0.05 * pct;         // 眉全体をやや下げる
+  const browOuterMul = 2.4 - 0.7 * pct;    // 吊り上がり量（外側）: 進行で緩やかに
+  const browInnerMul = 1.2 + 0.3 * pct;    // 吊り上がり量（内側）: 進行で緩やかに
   for (const sx of [-1, 1]) {
     c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
     c.fillStyle = '#fff'; c.fill();
@@ -3920,14 +3925,16 @@ function _drawKingFace(c, s) {
     c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15, er*0.45, 0, Math.PI*2);
     c.fillStyle = '#1a1a1a'; c.fill();
     c.beginPath();
-    c.moveTo(sx*(ex + er*1.2), ey - er*2.4);
-    c.lineTo(sx*(ex - er*1.2), ey - er*1.2);
+    c.moveTo(sx*(ex + er*1.2), ey - er*browOuterMul + browDrop);
+    c.lineTo(sx*(ex - er*1.2), ey - er*browInnerMul + browDrop);
     c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02; c.lineCap = 'round'; c.stroke();
   }
-  /* へ字口 */
+  /* 口: 制御点Yが端点Y(0.26s)を下回れば「への字」(不満げ)、上回れば「U字」(笑顔)。
+     pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s下回るU字＝への字と対称の笑顔) */
+  const mouthCtrlY = s * (0.19 + 0.14 * pct);
   c.beginPath();
   c.moveTo(-s*0.09, s*0.26);
-  c.quadraticCurveTo(0, s*0.19, s*0.09, s*0.26);
+  c.quadraticCurveTo(0, mouthCtrlY, s*0.09, s*0.26);
   c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
 }
 
@@ -4137,6 +4144,10 @@ const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度
 const KING_PATTERN_COUNT = 7;      // 焼き目模様（斑）の数
 const KING_PATTERN_MAX_ALPHA = 0.4; // 焼き目模様の最大濃さ（被弾焦げ跡より薄く・自然に）
 const KING_RESULT_HOLD_SEC = 1.0;  // 4本確定後、結果（4文字）を表示したまま次トライへ進むまでの実時間（wall-clock）
+/* ボス本体楕円（_drawGyozaBody: 中心=+0.08s、縦半径=0.48s）から見た目の頭頂・裾を
+   割り出した比率（中心からの距離、s基準）。_initBossBattleのレイアウト計算と
+   drawBossVictoryの勝利文言の位置決めの両方で使う共通値のためモジュール定数にする。 */
+const KING_VISUAL_TOP_RATIO = 0.40, KING_VISUAL_BOTTOM_RATIO = 0.56;
 /* KING_XFORM_EASE: 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれの
    ジャンプをなくすための指数収束レート（1フレームあたりの残差縮小率）。
    アニメーション進行に紐づく演出のためフレームカウンタ基準（wall-clockにしない）。 */
@@ -4227,12 +4238,11 @@ function _initBossBattle() {
      half基準（1.5s相当）のまま fit させると見た目より遥かに大きい余白込みで縮小され、
      ボスが必要以上に小さく表示される（実機報告で発覚: 縦画面で頭頂が100px以上離れる・
      横画面でボスが小さすぎる、の双方が同根）。 */
-  const VISUAL_TOP_RATIO = 0.40, VISUAL_BOTTOM_RATIO = 0.56;
   /* KING_RESULT_H: 的の下に当たった文字を表示するための縦スペース（drawKingReel参照）。
      ここで確保しないと文字がゲージ枠に重なる */
   const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_D - KING_RESULT_H - GAP_REEL_PANEL;
-  const scale = Math.min(1, availH / (s * (VISUAL_TOP_RATIO + VISUAL_BOTTOM_RATIO))); // 空き高さに収まる縮小率（拡大はしない）
-  const visualTopOffset = s * VISUAL_TOP_RATIO * scale;
+  const scale = Math.min(1, availH / (s * (KING_VISUAL_TOP_RATIO + KING_VISUAL_BOTTOM_RATIO))); // 空き高さに収まる縮小率（拡大はしない）
+  const visualTopOffset = s * KING_VISUAL_TOP_RATIO * scale;
   const by = headerBottom + visualTopOffset;
   const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
@@ -4326,12 +4336,15 @@ function _renderKingBody() {
     lc.restore();
   }
   /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けない常に元の色で最後に上描きする
-     （白目の白さと焦げ色とのコントラストを保つユーザー要望）。ラスタコピーのため
-     論理座標系ではなく等倍(identity)に戻してから描く */
+     （白目の白さと焦げ色とのコントラストを保つユーザー要望）。pctに応じて表情が
+     変化する（_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
+     論理座標系（scale+translate）に戻してから描く必要がある */
   lc.setTransform(1, 0, 0, 1, 0, 0);
+  lc.scale(_dpr, _dpr);
+  lc.translate(_king.half, _king.half);
   lc.globalCompositeOperation = 'source-over';
   lc.globalAlpha = 1;
-  lc.drawImage(_bossOC.faceOC, 0, 0);
+  _drawKingFace(lc, _BOSS_S, pct);
   _king._toneRenderedPct = pct;
   _king._toneHadActive = active.length > 0;
   return _king.liveOC;
@@ -4494,7 +4507,13 @@ function drawBossVictory() {
   }
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  outText('こんがり キングギヨウザ！', W / 2, IS_PORTRAIT ? 90 : 70, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
+  /* 文言はボスの裾（拡大アニメ中は dscale に連動して動く）のすぐ下に置く。
+     旧実装は画面上部固定だったため、所持ギヨウザ表示・上部アイコンと重なっていた
+     （ユーザー報告で発覚）。dscale基準なので拡大演出中も裾の位置と一緒に滑らかに動く。 */
+  const titleY = _king
+    ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
+    : (IS_PORTRAIT ? 90 : 70);
+  outText('こんがり キングギヨウザ！', W / 2, titleY, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
   if (_bossVictoryTimer > 90) {
     ctx.globalAlpha = 0.5 + 0.4 * Math.sin(_bossVictoryTimer * 0.08);
     ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
