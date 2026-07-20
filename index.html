@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.10';
+const VERSION = 'v4.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4301,12 +4301,17 @@ function _initBossBattle() {
   startBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰）
 }
 
-/* marks[revealed..upTo) にフェード開始時刻を記録する（描画自体は _renderKingBody が
-   毎フレーム行うため、ここでは位置確定と revealed 更新のみ） */
-function _stampKingMarks(upTo) {
-  const now = performance.now();
-  for (let i = _king.revealed; i < upTo; i++) _king.marks[i].revealedAt = now;
-  _king.revealed = upTo;
+/* 焦げ跡を count 個「予約」して返す（_king.revealed をここで進めるため、
+   こんがりゲージ%は即座に反映される）。予約した焦げ跡はまだ revealedAt を
+   打たない＝まだフェード表示を始めない。実際にそこへ文字が到達した瞬間
+   （_stickKingChar）までフェード開始を遅らせることで、「文字が飛んでいって
+   いない場所にも焦げが発生している」（＝文字の到着より先に焦げが見えて
+   しまっていた）という実機指摘を解消する */
+function _claimKingMarks(count) {
+  const n = Math.min(count, _king.marks.length - _king.revealed);
+  const claimed = _king.marks.slice(_king.revealed, _king.revealed + n);
+  _king.revealed += n;
+  return claimed;
 }
 
 /* ボス本体の描画元キャンバスを返す（素のスプライト＋全身トーン＋フェード中の焦げ跡）。
@@ -4401,7 +4406,7 @@ function _spawnKingCharFlight(w) {
     char: w.result,
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
     tx: _king.dbx + jx, ty: _king.dby + jy,
-    state: 'fly', frames: 0, resolve: null,
+    state: 'fly', frames: 0, resolve: null, markRef: null,
   });
 }
 
@@ -4430,27 +4435,33 @@ function _kingReelShoot(inputPerfMs) {
     let newMarks = [];
     if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
-      const revealedBefore = _king.revealed;
+      /* 焦げ跡は常に文字と同数（4個、終盤で残数が足りない場合のみそれ以下）を
+         予約する。以前はスコア（JUST/GOOD/OK）に応じて0〜3個だけ予約しており、
+         4体飛ばしたのに焦げが付かない文字が出ていた（実機指摘: 「必ず4つの
+         文字の飛んでいった先が焦げに変わるように」）。スコアは引き続き
+         レーザー色・SE・ラベル表示のみに使う（_kingApplyHit参照） */
+      newMarks = _claimKingMarks(4);
       _kingApplyHit(avgScore);
-      newMarks = _king.marks.slice(revealedBefore, _king.revealed); // 今回新たに焼けた焦げ跡（0〜3個）
+      if (_king.revealed >= _king.marks.length) _startBossVictory();
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。
-       こんがり=実際に今回焼けた焦げ跡の位置へ着地先を上書きしてから吸い込ませる
-       （文字が飛んだ先と焦げの位置が一致しないという実機指摘で追加。焦げ跡は
-       最大3個・文字は4体のため、焦げ跡の数より多い分は同じ焦げ跡を使い回す。
-       焦げ跡が0個＝score=0の稀なケースはボス中心付近の元の着地点のまま）
+       こんがり=今回予約した焦げ跡の位置へ着地先を上書きし、実際に到達した
+       瞬間（_stickKingChar）にその焦げ跡のフェード表示を開始する（先に焦げが
+       見えてしまう問題の再発防止）。文字と焦げ跡は基本1対1（終盤で焦げ跡の
+       残数が4未満の場合のみ最後の1個を使い回す）
        ハズレ=跳ね返って落ちる（着地先はそのまま） */
     const resolveAs = matched ? 'stick' : 'bounce';
     const unresolved = _kingCharFlights.filter(f => f.resolve === null);
     unresolved.forEach((f, i) => {
       if (resolveAs === 'stick' && newMarks.length > 0) {
-        const m = newMarks[i % newMarks.length];
+        const m = newMarks[Math.min(i, newMarks.length - 1)];
         const jx = (Math.random() - 0.5) * _BOSS_S * 0.06;
         const jy = (Math.random() - 0.5) * _BOSS_S * 0.06;
         f.tx = _king.dbx + m.lx * _king.dscale + jx;
         f.ty = _king.dby + m.ly * _king.dscale + jy;
+        f.markRef = m;
       }
       f.resolve = resolveAs;
     });
@@ -4466,21 +4477,20 @@ function _respinKingReels() {
   _king.reelIdx = 0;
 }
 
-/* こんがり一致成立時の焼き攻撃本体。スコア（揃えた4タップの平均精度）の精度が
-   そのまま焼き目の本数になる（入力補正はしない） */
+/* こんがり一致成立時の焼き攻撃演出（レーザー・SE・JUST/GOOD/OKラベル）。
+   焦げ跡の予約数はもう score に連動しない（常に4個＝文字の数、
+   _kingReelShoot の _claimKingMarks 参照）。score はここでの見た目の
+   フィードバック（レーザー色・SE・ラベル）にのみ使う */
 function _kingApplyHit(score) {
-  let reveal = 0, label = '';
-  if      (score >= 0.667) { reveal = 3; label = 'JUST!'; }
-  else if (score >= 0.333) { reveal = 2; label = 'GOOD';  }
-  else if (score > 0)      { reveal = 1; label = 'OK';    }
-  const newRevealed = Math.min(_king.marks.length, _king.revealed + reveal);
-  if (newRevealed > _king.revealed) _stampKingMarks(newRevealed);
+  let label = '';
+  if      (score >= 0.667) label = 'JUST!';
+  else if (score >= 0.333) label = 'GOOD';
+  else if (score > 0)      label = 'OK';
   const [col, glow] = _syncBarColor(score);
   _kingLasers.push({ x1: _king.tx, y1: _king.ty, x2: _king.bx, y2: _king.by,
-    life: 14, maxLife: 14, color: col, glow, hit: reveal > 0 });
-  playSE(reveal > 0 ? 'lock' : 'miss');
+    life: 14, maxLife: 14, color: col, glow, hit: score > 0 });
+  playSE(score > 0 ? 'lock' : 'miss');
   if (label) { syncJustLabel = label; syncJustTimer = 50; syncJustScore = score; }
-  if (_king.revealed >= _king.marks.length) _startBossVictory();
 }
 
 /* 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれのジャンプをなくすための
@@ -4509,6 +4519,16 @@ function _isKingCharOffscreen(f) {
          f.by < -KING_CHAR_OFFSCREEN_MARGIN || f.by > H + KING_CHAR_OFFSCREEN_MARGIN;
 }
 
+/* こんがり確定の文字がボスへ実際に到達した瞬間。ここで初めて対応する焦げ跡の
+   revealedAt を打つ（_king.marks の該当要素、_kingReelShoot で markRef として
+   紐付け済み）＝焦げのフェード表示が文字の到着と同時に始まる。予約だけされて
+   revealedAt 未設定の焦げ跡は _renderKingBody 側では「まだ見えない」ため、
+   これより前のフレームで焦げが先に見えてしまうことはない */
+function _stickKingChar(f) {
+  f.state = 'stick'; f.frames = 0;
+  if (f.markRef && f.markRef.revealedAt == null) f.markRef.revealedAt = performance.now();
+}
+
 /* 決定文字の飛翔演出を1フレーム進める。的のロック（_kingReelShoot）や
    resultTimer による再スピン待ちとは無関係に毎回呼ぶ＝背景処理として自走する */
 function _updateKingCharFlights() {
@@ -4517,13 +4537,13 @@ function _updateKingCharFlights() {
       f.frames++;
       if (f.frames >= KING_CHAR_FLY_FRAMES) {
         if (f.resolve === 'bounce') _startKingCharBounce(f);
-        else if (f.resolve === 'stick') { f.state = 'stick'; f.frames = 0; }
+        else if (f.resolve === 'stick') _stickKingChar(f);
         else { f.state = 'wait'; f.frames = 0; } // 結果未確定: ボス付近で待機
       }
     } else if (f.state === 'wait') {
       f.frames++;
       if (f.resolve === 'bounce') _startKingCharBounce(f);
-      else if (f.resolve === 'stick') { f.state = 'stick'; f.frames = 0; }
+      else if (f.resolve === 'stick') _stickKingChar(f);
     } else if (f.state === 'stick') {
       f.frames++;
     } else if (f.state === 'bounce') {
