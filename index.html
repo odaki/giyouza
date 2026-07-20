@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.05';
+const VERSION = 'v4.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3915,20 +3915,28 @@ function _spawnOmenGhost() {
    （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。 */
 function _drawKingFace(c, s, pct = 0) {
   const ex = s*0.16, ey = s*0.06, er = s*0.055;
-  /* 眉: 眉頭（鼻側・sx*(ex-1.2er)）をほぼ固定のピボットとし、眉尻（外側・
-     sx*(ex+1.2er)）だけがそこを中心に回転して下がる（上下移動ではなく回転移動。
-     ユーザー指摘: 上下に動かすと目と重なる＝改悪）。眉頭もわずかに上がり、
-     眉尻へ向かうほど心持ち長さが縮むことで「困り眉」に近い自然な変化にする
-     （純粋な回転そのものではなく人の表情を参考）。回転だけだと眉尻の軌跡が
-     目の右上をかすめて重なる（実機検証で発覚。線分全体をサンプリングして確認
-     済み＝端点だけの判定では見逃す）ため、眉頭の上昇と長さ短縮で軌跡を目から
-     引き離してある。
-     angle0=元の吊り眉角度（atan2(-1.2,2.4)）→angle1=眉尻が少し下がった角度 */
-  const pivotX = ex - er*1.2, pivotY = ey - er*1.2 - er*0.35*pct;
-  const angle0 = Math.atan2(-1.2, 2.4), angle1 = 8 * Math.PI/180;
-  const angle = angle0 + (angle1 - angle0) * pct;
-  const len = Math.hypot(2.4, 1.2) * er * (1 - 0.15*pct);
-  const tailX = pivotX + len*Math.cos(angle), tailY = pivotY + len*Math.sin(angle);
+  /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.2er 〜 眉尻=ex+1.2er,ey-2.4er）を、
+     黒目とほぼ同じX座標（瞳=ex-0.25er、ユーザー指定）にあるピボットを中心に
+     回転させる。ピボットYは元の眉ライン上（そのX位置での直線上の点）に置くため
+     pct=0では回転量0＝元の見た目と完全一致する。pct→1でangle1（ほぼ水平・
+     少し眉尻が下がる程度に緩和）まで回転し、眉頭・眉尻の両方が滑らかに動く
+     （旧実装は眉頭を固定して眉尻だけ動かしていたが、ピボットを目寄りにしたことで
+     線分全体が目から自然に離れ、上下移動に見えない自然な回転になる） */
+  const innerX0 = ex - er*1.2, innerY0 = ey - er*1.2;
+  const outerX0 = ex + er*1.2, outerY0 = ey - er*2.4;
+  const pivotX = ex - er*0.25;
+  const pivotT = (pivotX - innerX0) / (outerX0 - innerX0);
+  const pivotY = innerY0 + pivotT * (outerY0 - innerY0);
+  const angle0 = Math.atan2(outerY0 - innerY0, outerX0 - innerX0);
+  const angle1 = 3 * Math.PI/180;
+  const dTheta = (angle1 - angle0) * pct;
+  const cosT = Math.cos(dTheta), sinT = Math.sin(dTheta);
+  const rot = (px, py) => {
+    const vx = px - pivotX, vy = py - pivotY;
+    return [pivotX + vx*cosT - vy*sinT, pivotY + vx*sinT + vy*cosT];
+  };
+  const [innerX, innerY] = rot(innerX0, innerY0);
+  const [outerX, outerY] = rot(outerX0, outerY0);
   for (const sx of [-1, 1]) {
     c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
     c.fillStyle = '#fff'; c.fill();
@@ -3936,8 +3944,8 @@ function _drawKingFace(c, s, pct = 0) {
     c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15, er*0.45, 0, Math.PI*2);
     c.fillStyle = '#1a1a1a'; c.fill();
     c.beginPath();
-    c.moveTo(sx*tailX, tailY);
-    c.lineTo(sx*pivotX, pivotY);
+    c.moveTo(sx*outerX, outerY);
+    c.lineTo(sx*innerX, innerY);
     c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02; c.lineCap = 'round'; c.stroke();
   }
   /* 口: 制御点Yが端点Y(0.26s)を下回れば「への字」(不満げ)、上回れば「U字」(笑顔)。
