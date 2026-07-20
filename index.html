@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.23';
+const VERSION = 'v4.24';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4766,7 +4766,12 @@ function drawKingCookGauge() {
   }
   ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = Y;
-  ctx.fillText(`こんがり ${Math.round(pct * 100)}%`, mx + mw / 2, my + (mh - bh - 10) / 2 + 4);
+  /* 四捨五入(Math.round)だと99.5%が「100%」と表示されるのに勝利条件
+     （_king.cookPct>=100、_kingReelShoot参照）は満たさず、表示100%なのに
+     クリアにならず追加で1本必要になる不整合が起きる（実機指摘）。切り捨て
+     （Math.floor）にすることで、表示が100%になった時点で必ず実際にも
+     100%（勝利条件成立）であることを保証する */
+  ctx.fillText(`こんがり ${Math.floor(pct * 100)}%`, mx + mw / 2, my + (mh - bh - 10) / 2 + 4);
   ctx.restore();
 }
 
