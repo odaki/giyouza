@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.09';
+const VERSION = 'v4.10';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4427,16 +4427,33 @@ function _kingReelShoot(inputPerfMs) {
   _king.reelIdx++;
   if (_king.reelIdx >= 4) {
     const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
+    let newMarks = [];
     if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
+      const revealedBefore = _king.revealed;
       _kingApplyHit(avgScore);
+      newMarks = _king.marks.slice(revealedBefore, _king.revealed); // 今回新たに焼けた焦げ跡（0〜3個）
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。
-       こんがり=吸い込まれて消える／ハズレ=跳ね返って落ちる */
+       こんがり=実際に今回焼けた焦げ跡の位置へ着地先を上書きしてから吸い込ませる
+       （文字が飛んだ先と焦げの位置が一致しないという実機指摘で追加。焦げ跡は
+       最大3個・文字は4体のため、焦げ跡の数より多い分は同じ焦げ跡を使い回す。
+       焦げ跡が0個＝score=0の稀なケースはボス中心付近の元の着地点のまま）
+       ハズレ=跳ね返って落ちる（着地先はそのまま） */
     const resolveAs = matched ? 'stick' : 'bounce';
-    for (const f of _kingCharFlights) if (f.resolve === null) f.resolve = resolveAs;
+    const unresolved = _kingCharFlights.filter(f => f.resolve === null);
+    unresolved.forEach((f, i) => {
+      if (resolveAs === 'stick' && newMarks.length > 0) {
+        const m = newMarks[i % newMarks.length];
+        const jx = (Math.random() - 0.5) * _BOSS_S * 0.06;
+        const jy = (Math.random() - 0.5) * _BOSS_S * 0.06;
+        f.tx = _king.dbx + m.lx * _king.dscale + jx;
+        f.ty = _king.dby + m.ly * _king.dscale + jy;
+      }
+      f.resolve = resolveAs;
+    });
   }
 }
 
