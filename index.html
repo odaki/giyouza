@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.21';
+const VERSION = 'v4.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -148,13 +148,20 @@ const GIGIGIGI = ['ギ', 'ギ', 'ギ', 'ギ'];  // 小当たり③
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 小当たり④
 
 const WR  = IS_PORTRAIT ? 66  : 95;
-const KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（通常ホイールより小さい）
+/* KING_WR: こんがりミニリール半径。let なのは縦画面で_initBossBattle実行時に
+   横幅いっぱいへ動的に広げ直すため（実機要望: 「小さすぎる、左右上部の
+   アイコン部を除いた横幅と同程度に」。BTN_RIGHT/BTN_SIZEがこの宣言より
+   後で定義されるため、依存する再計算はここではなく_initBossBattle内で行う）。
+   ここでの初期値は横画面（常にこのまま）およびBTN_*定義前の暫定値 */
+let KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（通常ホイールより小さい）
+const KING_REEL_GAP = 10; // 縦画面: 的同士の隙間(px)。BTN_M/BTN_GAPと同じ値で統一
 /* こんがりリール結果文字（的の下に表示）: フォントサイズは的の大きさに比例させる。
    KING_RESULT_H はレイアウト側（_initBossBattle）で確保する縦スペースで、
-   ここで使う値と同じ式にしないと表示がゲージ枠にはみ出す／余白が余る */
+   ここで使う値と同じ式にしないと表示がゲージ枠にはみ出す／余白が余る。
+   KING_WR 同様、縦画面では_initBossBattle内で再計算される */
 const KING_RESULT_GAP  = 6;
-const KING_RESULT_FONT = Math.round(KING_WR * 0.55);
-const KING_RESULT_H    = KING_RESULT_GAP + KING_RESULT_FONT + 4;
+let KING_RESULT_FONT = Math.round(KING_WR * 0.55);
+let KING_RESULT_H    = KING_RESULT_GAP + KING_RESULT_FONT + 4;
 /* こんがりリールの文字配分（%）: 4本の的それぞれが独立に、狙って命中させた
    文字の比率を少しずつ増やしていく（ユーザー要望）。的ごとに履歴を分けて
    持つ必要があるため _king.charWeights（4的ぶんの配分オブジェクト配列）で
@@ -4261,6 +4268,20 @@ function _initBossBattle() {
   lsSaveStats();
   if (typeof OffscreenCanvas === 'undefined' || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
   _buildScorchBlotSprite();
+  /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/
+     ポーズ・ミュート/全画面）を除いた横幅いっぱいに広がるよう動的に決め直す
+     （実機要望: 「小さすぎる、アイコン部を除いた横幅と同程度に」）。
+     直径4個＋隙間3個（KING_REEL_GAP）で埋まる半径を逆算する。
+     KING_RESULT_FONT/Hも半径に比例するため合わせて再計算する
+     （このタイミングでのみ行う理由: BTN_RIGHT/BTN_SIZEがKING_WRの元の
+     宣言より後で定義されるため、モジュールトップレベルでは計算できない） */
+  if (IS_PORTRAIT) {
+    const iconZone = BTN_RIGHT + BTN_SIZE; // 左右上部アイコンが占める帯
+    const availReelW = W - iconZone * 2;
+    KING_WR = (availReelW - KING_REEL_GAP * 3) / 8;
+    KING_RESULT_FONT = Math.round(KING_WR * 0.55);
+    KING_RESULT_H = KING_RESULT_GAP + KING_RESULT_FONT + 4;
+  }
   const half = _bossOC.half, s = _BOSS_S;
   /* _bossOC.oc の物理ピクセルサイズは half*2*_dpr（_buildBossOC 参照）。
      liveOC も同じ物理サイズで確保しないと合成時に左上1/4しか転写されない
@@ -4304,7 +4325,7 @@ function _initBossBattle() {
   const visualTopOffset = s * KING_VISUAL_TOP_RATIO * scale;
   const by = headerBottom + visualTopOffset;
   const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
-  const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? 8 : 12);
+  const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? KING_REEL_GAP : 12);
   /* charWeights: 4的ぶんの文字配分（%）。的ごとに独立管理し、狙って命中させた
      文字の比率を毎回少しずつ増やしていく（_adjustKingCharWeight）。初期値は
      4文字均等の25%（ユーザー要望） */
