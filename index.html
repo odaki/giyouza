@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.34';
+const VERSION = 'v4.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4184,15 +4184,27 @@ function _kingBattleEnd() {
    誕生演出（ギヨウザが収束してキングになる）の逆再生イメージで、キングの姿が
    ふつうのギヨウザ群へ弾け散り、そのあと誕生演出と同じ台詞スタイルで
    メッセージを出してから復帰する（ユーザー要望） */
+/* 誕生演出（_updateBossOmen step5: バラバラのギヨウザが中心へ収束してキングになる）
+   の「純粋な逆回し」（ユーザー要望: 重力落下ではなく、渦を巻きながら中心から
+   外へ拡散していく、収束演出そのものの巻き戻しにしたい）。
+   同じ中心・同じ半径・同じ収束係数・同じフレーム数を使い、1フレームごとの
+   更新式を厳密に逆算する:
+     収束(forward): pos = c + (pos-c)*(1-K)  ⇔  拡散(reverse): pos = c + (pos-c)/(1-K)
+   これを110フレーム続けると、収束後に残るごく小さな半径(startR)から
+   出現時の半径R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する。 */
+const _DEFEAT_OUTRO_K = 0.06;      // _updateBossOmen step5 の収束係数と同値
+const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
+
 function _startBossDefeatOutro() {
-  const cx = _king ? _king.dbx : W / 2, cy = _king ? _king.dby : H / 2;
+  const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
+  const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
+  const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
   const items = [];
-  for (let i = 0; i < 36; i++) {
-    const ang = Math.random() * Math.PI * 2;
-    const spd = 3 + Math.random() * 6;
-    items.push(makeItem(cx, cy, Math.cos(ang) * spd, Math.sin(ang) * spd - 2));
+  for (let i = 0; i < 44; i++) {
+    const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
+    items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
-  _defeatOutro = { step: 0, timer: 0, items };
+  _defeatOutro = { step: 0, timer: 0, items, cx, cy };
   _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
   phase = 'bossDefeatOutro';
   playSE('boss_flash');
@@ -4202,15 +4214,15 @@ function _updateBossDefeatOutro() {
   const o = _defeatOutro;
   if (!o) { phase = 'idle'; return; }
   o.timer++;
-  /* 弾け散るギヨウザ: 誕生演出の収束（_updateBossOmen step5）と対になる簡易物理
-     （重力のみ。地面衝突は扱わず、画面外へ出ても表示を続けフェードで消す） */
+  /* step5の収束式 pos=c+(pos-c)*(1-K) を厳密に逆算した拡散式（重力は使わない） */
+  const inv = 1 / (1 - _DEFEAT_OUTRO_K);
   for (const g of o.items) {
-    g.vy += 0.22;
-    g.x += g.vx; g.y += g.vy;
-    g.rot += g.rotSpd;
+    g.x = o.cx + (g.x - o.cx) * inv;
+    g.y = o.cy + (g.y - o.cy) * inv;
+    g.rot -= 0.15; // step5の回転(+0.15)を逆再生
   }
   if (o.step === 0) {
-    if (o.timer > 55) { o.step = 1; o.timer = 0; }
+    if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
   } else if (o.step >= 1 && o.step <= _DEFEAT_OUTRO_LINES.length) {
     if (o.timer > _OMEN_LINE_FRAMES) { o.step++; o.timer = 0; }
   }
