@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.41';
+const VERSION = 'v4.42';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -914,7 +914,9 @@ let audioCtx = null;
 let _pendingInitGame = false; // touchstart で START ボタンを検出し touchend で initGame() するためのフラグ
 let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
+let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版）ループバッファ
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
+let _bgmIsBoss = false;     // 現在鳴っているのがboss用バッファかどうか（startBGMTape参照）
 let bgmPendingStart = false;// バッファ未完時にstartBGMが呼ばれた場合のフラグ
 let bgmRestartTimer = null; // SE後のBGM再開pending timer（stopBGMでキャンセル）
 let masterGain = null;      // 全音声の親gainノード（ミュート制御）
@@ -1138,6 +1140,12 @@ function getAudioCtx() {
         startBGM();
       }
     }).catch(e => { console.warn('BGM render failed:', e); });
+    /* ボス戦用（暗黒版）バッファも並行してレンダリング。通常BGMと独立に
+       完了するため、起動タイミングは_initBossBattle側でbossBgmBufferの
+       有無を確認する（未完なら通常BGMで代用。startBossBGMTape参照） */
+    renderBGMBuffer(audioCtx.sampleRate, BGM_BASS_BOSS).then(buf => {
+      bossBgmBuffer = buf;
+    }).catch(e => { console.warn('Boss BGM render failed:', e); });
     /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
        resume()後に値が確定するので少し待って再計測 */
     _updateBeatDisplayAdvance();
@@ -1320,6 +1328,21 @@ const BGM_BASS = [
   ['C',3,0.28], null, ['E',3,0.22], null,
   ['G',3,0.22], null, ['C',3,0.30], null,
 ];
+/* ボス戦BGM用ベースライン（暗黒版）。CメジャーペンタトニックとAマイナー
+   ペンタトニックは構成音が同一(C D E G A)のため、メロディ・ハイハット・
+   キックはBGM_MELたちをそのまま流用し、ベースラインだけ核をCからAへ
+   組み替えることで「同じ曲の暗黒版」を作る（ユーザー提案の設計方針）。
+   BGM_BASSの各ステップをCメジャーペンタトニックの度数（C=1,D=2,E=3,G=4,A=5）
+   で読み替え(1,4,5,4,1,3,4,1)、同じ度数列をAを1とする並び(A=1,C=2,D=3,E=4,G=5)
+   に適用するとA,E,G,E,A,D,E,Aになる。オクターブも1つ下げて重心を低くし、
+   再生レート0.9倍（BOSS_BGM_RATE）と合わせて重さを出す */
+const BGM_BASS_BOSS = [
+  ['A',2,0.30], null, ['E',2,0.22], null,
+  ['G',2,0.24], null, ['E',2,0.22], null,
+  ['A',2,0.30], null, ['D',2,0.22], null,
+  ['E',2,0.22], null, ['A',2,0.32], null,
+];
+const BOSS_BGM_RATE = 0.9;
 /* ハイハット: 偶数ステップ=強, 奇数=弱 */
 const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
                  0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
@@ -1330,8 +1353,10 @@ const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
 const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
-/* ── BGMループをオフラインレンダリングしてAudioBufferを返す ── */
-async function renderBGMBuffer(sampleRate) {
+/* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
+   bassArr差し替えでボス戦用暗黒版（BGM_BASS_BOSS）も同じ関数で生成できる
+   （メロディ・ハイハット・キックは共通のため引数化はベースラインのみ） */
+async function renderBGMBuffer(sampleRate, bassArr = BGM_BASS) {
   const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
   const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
   const dest      = offCtx.destination;
@@ -1340,7 +1365,7 @@ async function renderBGMBuffer(sampleRate) {
     const dur = BGM_BEAT * 0.5;
     const mel = BGM_MEL[s];
     if (mel) playOsc(offCtx, 'triangle', noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06, null, null, dest);
-    const bas = BGM_BASS[s];
+    const bas = bassArr[s];
     if (bas) playOsc(offCtx, 'sine',     noteHz(bas[0], bas[1]), t, dur * 1.6,  bas[2], 0.10, null, null, dest);
     playNoise(offCtx, t, 0.04, BGM_HAT[s], 8000, dest);
     if (BGM_KICK.has(s)) {
@@ -1368,11 +1393,11 @@ function _destroyBGMSource() {
   }
 }
 
-function _createBGMSource(startRate = 1.0) {
-  if (!audioCtx || !bgmBuffer) return null;
+function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
+  if (!audioCtx || !buffer) return null;
   _destroyBGMSource();
   const src      = audioCtx.createBufferSource();
-  src.buffer     = bgmBuffer;
+  src.buffer     = buffer;
   src.loop       = true;
   src.loopEnd    = BGM_LOOP_DUR;
   src.playbackRate.value = startRate;
@@ -1470,7 +1495,11 @@ function startBGMTape(durationMs = 1400) {
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   const t = audioCtx.currentTime;
-  if (bgmSource) {
+  /* ボスBGM（暗黒版バッファ）で鳴っている場合は既存ソースを使い回せない
+     （AudioBufferSourceNodeのbufferはstart()前しか差し替えられないため）。
+     その場合は既存ソースの現在レートを引き継ぎつつ、通常バッファで
+     必ず新規に作り直す（_bgmIsBoss、startBossBGMTape参照） */
+  if (bgmSource && !_bgmIsBoss) {
     /* 極低速で回り続けているソースを現在位置からeaseInで加速 */
     const curRate = _getBgmRateJS(); // .value は自動化中に正しい値を返さないため JS 側で取得
     bgmSource.playbackRate.cancelScheduledValues(t);
@@ -1479,19 +1508,45 @@ function startBGMTape(durationMs = 1400) {
       _tapeRateCurve(curRate, 1.0, 'easeIn'), t, durationMs / 1000);
     _setBgmRateJS(curRate, 1.0, t, durationMs / 1000, 'easeIn');
   } else {
-    /* フォールバック: ソースが消えていた場合は新規作成してeaseIn加速 */
+    /* フォールバック: ソースが消えていた場合、またはボスBGM再生中の場合は
+       通常バッファで新規作成してeaseIn加速（ボスBGMの場合は現在レートから
+       引き継ぐことでテープの繋がりを自然にする） */
     if (!bgmBuffer) return;
-    const src = _createBGMSource(0.001);
+    const startRate = bgmSource ? _getBgmRateJS() : 0.001;
+    const src = _createBGMSource(startRate, bgmBuffer);
     if (!src) return;
     src.playbackRate.setValueCurveAtTime(
-      _tapeRateCurve(0.001, 1.0, 'easeIn'), t, durationMs / 1000);
-    _setBgmRateJS(0.001, 1.0, t, durationMs / 1000, 'easeIn');
+      _tapeRateCurve(startRate, 1.0, 'easeIn'), t, durationMs / 1000);
+    _setBgmRateJS(startRate, 1.0, t, durationMs / 1000, 'easeIn');
     src.start();
     bgmPhaseRef = t + durationMs / 1000; // 加速完了時点を拍グリッド基準にする
     _bgmAccumReset(); // 新規ソースなので積算位置もリセット
     grayRateCur = 0.001; // フォールバック時はグレースケール現在値もリセット
+    _bgmIsBoss = false;
   }
   grayRateTarget = 1.0; // グレースケールを解除方向へアニメーション
+}
+
+/* ボス戦BGM（暗黒版バッファ）へ切り替え、レートをeaseInでBOSS_BGM_RATEまで
+   持っていく。バッファの差し替えを伴うため既存ソースは使い回さず必ず
+   作り直す（レンダリング未完でbossBgmBufferがまだ無い場合は通常BGMで代用） */
+function startBossBGMTape(durationMs = 1400) {
+  if (!audioCtx || !bossBgmBuffer) { startBGMTape(durationMs); return; }
+  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  const t = audioCtx.currentTime;
+  const startRate = bgmSource ? _getBgmRateJS() : 0.001;
+  const src = _createBGMSource(startRate, bossBgmBuffer);
+  if (!src) return;
+  src.playbackRate.setValueCurveAtTime(
+    _tapeRateCurve(startRate, BOSS_BGM_RATE, 'easeIn'), t, durationMs / 1000);
+  _setBgmRateJS(startRate, BOSS_BGM_RATE, t, durationMs / 1000, 'easeIn');
+  src.start();
+  bgmPhaseRef = t + durationMs / 1000;
+  _bgmAccumReset();
+  grayRateCur = 0.001;
+  grayRateTarget = 1.0;
+  _bgmIsBoss = true;
 }
 
 /* BET額に対応するスローハンドBGM速度比率を返す
@@ -4556,7 +4611,7 @@ function _initBossBattle() {
   _kingLasers = [];
   _kingCharFlights = [];
   phase = 'boss';
-  startBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰）
+  startBossBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰、ボス戦は暗黒版BGM）
 }
 
 /* ボス本体の描画元キャンバスを返す（素のスプライト＋全身トーン＋フェード中の焦げ跡）。
