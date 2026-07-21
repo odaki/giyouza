@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.35';
+const VERSION = 'v4.36';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2704,6 +2704,8 @@ function update() {
   /* ────────────────────────────────────────────────
      大ゲームスコープ: phaseをまたいで常時更新すべきもの
      ──────────────────────────────────────────────── */
+  /* 画面全体フェード（phase切り替えの継ぎ目を暗転でつなぐ演出。_startScreenFade参照） */
+  if (_screenFade) _updateScreenFade();
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
@@ -4195,6 +4197,40 @@ function _kingBattleEnd() {
 const _DEFEAT_OUTRO_K = 0.06;      // _updateBossOmen step5 の収束係数と同値
 const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
 
+/* 画面全体フェード（汎用）: phase切り替えの継ぎ目を暗転でつなぐ演出。
+   ユーザー要望: 「かえっていった……」のあと通常モードへ戻る画面をフェードアウト・
+   フェードインでつなぎ、余韻を残したい。暗転が最大になった瞬間にonMidを呼んで
+   実際のphase切り替え（_kingBattleEnd等の重い処理）を行い、その後フェードインする
+   ことで、切り替えの瞬間を暗闇の中に隠す（どのphaseから呼んでも使える汎用実装） */
+const _SCREEN_FADE_FRAMES = 35;
+let _screenFade = null; // { stage:'out'|'in', timer, alpha, onMid }
+function _startScreenFade(onMid, frames = _SCREEN_FADE_FRAMES) {
+  if (_screenFade) return; // 多重起動防止（連打でフェードが再スタートしないように）
+  _screenFade = { stage: 'out', timer: 0, frames, alpha: 0, onMid };
+}
+function _updateScreenFade() {
+  const f = _screenFade;
+  f.timer++;
+  if (f.stage === 'out') {
+    f.alpha = Math.min(1, f.timer / f.frames);
+    if (f.timer >= f.frames) {
+      f.onMid?.();
+      f.stage = 'in'; f.timer = 0;
+    }
+  } else {
+    f.alpha = Math.max(0, 1 - f.timer / f.frames);
+    if (f.timer >= f.frames) _screenFade = null;
+  }
+}
+function _drawScreenFade() {
+  if (!_screenFade || _screenFade.alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = _screenFade.alpha;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
 function _startBossDefeatOutro() {
   const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
   const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
@@ -5603,6 +5639,9 @@ function draw() {
   }
 
   ctx.restore(); // end shake
+
+  /* 画面全体フェード: 最前面・シェイク変形の外で描く（余韻を大切にした暗転つなぎ） */
+  _drawScreenFade();
 }
 
 /* ════════════════ 描画関数群 ════════════════ */
@@ -7336,8 +7375,12 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossDefeatOutro') {
-    /* 誕生予告のstep7と同じ考え方: 最終台詞まで進み、演出が安定してからのタップで復帰 */
-    if (_defeatOutro && _defeatOutro.step >= _DEFEAT_OUTRO_LINES.length && _defeatOutro.timer > 20) _kingBattleEnd();
+    /* 誕生予告のstep7と同じ考え方: 最終台詞まで進み、演出が安定してからのタップで復帰。
+       復帰は即切り替えず、画面フェードで継ぎ目を隠してから_kingBattleEndを呼ぶ
+       （ユーザー要望: 余韻を大切にしたフェードアウト・フェードインでつなぎたい） */
+    if (_defeatOutro && _defeatOutro.step >= _DEFEAT_OUTRO_LINES.length && _defeatOutro.timer > 20) {
+      _startScreenFade(() => _kingBattleEnd());
+    }
     return;
   }
   if (phase === 'done') {
