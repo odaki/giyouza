@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.42';
+const VERSION = 'v4.43';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1143,7 +1143,7 @@ function getAudioCtx() {
     /* ボス戦用（暗黒版）バッファも並行してレンダリング。通常BGMと独立に
        完了するため、起動タイミングは_initBossBattle側でbossBgmBufferの
        有無を確認する（未完なら通常BGMで代用。startBossBGMTape参照） */
-    renderBGMBuffer(audioCtx.sampleRate, BGM_BASS_BOSS).then(buf => {
+    renderBGMBuffer(audioCtx.sampleRate, BGM_BASS_BOSS, true).then(buf => {
       bossBgmBuffer = buf;
     }).catch(e => { console.warn('Boss BGM render failed:', e); });
     /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
@@ -1343,6 +1343,13 @@ const BGM_BASS_BOSS = [
   ['E',2,0.22], null, ['A',2,0.32], null,
 ];
 const BOSS_BGM_RATE = 0.9;
+/* ボス戦BGM専用: 和太鼓風の合いの手（ユーザー要望: 緊張感を煽る効果音パート）。
+   キックは偶数ステップを全て占めているため、合いの手は奇数ステップ（キックと
+   重ならない8分裏）に配置する。各半ループ（8ステップ）につき、シンコペーション
+   の強打を1発（3・11）、ループ終端に頭打ちへ向かう「ドコドコ」の2連（13・15）
+   を置く構成。通常BGMには適用しない（renderBGMBuffer の useTaiko 引数で制御） */
+const BGM_TAIKO_STRONG   = new Set([3, 11]);
+const BGM_TAIKO_FLOURISH = new Set([13, 15]);
 /* ハイハット: 偶数ステップ=強, 奇数=弱 */
 const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
                  0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
@@ -1353,10 +1360,36 @@ const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
 const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
+/* 和太鼓風の合いの手（低音オシレーターのピッチダウンで模した打撃音。
+   キック用のシンセ手法を流用しつつ、キックより低い開始ピッチ・長めの
+   余韻にして「ドン」という締太鼓の響きに寄せている。strong=強打、
+   flourish=ループ終端の素早い2連用に短め・やや高めに調整） */
+function _playTaikoHit(ctx, t, dest, strong) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain); gain.connect(dest);
+  osc.type = 'sine';
+  if (strong) {
+    osc.frequency.setValueAtTime(130, t);
+    osc.frequency.exponentialRampToValueAtTime(50, t + 0.14);
+    gain.gain.setValueAtTime(0.5, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
+    osc.start(t); osc.stop(t + 0.34);
+  } else {
+    osc.frequency.setValueAtTime(170, t);
+    osc.frequency.exponentialRampToValueAtTime(70, t + 0.07);
+    gain.gain.setValueAtTime(0.32, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    osc.start(t); osc.stop(t + 0.20);
+  }
+}
+
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
    bassArr差し替えでボス戦用暗黒版（BGM_BASS_BOSS）も同じ関数で生成できる
-   （メロディ・ハイハット・キックは共通のため引数化はベースラインのみ） */
-async function renderBGMBuffer(sampleRate, bassArr = BGM_BASS) {
+   （メロディ・ハイハット・キックは共通のため引数化はベースラインのみ）。
+   useTaiko=trueでBGM_TAIKO_STRONG/FLOURISHの合いの手を追加する
+   （ボス戦専用。ユーザー要望: 緊張感を煽る効果音パート） */
+async function renderBGMBuffer(sampleRate, bassArr = BGM_BASS, useTaiko = false) {
   const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
   const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
   const dest      = offCtx.destination;
@@ -1378,6 +1411,10 @@ async function renderBGMBuffer(sampleRate, bassArr = BGM_BASS) {
       gain.gain.setValueAtTime(0.45, t);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
       osc.start(t); osc.stop(t + 0.21);
+    }
+    if (useTaiko) {
+      if (BGM_TAIKO_STRONG.has(s))   _playTaikoHit(offCtx, t, dest, true);
+      else if (BGM_TAIKO_FLOURISH.has(s)) _playTaikoHit(offCtx, t, dest, false);
     }
   }
   return offCtx.startRendering();
