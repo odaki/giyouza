@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.38';
+const VERSION = 'v4.39';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4267,10 +4267,15 @@ function _updateBossDefeatOutro() {
   }
   if (o.step === 0) {
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
-  } else if (o.step >= 1 && o.step <= _DEFEAT_OUTRO_LINES.length) {
+  } else if (o.step < _DEFEAT_OUTRO_LINES.length) {
     if (o.timer > _OMEN_LINE_FRAMES) { o.step++; o.timer = 0; }
+  } else if (o.timer > _OMEN_LINE_FRAMES) {
+    /* 最終行まで表示しきったら、タップ待ちにせず時間経過で自動的に通常モードへ
+       戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
+       _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレーム
+       この条件を満たし続けて構わない */
+    _startScreenFade(() => _kingBattleEnd());
   }
-  /* 最終ステップ: メッセージ表示済み、タップ待ち（handleGameClickが_kingBattleEndを呼ぶ） */
 }
 
 function drawBossOmen() {
@@ -5119,7 +5124,8 @@ function drawBossDefeatOutro() {
     }
     ctx.globalAlpha = 1;
   }
-  if (o.step >= _DEFEAT_OUTRO_LINES.length) _drawBottomPillBadge('CONTINUE');
+  /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない
+     （ユーザー要望） */
   ctx.restore();
 }
 
@@ -7390,12 +7396,9 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossDefeatOutro') {
-    /* 誕生予告のstep7と同じ考え方: 最終台詞まで進み、演出が安定してからのタップで復帰。
-       復帰は即切り替えず、画面フェードで継ぎ目を隠してから_kingBattleEndを呼ぶ
-       （ユーザー要望: 余韻を大切にしたフェードアウト・フェードインでつなぎたい） */
-    if (_defeatOutro && _defeatOutro.step >= _DEFEAT_OUTRO_LINES.length && _defeatOutro.timer > 20) {
-      _startScreenFade(() => _kingBattleEnd());
-    }
+    /* タップ待ちにせず時間経過で自動的に通常モードへ戻る（ユーザー要望:
+       CONTINUE待ちは不要、時間で進んで良い）。復帰そのものは_updateBossDefeatOutro
+       が_startScreenFade経由で行うため、このphase中の入力は無視する */
     return;
   }
   if (phase === 'done') {
