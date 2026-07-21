@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.36';
+const VERSION = 'v4.37';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2405,6 +2405,14 @@ function drawKingReel(w, active) {
 
 /* ════════════════ Update ════════════════ */
 function update() {
+  /* 画面全体フェード: 関数先頭で最優先に更新する。boss系の各phase分岐は末尾で
+     早期returnするため（bossDefeatOutro等）、後方の「phaseをまたいで常時更新
+     すべきもの」セクションに置くとその早期returnで一切実行されず、フェードが
+     永久に止まってしまう不具合があった（実機指摘: フェードアウト後CONTINUEが
+     表示されたまま入力が効かない＝_screenFade.timerが一度も進まずonMidが
+     呼ばれずphaseが切り替わらなかったのが原因）。関数の最初に置くことで
+     どのphase分岐が早期returnしても必ず1回だけ実行されるようにする。 */
+  if (_screenFade) _updateScreenFade();
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
@@ -2704,8 +2712,8 @@ function update() {
   /* ────────────────────────────────────────────────
      大ゲームスコープ: phaseをまたいで常時更新すべきもの
      ──────────────────────────────────────────────── */
-  /* 画面全体フェード（phase切り替えの継ぎ目を暗転でつなぐ演出。_startScreenFade参照） */
-  if (_screenFade) _updateScreenFade();
+  /* 画面全体フェードは関数先頭（_updateScreenFade呼び出し箇所参照）で更新済み。
+     ここに置くとboss系phaseの早期returnで実行されなくなるため移動した */
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
