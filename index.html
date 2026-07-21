@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.39';
+const VERSION = 'v4.40';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2413,6 +2413,80 @@ function update() {
      呼ばれずphaseが切り替わらなかったのが原因）。関数の最初に置くことで
      どのphase分岐が早期returnしても必ず1回だけ実行されるようにする。 */
   if (_screenFade) _updateScreenFade();
+  /* ────────────────────────────────────────────────
+     大ゲームスコープ: phaseをまたいで常時更新すべきもの
+     （↑の_screenFadeと同じ理由でここに置く。以前は関数末尾寄りに置いていたが、
+     bossOmen/boss/bossVictory/bossDefeat/bossDefeatOutro/tapestart/startupの
+     各phase分岐がいずれも早期returnする構造のため、そこに置くと実際には
+     「phaseをまたいで」更新されず、それらのphase中は完全に凍結していた
+     （実機指摘: FEVER終了バナーの枠やlaunchFireworksの花火の破片が、
+     キングギヨウザ演出の画面にそのまま残り続ける不具合。原因は花火パーティクル
+     の物理更新(swapRemoveによる寿命切れ削除を含む)とフィーバー終了バナー
+     タイマーの減算がどちらもここにあり、boss系phaseの早期returnで一度も
+     実行されなくなっていたため、寿命が尽きて消えるはずの物が永久に描画され
+     続けていた。_screenFadeで一度発覚した不具合と同一クラスのため、
+     このセクション全体を関数先頭へ移動した＝水平展開） */
+  /* particles: 花火・命中インパクト等の共通パーティクル物理 */
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.22; p.vx *= 0.985;
+    p.r  *= 0.97; p.life--;
+  }
+  swapRemove(particles, _predParticle, _deadify);
+  /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
+  for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
+  for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
+  swapRemove(missPopups,   _predTimer);
+  swapRemove(payoutPopups, _predTimer);
+  /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る。
+     こんがり以外の実績が未達成のうちは、まだ出現できないため予兆も出さない
+     （水平展開: _maybeStartBossOmenと同じ条件を予兆側にも適用） */
+  if (!_omenGhost && (phase === 'idle' || phase === 'reach') && !isFever &&
+      kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO &&
+      _allAchExceptKongariDone() &&
+      Math.random() < 1 / 900) {
+    _spawnOmenGhost();
+  }
+  if (_omenGhost) {
+    const g = _omenGhost;
+    g.x += g.vx;
+    g.wobble += 0.04;
+    g.y += Math.sin(g.wobble) * 0.5;
+    if ((g.vx > 0 && g.x > W + 60) || (g.vx < 0 && g.x < -60)) {
+      _freeGhostCanvases.push(g.oc);
+      _omenGhost = null;
+    }
+  }
+  /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
+  if (items.length > 0 && phase !== 'done') updateItems();
+  /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
+  if (feverStartBannerTimer > 0) {
+    if (isGameOver) feverStartBannerTimer = 0;
+    else            feverStartBannerTimer--;
+  }
+  /* フィーバー終了バナータイマー（reason は期限切れ・ゲームオーバー時に null へ） */
+  if (feverEndBannerTimer > 0) {
+    if (isGameOver) {
+      feverEndBannerTimer = 0; feverEndBannerReason = null;
+    } else {
+      feverEndBannerTimer--;
+      if (feverEndBannerTimer === 0) feverEndBannerReason = null;
+    }
+  }
+  /* 実績バナータイマー（phaseに関係なく常時更新） */
+  if (achBannerTimer > 0) {
+    achBannerTimer--;
+    if (achBannerTimer === 0) achBannerCurrent = null;
+  } else if (achBannerQueue.length > 0) {
+    achBannerCurrent = achBannerQueue.shift();
+    achBannerTimer   = 200;
+  }
+  /* スローランプ完了: タイムスタンプをリセット
+     suspended 中は currentTime が止まるため、その場合も即リセットして永久ロックを防ぐ */
+  if (slowRampEndTime > 0 && audioCtx &&
+      (audioCtx.state === 'suspended' || audioCtx.currentTime >= slowRampEndTime)) {
+    slowRampEndTime = 0;
+  }
   /* BGM音声バッファ積算位置を毎フレーム更新（getBeatPulse呼び出し有無に依存しないよう
      update先頭で行う。jackpot SE中など phase='done'でも正確に追跡できる） */
   _bgmAccumStep();
@@ -2659,15 +2733,6 @@ function update() {
     }
   }
 
-  /* particles */
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy;
-    p.vy += 0.22; p.vx *= 0.985;
-    p.r  *= 0.97; p.life--;
-  }
-  swapRemove(particles, _predParticle, _deadify);
-
-
   if (phase === 'done') {
     endTimer++;
     /* BPM=152: 1拍≈24f / 2拍≈48f / 4拍≈95f / 8拍≈190f
@@ -2708,66 +2773,6 @@ function update() {
     if (items.length > 0)                    updateItems();
     if (hitType === 'gizagiza' && endTimer % 120 === 60) launchGizaFireworks();
     if (_activeEffect?.update) _activeEffect.update();
-  }
-  /* ────────────────────────────────────────────────
-     大ゲームスコープ: phaseをまたいで常時更新すべきもの
-     ──────────────────────────────────────────────── */
-  /* 画面全体フェードは関数先頭（_updateScreenFade呼び出し箇所参照）で更新済み。
-     ここに置くとboss系phaseの早期returnで実行されなくなるため移動した */
-  /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
-  for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
-  for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
-  swapRemove(missPopups,   _predTimer);
-  swapRemove(payoutPopups, _predTimer);
-  /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る。
-     こんがり以外の実績が未達成のうちは、まだ出現できないため予兆も出さない
-     （水平展開: _maybeStartBossOmenと同じ条件を予兆側にも適用） */
-  if (!_omenGhost && (phase === 'idle' || phase === 'reach') && !isFever &&
-      kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO &&
-      _allAchExceptKongariDone() &&
-      Math.random() < 1 / 900) {
-    _spawnOmenGhost();
-  }
-  if (_omenGhost) {
-    const g = _omenGhost;
-    g.x += g.vx;
-    g.wobble += 0.04;
-    g.y += Math.sin(g.wobble) * 0.5;
-    if ((g.vx > 0 && g.x > W + 60) || (g.vx < 0 && g.x < -60)) {
-      _freeGhostCanvases.push(g.oc);
-      _omenGhost = null;
-    }
-  }
-  /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
-  if (items.length > 0 && phase !== 'done') updateItems();
-
-  /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
-  if (feverStartBannerTimer > 0) {
-    if (isGameOver) feverStartBannerTimer = 0;
-    else            feverStartBannerTimer--;
-  }
-  /* フィーバー終了バナータイマー（reason は期限切れ・ゲームオーバー時に null へ） */
-  if (feverEndBannerTimer > 0) {
-    if (isGameOver) {
-      feverEndBannerTimer = 0; feverEndBannerReason = null;
-    } else {
-      feverEndBannerTimer--;
-      if (feverEndBannerTimer === 0) feverEndBannerReason = null;
-    }
-  }
-  /* 実績バナータイマー（phaseに関係なく常時更新） */
-  if (achBannerTimer > 0) {
-    achBannerTimer--;
-    if (achBannerTimer === 0) achBannerCurrent = null;
-  } else if (achBannerQueue.length > 0) {
-    achBannerCurrent = achBannerQueue.shift();
-    achBannerTimer   = 200;
-  }
-  /* スローランプ完了: タイムスタンプをリセット
-     suspended 中は currentTime が止まるため、その場合も即リセットして永久ロックを防ぐ */
-  if (slowRampEndTime > 0 && audioCtx &&
-      (audioCtx.state === 'suspended' || audioCtx.currentTime >= slowRampEndTime)) {
-    slowRampEndTime = 0;
   }
 }
 
