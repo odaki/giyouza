@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.32';
+const VERSION = 'v4.33';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -743,7 +743,11 @@ const ACHIEVEMENTS = [
   { id:'comeback',      icon:'🔥', name:'不死鳥',             desc:'所持10以下から200以上に大逆転した'   },
   { id:'big_bet_win',   icon:'🃏', name:'天運',               desc:'ベット100で大当たりを達成した'       },
   { id:'all_medium',    icon:'🏆', name:'全種制覇',           desc:'全9種の当たりを達成した'             },
+  /* 最後の実績（ユーザー要望）: これ以外の全実績を達成しないとキングギヨウザ
+     モードへ入れない（_maybeStartBossOmen参照）ため、必然的に最後に解除される */
+  { id:'kongari',       icon:'🥟', name:'こんがり',           desc:'ギヨウザをこんがり焼いた'            },
 ];
+const KONGARI_ACH_ID = 'kongari';
 const LS_ACH    = 'game_ach';
 const LS_MED    = 'game_med';
 const LS_STATS  = 'game_stats';
@@ -2705,9 +2709,12 @@ function update() {
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
-  /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る */
+  /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る。
+     こんがり以外の実績が未達成のうちは、まだ出現できないため予兆も出さない
+     （水平展開: _maybeStartBossOmenと同じ条件を予兆側にも適用） */
   if (!_omenGhost && (phase === 'idle' || phase === 'reach') && !isFever &&
       kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO &&
+      _allAchExceptKongariDone() &&
       Math.random() < 1 / 900) {
     _spawnOmenGhost();
   }
@@ -3974,7 +3981,7 @@ let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト�
    戻る前のつなぎ演出（ユーザー要望）。誕生演出（バラバラのギヨウザが収束して
    キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
    弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
-const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'ギヨウザに もどった……'];
+const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'ギヨウザに かえっていった……'];
 let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
 
 /* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
@@ -4080,9 +4087,17 @@ function _buildBossOC() {
   _bossOC = { oc, bodyOC, faceOC, half };
 }
 
+/* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部。
+   ユーザー要望: king値の蓄積だけでなく、他の実績を全て達成していることも
+   条件に足す。これにより「こんがり」は必然的に最後に解除される実績になる） */
+function _allAchExceptKongariDone() {
+  return ACHIEVEMENTS.every(a => a.id === KONGARI_ACH_ID || unlockedAch[a.id]);
+}
+
 /* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
 function _maybeStartBossOmen() {
   if (kingGyozaMeter < KING_GYOZA_THRESHOLD) return false;
+  if (!_allAchExceptKongariDone()) return false;
   if (isFever || feverPending || isGameOver) return false;
   _startBossOmen();
   return true;
@@ -4892,6 +4907,7 @@ function _startBossVictory() {
   if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
   launchFireworks();
   playSE('jackpot');
+  unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績。ユーザー要望）
 }
 
 function _updateBossVictory() {
@@ -4948,6 +4964,11 @@ function drawBossVictory() {
 function _startBossDefeat() {
   phase = 'bossDefeat';
   _bossDefeatTimer = 0;
+  /* 敗北時のking値: 0（振り出しに戻す）ではなく、出現閾値の50%からやり直し
+     にする（ユーザー要望）。戦闘開始時点で_initBossBattleが0にリセット済み
+     のため、ここで上書きする */
+  kingGyozaMeter = KING_GYOZA_THRESHOLD * 0.5;
+  lsSaveStats();
   if (_king) {
     _king.scale = 1;
     /* 没収額は端数を切り上げる（半分を残すのではなく半分を取る側を優先）。
