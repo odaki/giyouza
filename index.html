@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.40';
+const VERSION = 'v4.41';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -366,8 +366,14 @@ function _itemAlloc() {
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
-/* 落下ギヨウザ（items）専用: 画面外退場をキングギヨウザ蓄積メーターに数えながら返却 */
-const _deadifyCountExit = o => { o._dead = true; kingGyozaMeter++; };
+/* 落下ギヨウザ（items）専用: 画面外退場をキングギヨウザ蓄積メーターに数えながら返却。
+   1トライあたりの加算量はKING_METER_TRIAL_CAPで頭打ちにする（上限到達後も
+   アイテム自体は通常どおり退場する。放置による無限稼ぎ対策、KING_GYOZA_THRESHOLD
+   の宣言部コメント参照） */
+const _deadifyCountExit = o => {
+  o._dead = true;
+  if (_trialKingGain < KING_METER_TRIAL_CAP) { kingGyozaMeter++; _trialKingGain++; }
+};
 /* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
    Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
 function _insertionSortY(a) {
@@ -414,6 +420,16 @@ const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移
 /* ── キングギヨウザ（ボス戦）M1: 蓄積・予兆・出現予告 ── */
 const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
 const KING_OMEN_RATIO      = 0.8;  // 予兆演出（霊の横切り）開始割合
+/* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下し続ける
+   （updateItems参照）。当たり演出はユーザー入力待ちで自動終了しないため、
+   画面を開いたまま放置するだけでアイテムが湧いては画面外へ退場し、
+   king値を際限なく稼げてしまう（ユーザー指摘: チートのようになる）。
+   投下時間そのものに上限を設け（KING_ITEM_SPAWN_MAX_FRAMES）、さらに
+   1トライで加算できるking値にも上限を設ける（KING_METER_TRIAL_CAP）
+   二段構えで、放置による無限稼ぎを塞ぐ（通常プレイのテンポなら
+   どちらの上限にも達しないため体感は変わらない） */
+const KING_ITEM_SPAWN_MAX_FRAMES = 400; // 約6.7秒でリーチ大当たりの継続投下を打ち切る
+const KING_METER_TRIAL_CAP = 60;        // 1トライでking値に加算できる上限
 /* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
 const _KING_DEBUG = (() => {
   const v = parseInt(new URLSearchParams(location.search).get('king'), 10);
@@ -780,6 +796,7 @@ let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
 let jackpotCount = 0; // 大当たり累計回数
 let kingGyozaMeter = 0; // 画面外へ退場した落下ギヨウザ累計（キングギヨウザ蓄積・game_stats永続化）
+let _trialKingGain = 0; // 現在のトライでking値に加算した量（KING_METER_TRIAL_CAPの上限判定用、initで0リセット）
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
@@ -2081,6 +2098,7 @@ function init(fromStartup, fromGameOver) {
   }
   for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
   particles  = [];
+  _trialKingGain = 0; // king値の1トライあたり加算上限カウンタをリセット（KING_METER_TRIAL_CAP参照）
   hitType       = 'none';
   _activeEffect = null;
   endTimer   = 0;
@@ -3019,10 +3037,13 @@ const RMAX_ITEM_R  = 42 * 0.52;
    ・支えを失ったアイテムは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
 function updateItems() {
-  /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ */
+  /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ。
+     当たり演出はユーザー入力待ちで自動終了しないため、投下自体に時間上限を
+     設けて放置し続けても際限なく湧かないようにする（KING_ITEM_SPAWN_MAX_FRAMES
+     宣言部のコメント参照。king値の1トライ加算上限KING_METER_TRIAL_CAPと二段構え） */
   if (isReachJackpot) {
     const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
-    if (endTimer % spawnRate === 0 && items.length < 240) spawnItem();
+    if (endTimer < KING_ITEM_SPAWN_MAX_FRAMES && endTimer % spawnRate === 0 && items.length < 240) spawnItem();
   }
 
   const GRAVITY     = 0.38;
