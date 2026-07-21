@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.37';
+const VERSION = 'v4.38';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5100,10 +5100,17 @@ function drawBossDefeatOutro() {
   ctx.fillRect(0, 0, W, H);
   for (const g of o.items) drawOneItem(g);
   if (o.step >= 1) {
-    /* 台詞演出は誕生予告（drawBossOmen）と同じ見せ方（過去行は薄く残して積む） */
+    /* 台詞演出は誕生予告（drawBossOmen）と同じ見せ方（過去行は薄く残して積む）だが、
+       位置・サイズは別建てにする。誕生予告は4行ぶんの表示領域を見込んで
+       H*0.30始まりにしているが（4行目=キングの登場位置の少し上で終わる想定）、
+       こちらは2行しかなく同じ開始位置だと画面上寄りに偏って見える
+       （実機指摘）。ここでは画面に固定のボスが存在しないぶん表示领域に余裕が
+       あるため、2行の中心が画面中央(H/2)に来るよう配置し、行数が少ない分
+       フォントもひとまわり大きくする */
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const fsL = IS_PORTRAIT ? 22 : 26;
-    const lineY0 = H * 0.30, lineDy = fsL * 2.2;
+    const fsL = IS_PORTRAIT ? 26 : 30;
+    const lineDy = fsL * 2.2;
+    const lineY0 = H / 2 - lineDy / 2; // 2行の中心を画面中央に揃える
     ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
     for (let i = 0; i < o.step && i < _DEFEAT_OUTRO_LINES.length; i++) {
       const isCur = (i === o.step - 1);
