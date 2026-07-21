@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.31';
+const VERSION = 'v4.32';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2481,6 +2481,10 @@ function update() {
     _updateBossDefeat();
     return;
   }
+  if (phase === 'bossDefeatOutro') {
+    _updateBossDefeatOutro();
+    return;
+  }
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
@@ -3966,6 +3970,13 @@ let _omen = null;      // { step, timer, items, flash } 予告演出の状態（
 let _omenGhost = null; // 予兆の霊 { x, y, vx, wobble, oc, sz, cy }
 let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト（初回出現時に生成）
 
+/* こんがりしっぱい（ルーレット破壊・全損には至らない敗北）後、通常モードへ
+   戻る前のつなぎ演出（ユーザー要望）。誕生演出（バラバラのギヨウザが収束して
+   キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
+   弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
+const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'ギヨウザに もどった……'];
+let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
+
 /* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
 function _spawnOmenGhost() {
   if (typeof OffscreenCanvas === 'undefined' && !document.createElement) return;
@@ -4141,6 +4152,8 @@ function _kingBattleEnd() {
   _king = null; _kingLasers = []; _kingCharFlights = [];
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
+  if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
+  _defeatOutro = null;
   /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と
      同じゲームオーバー復帰（フレッシュな60枚での再スタート）にする。
      勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
@@ -4150,6 +4163,43 @@ function _kingBattleEnd() {
   grayRateTarget = 1.0;
   init(false, true);
   phase = 'tapestart';
+}
+
+/* こんがりしっぱい（全損には至らない敗北）から通常モードへ戻る前のつなぎ演出。
+   誕生演出（ギヨウザが収束してキングになる）の逆再生イメージで、キングの姿が
+   ふつうのギヨウザ群へ弾け散り、そのあと誕生演出と同じ台詞スタイルで
+   メッセージを出してから復帰する（ユーザー要望） */
+function _startBossDefeatOutro() {
+  const cx = _king ? _king.dbx : W / 2, cy = _king ? _king.dby : H / 2;
+  const items = [];
+  for (let i = 0; i < 36; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 3 + Math.random() * 6;
+    items.push(makeItem(cx, cy, Math.cos(ang) * spd, Math.sin(ang) * spd - 2));
+  }
+  _defeatOutro = { step: 0, timer: 0, items };
+  _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
+  phase = 'bossDefeatOutro';
+  playSE('boss_flash');
+}
+
+function _updateBossDefeatOutro() {
+  const o = _defeatOutro;
+  if (!o) { phase = 'idle'; return; }
+  o.timer++;
+  /* 弾け散るギヨウザ: 誕生演出の収束（_updateBossOmen step5）と対になる簡易物理
+     （重力のみ。地面衝突は扱わず、画面外へ出ても表示を続けフェードで消す） */
+  for (const g of o.items) {
+    g.vy += 0.22;
+    g.x += g.vx; g.y += g.vy;
+    g.rot += g.rotSpd;
+  }
+  if (o.step === 0) {
+    if (o.timer > 55) { o.step = 1; o.timer = 0; }
+  } else if (o.step >= 1 && o.step <= _DEFEAT_OUTRO_LINES.length) {
+    if (o.timer > _OMEN_LINE_FRAMES) { o.step++; o.timer = 0; }
+  }
+  /* 最終ステップ: メッセージ表示済み、タップ待ち（handleGameClickが_kingBattleEndを呼ぶ） */
 }
 
 function drawBossOmen() {
@@ -4965,6 +5015,30 @@ function drawBossDefeat() {
   ctx.restore();
 }
 
+function drawBossDefeatOutro() {
+  if (phase !== 'bossDefeatOutro' || !_defeatOutro) return;
+  const o = _defeatOutro;
+  ctx.save();
+  ctx.fillStyle = 'rgba(2,4,8,0.7)';
+  ctx.fillRect(0, 0, W, H);
+  for (const g of o.items) drawOneItem(g);
+  if (o.step >= 1) {
+    /* 台詞演出は誕生予告（drawBossOmen）と同じ見せ方（過去行は薄く残して積む） */
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const fsL = IS_PORTRAIT ? 22 : 26;
+    const lineY0 = H * 0.30, lineDy = fsL * 2.2;
+    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
+    for (let i = 0; i < o.step && i < _DEFEAT_OUTRO_LINES.length; i++) {
+      const isCur = (i === o.step - 1);
+      ctx.globalAlpha = isCur ? Math.min(1, o.timer / 20) : 0.5;
+      outText(_DEFEAT_OUTRO_LINES[i], W/2, lineY0 + i*lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (o.step >= _DEFEAT_OUTRO_LINES.length) _drawBottomPillBadge('CONTINUE');
+  ctx.restore();
+}
+
 /* ════════════════ 吉祥雲 ════════════════ */
 /* _drawCloudTo: 任意のコンテキストに雲を描く（OffscreenCanvas 事前描画用）
    drawCloud: メインcanvasへの呼び出し（_staticLayerCanvas が利用可能なら使わない） */
@@ -5222,7 +5296,7 @@ function draw() {
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール（ボス戦闘中は非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat') {
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') {
     for (let i=0;i<4;i++) drawWheel(i);
   }
 
@@ -5265,7 +5339,7 @@ function draw() {
   }
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat') {
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') {
     if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
   }
   drawCoinHeader();
@@ -5314,9 +5388,10 @@ function draw() {
   drawBossBattle();
   drawBossVictory();
   drawBossDefeat();
+  drawBossDefeatOutro();
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat') drawSyncMeter();
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') drawSyncMeter();
   drawSyncJust();
 
   /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
@@ -7220,10 +7295,16 @@ function handleGameClick(inputPerfMs) {
   }
   if (phase === 'bossDefeat') {
     /* 所持ギヨウザが尽きた場合は通常のゲームオーバー（canRestart相当）と
-       同じ待ち時間(45フレーム)にする。それ以外はCONTINUEバッジの表示に
-       合わせて90フレーム待つ（drawBossDefeat参照） */
-    const minWait = coins <= 0 ? 45 : 90;
-    if (_bossDefeatTimer > minWait) _kingBattleEnd();
+       同じ待ち時間(45フレーム)で直接復帰。全損でなければ、通常モードへ戻る前に
+       キングがギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatOutro)を挟む
+       （ユーザー要望）。CONTINUEバッジの表示に合わせて90フレーム待つ（drawBossDefeat参照） */
+    if (coins <= 0) { if (_bossDefeatTimer > 45) _kingBattleEnd(); return; }
+    if (_bossDefeatTimer > 90) _startBossDefeatOutro();
+    return;
+  }
+  if (phase === 'bossDefeatOutro') {
+    /* 誕生予告のstep7と同じ考え方: 最終台詞まで進み、演出が安定してからのタップで復帰 */
+    if (_defeatOutro && _defeatOutro.step >= _DEFEAT_OUTRO_LINES.length && _defeatOutro.timer > 20) _kingBattleEnd();
     return;
   }
   if (phase === 'done') {
