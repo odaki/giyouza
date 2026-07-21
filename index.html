@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.29';
+const VERSION = 'v4.30';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4141,6 +4141,10 @@ function _kingBattleEnd() {
   _king = null; _kingLasers = []; _kingCharFlights = [];
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
+  /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と
+     同じゲームオーバー復帰（フレッシュな60枚での再スタート）にする。
+     勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
+  if (coins <= 0) { gameOverReset(); return; }
   if (audioCtx) audioCtx.resume().catch(() => {});
   startBGMTape();
   grayRateTarget = 1.0;
@@ -4896,7 +4900,11 @@ function _startBossDefeat() {
   _bossDefeatTimer = 0;
   if (_king) {
     _king.scale = 1;
-    const lost = Math.floor(coins / 2);
+    /* 没収額は端数を切り上げる（半分を残すのではなく半分を取る側を優先）。
+       これにより所持1の場合はceil(1/2)=1で残数ゼロまで没収され、
+       「1だったら全部没収されてゲームオーバー」という直感的な期待に一致する
+       （floorだと1所持時に没収0で何も没収されないまま復帰してしまっていた） */
+    const lost = Math.ceil(coins / 2);
     coins -= lost;
     _king.lostCoins = lost; // 敗北画面での表示用（_kingBattleEndでのちに_kingがnullになるため先に記録）
     lsSave();
@@ -4928,11 +4936,22 @@ function drawBossDefeat() {
     ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
     : (IS_PORTRAIT ? 90 : 70);
   outText('ルーレット はかい……', W / 2, titleY, '#ff6655', 'rgba(40,0,0,0.9)', 8);
+  /* 以下の付随メッセージはボス表示位置(titleY)ではなく画面下端からの固定オフセットで
+     配置する（drawBossVictoryの固定H-60表記と同じ考え方）。titleYはボスの拡大
+     アニメ（dscale→1）に連動して下へ動くため、titleY基準にするとボスが大きく
+     育った頃（CONTINUEバッジが出る_bossDefeatTimer>90と時期が重なる）にバッジと
+     文字が重なってしまう（実機確認で判明） */
   if (_bossDefeatTimer > 40) {
     ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
     const lost = _king ? _king.lostCoins : 0;
-    outText(`ギヨウザ ${lost}個が 吸収された……`, W / 2, titleY + (IS_PORTRAIT ? 38 : 34),
+    outText(`ギヨウザ ${lost}個が 吸収された……`, W / 2, H - 80,
       '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
+    /* 没収で所持ギヨウザが尽きた場合は、通常モードのゲームオーバーと同じ
+       トーン（赤系）で明示する（_kingBattleEndでgameOverResetへ分岐する） */
+    if (coins <= 0) {
+      outText('ギヨウザがなくなりました……', W / 2, H - 58,
+        '#ff8866', 'rgba(40,0,0,0.9)', 5);
+    }
   }
   if (_bossDefeatTimer > 90) {
     _drawBottomPillBadge('CONTINUE');
