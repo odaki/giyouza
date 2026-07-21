@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.44';
+const VERSION = 'v4.45';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5198,6 +5198,12 @@ function _startBossDefeat() {
     _king.lostCoins = lost; // 敗北画面での表示用（_kingBattleEndでのちに_kingがnullになるため先に記録）
     lsSave();
   }
+  /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、
+     予兆演出・通常ゲームオーバーと同じ手法の流用）。以前はBGMが鳴りっぱなしで
+     ゲームオーバーSEと被って聞こえづらいという実機指摘があった。
+     _kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートから
+     イーズインするため、ここで止めても復帰時に自然に繋がる */
+  stopBGMTape(700);
   playSE('gameover');
 }
 
