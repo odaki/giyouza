@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.33';
+const VERSION = 'v4.34';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3981,7 +3981,7 @@ let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト�
    戻る前のつなぎ演出（ユーザー要望）。誕生演出（バラバラのギヨウザが収束して
    キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
    弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
-const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'ギヨウザに かえっていった……'];
+const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
 let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
 
 /* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
