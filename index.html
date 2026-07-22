@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.56';
+const VERSION = 'v4.57';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4526,6 +4526,20 @@ function _kingBattleEnd() {
 const _DEFEAT_OUTRO_K = 0.06;      // _updateBossOmen step5 の収束係数と同値
 const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
 
+/* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
+   KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
+   （makeItem の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
+   横画面380*0.75*2=570px）から逆算した約0.075。0.02のような極端な値にすると
+   ギヨウザの集合体より先に見えなくなってしまい「小さくなりすぎている」という
+   実機指摘の原因になっていた（クロスフェード前提でも、フェード開始時点で
+   両者のサイズ感が合っていないと違和感が残る）。
+   KING_DEFEAT_XFADE_START_DSCALE: このdscaleまで縮んだらクロスフェード開始。
+   KING_DEFEAT_XFADE_FRAMES: クロスフェードの長さ（フレーム数）。 */
+const KING_DEFEAT_SHRINK_SCALE = 0.075;
+const KING_DEFEAT_XFADE_START_DSCALE = 0.18;
+const KING_DEFEAT_XFADE_FRAMES = 20;
+let _bossDefeatXfade = 0; // 0=キングのみ表示 〜 1=ギヨウザ群のみ表示
+
 /* 画面全体フェード（汎用）: phase切り替えの継ぎ目を暗転でつなぐ演出。
    ユーザー要望: 「かえっていった……」のあと通常モードへ戻る画面をフェードアウト・
    フェードインでつなぎ、余韻を残したい。暗転が最大になった瞬間にonMidを呼んで
@@ -4560,32 +4574,62 @@ function _drawScreenFade() {
   ctx.restore();
 }
 
+/* ギヨウザ群の弾け散りアイテムを生成する（位置のみ確定、まだ動かさない）。
+   _startBossDefeatShrinkでのクロスフェード表示・_updateBossDefeatOutroでの
+   拡散アニメの両方が同じ_defeatOutro.itemsを参照するため、生成は一箇所に
+   まとめる（クロスフェード用に別配列を作って後で捨てると_itemAllocの
+   プール返却漏れ＝リークになるため、必ず単一の配列を使い回す） */
+function _makeDefeatOutroItems() {
+  const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
+  const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
+  const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
+  const items = [];
+  for (let i = 0; i < 44; i++) {
+    const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
+    items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
+  }
+  return { step: 0, timer: 0, items, cx, cy };
+}
+
 /* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
-   弾け散り演出（_startBossDefeatOutro）へ切り替える前段。従来は画面が
-   単純に切り替わるだけで、キングギヨウザとギヨウザの集合体が同一の存在
-   だという繋がりが分かりにくかった（ユーザー指摘）。誕生演出・戦闘位置移行・
-   勝利拡大と同じ_easeKingXformの指数収束をそのまま再利用し、キングギヨウザを
-   等倍から弾け散り開始位置（中心=_startBossDefeatOutroのcx,cy）へ縮小・移動
-   させることで「キングギヨウザが縮んでギヨウザの集合体になる」と分かる
-   ブリッジ演出にする */
+   弾け散り演出（bossDefeatOutro）へ切り替える前段。当初は縮小しきったところで
+   瞬時にphaseを切り替えるだけだったが、「紙芝居のめくりのように感じる」
+   「キングギヨウザが小さくなりすぎている」という実機指摘を受けて、
+   (1) 縮小目標スケールをアイテム1個ぶんの見た目サイズに合わせ、
+   (2) 縮小の終盤でキング（フェードアウト）とギヨウザ群（フェードイン）を
+   一定フレームだけ重ねて描く、の2点で滑らかな切り替えに変更した。
+   誕生演出・戦闘位置移行・勝利拡大と同じ_easeKingXformの指数収束はそのまま
+   再利用し、キングギヨウザを等倍から弾け散り開始位置（中心=_defeatOutroの
+   cx,cy）へ縮小・移動させる */
 function _startBossDefeatShrink() {
   phase = 'bossDefeatShrink';
   _bossDefeatShrinkTimer = 0;
+  _bossDefeatXfade = 0;
   if (_king) {
     _king.bx = W / 2;
-    _king.by = H / 2 - (IS_PORTRAIT ? 60 : 0); // _startBossDefeatOutroのcx,cyと同値
-    _king.scale = 0.02; // 0にはせずわずかに残す（弾け散り開始時の見た目の核として）
+    _king.by = H / 2 - (IS_PORTRAIT ? 60 : 0); // _defeatOutroのcx,cyと同値
+    _king.scale = KING_DEFEAT_SHRINK_SCALE;
   }
+  /* ギヨウザ群はこの時点で生成し、位置を確定させておく（クロスフェード中は
+     静止したまま）。拡散運動は_updateBossDefeatOutroに入ってから始まる */
+  _defeatOutro = _makeDefeatOutroItems();
 }
 
 function _updateBossDefeatShrink() {
   _bossDefeatShrinkTimer++;
   if (_king) _easeKingXform();
   _updateKingCharFlights();
-  /* dscaleが目標近くまで収束したら弾け散り演出へ。収束が遅れた場合の保険として
+  /* dscaleが目標近くまで縮んだらクロスフェードを開始し、キングとギヨウザ群を
+     一定フレームかけて滑らかに入れ替える */
+  if (_king && _king.dscale <= KING_DEFEAT_XFADE_START_DSCALE) {
+    _bossDefeatXfade = Math.min(1, _bossDefeatXfade + 1 / KING_DEFEAT_XFADE_FRAMES);
+  }
+  /* クロスフェード完了で本体を消して弾け散り演出へ。収束が遅れた場合の保険として
      上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
-  if (!_king || _king.dscale <= 0.05 || _bossDefeatShrinkTimer > 40) {
-    _startBossDefeatOutro();
+  if (!_king || _bossDefeatXfade >= 1 || _bossDefeatShrinkTimer > 60) {
+    _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
+    phase = 'bossDefeatOutro';
+    playSE('boss_flash');
   }
 }
 
@@ -4595,27 +4639,22 @@ function drawBossDefeatShrink() {
   ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
   if (_king) {
     ctx.save();
+    ctx.globalAlpha = 1 - _bossDefeatXfade;
     ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
     ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
     ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = 1 - _bossDefeatXfade;
     drawKingCharFlights();
+    ctx.restore();
+  }
+  if (_defeatOutro && _bossDefeatXfade > 0) {
+    ctx.save();
+    ctx.globalAlpha = _bossDefeatXfade;
+    for (const g of _defeatOutro.items) drawOneItem(g);
+    ctx.restore();
   }
   ctx.restore();
-}
-
-function _startBossDefeatOutro() {
-  const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
-  const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
-  const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
-  const items = [];
-  for (let i = 0; i < 44; i++) {
-    const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
-    items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
-  }
-  _defeatOutro = { step: 0, timer: 0, items, cx, cy };
-  _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
-  phase = 'bossDefeatOutro';
-  playSE('boss_flash');
 }
 
 function _updateBossDefeatOutro() {
@@ -7772,9 +7811,9 @@ function handleGameClick(inputPerfMs) {
   if (phase === 'bossDefeat') {
     /* 所持ギヨウザが尽きた場合は通常のゲームオーバー（canRestart相当）と
        同じ待ち時間(45フレーム)で直接復帰。全損でなければ、通常モードへ戻る前に
-       キングが縮んでギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink→
-       _startBossDefeatOutro)を挟む（ユーザー要望）。CONTINUEバッジの表示に
-       合わせて90フレーム待つ（drawBossDefeat参照） */
+       キングが縮んでギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink、
+       内部でクロスフェード後にbossDefeatOutroへ自動遷移)を挟む（ユーザー要望）。
+       CONTINUEバッジの表示に合わせて90フレーム待つ（drawBossDefeat参照） */
     if (coins <= 0) { if (_bossDefeatTimer > 45) _kingBattleEnd(); return; }
     if (_bossDefeatTimer > 90) _startBossDefeatShrink();
     return;
