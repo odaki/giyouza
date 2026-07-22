@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.58';
+const VERSION = 'v4.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2325,6 +2325,48 @@ function gameOverReset() {
   phase = 'tapestart';
 }
 
+/* トライ終了時のエフェクト系状態を一括で後始末する（init()と_startBossOmen
+   の共通処理として抽出）。以前は_startBossOmenが一部（items/missPopups/
+   payoutPopups/ghost）しかクリアしておらず、hitType別の演出（ギヨギヨの
+   gyogyoFish等）やparticlesがキングギヨウザ突入後も透けて残る不具合があった
+   （実機指摘: 「ギヨギヨ当たり中にキングギヨウザが発動すると、発動後も
+   ギヨギヨの表示が残っていた。過去にも直前の通常モードの表示が残っていた
+   ことがあった」）。draw()内のエフェクト描画（_activeEffect.draw()、
+   particles、drawUzaFlash等）はいずれもphaseを問わず常時実行される設計
+   （トライ横断フェードアウトのため意図的）なので、状態を消さない限り
+   キングギヨウザ画面の下に残り続けてしまう。通常のトライ切り替え(init)と
+   キングギヨウザ突入(_startBossOmen)の両方から同じ後始末を呼ぶことで、
+   片方だけ直して水平展開が漏れる事態を防ぐ */
+function _clearTrialFxState() {
+  for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
+  particles = [];
+  hitType       = 'none';
+  _activeEffect = null;
+  endTimer   = 0;
+  isReach       = false;
+  reachTimer    = 0;
+  isReachJackpot = false;
+  reachFlash    = 0;
+  feverEndedReason = null; // フィーバー終了メッセージをトライごとにクリア
+  _jackpotAutoReset  = false;
+  canRestart  = false; _continueShowDelay = 0;
+  betLocked   = false;
+  isMissResult = false;
+  for (const g of worms) g._dead = true; // プールに返却してからクリア（リーク防止）
+  worms      = [];
+  for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
+  uzaTexts   = [];
+  for (const o of gigiSparks) o._dead = true;
+  gigiSparks  = [];
+  for (const g of yoyos) g._dead = true;
+  yoyos       = [];
+  for (const g of ghosts) _releaseGhost(g); // キャンバスをプールへ返却
+  ghosts      = [];
+  for (const o of rainDrops)  o._dead = true;
+  rainDrops   = [];
+  gyogyoFish  = [];
+}
+
 function init(fromStartup, fromGameOver) {
   if (fromStartup) {
     /* スタート時: initGame() は START ボタンの touchend から呼ばれる。
@@ -2387,24 +2429,11 @@ function init(fromStartup, fromGameOver) {
   } else {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
-  for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
-  particles  = [];
+  _clearTrialFxState();
   _trialKingGain = 0; // king値の1トライあたり加算上限カウンタをリセット（KING_METER_TRIAL_CAP参照）
-  hitType       = 'none';
-  _activeEffect = null;
-  endTimer   = 0;
-  isReach       = false;
-  reachTimer    = 0;
-  isReachJackpot = false;
-  reachFlash    = 0;
-  feverEndedReason = null; // フィーバー終了メッセージをトライごとにクリア
-  _jackpotAutoReset  = false;
-  canRestart  = false; _continueShowDelay = 0;
-  betLocked   = false;
   shootGuardUntil = performance.now() + 100; // 約100ms間 射撃ブロック（wall-clock基準）
   /* done フェーズ中に経過したビートをミスとして数えないようリセット */
   _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS)) : -1;
-  isMissResult = false;
   /* missPopups / payoutPopups はトライをまたいで自然フェードアウトするため init でクリアしない */
   /* スローイベント: 通常トライ切り替え時にBGMテンポをなめらかに変化させる
      ゲームオーバーリカバリー時は tapestart→idle 移行時に処理するため除外 */
@@ -2420,21 +2449,6 @@ function init(fromStartup, fromGameOver) {
   }
   /* ベットが所持コインを超えていたら最大払える額に下げる */
   if (coins !== undefined) clampBet();
-  for (const g of worms) g._dead = true; // プールに返却してからクリア（リーク防止）
-  worms      = [];
-  for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
-  uzaTexts   = [];
-  /* アイテムはリセットしない — 自然に画面外へ流れるか initGame/gameOverReset でクリア */
-  /* フィーバー終了バナーはタイマーが切れるまで継続（入力に関係なく一定時間表示） */
-  for (const o of gigiSparks) o._dead = true;
-  gigiSparks  = [];
-  for (const g of yoyos) g._dead = true;
-  yoyos       = [];
-  for (const g of ghosts) _releaseGhost(g); // キャンバスをプールへ返却
-  ghosts      = [];
-  for (const o of rainDrops)  o._dead = true;
-  rainDrops   = [];
-  gyogyoFish  = [];
 }
 
 /* ════════════════ コイン・BET ════════════════ */
@@ -4440,6 +4454,11 @@ function _startBossOmen() {
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
   for (const g of items) g._dead = true; items = [];
   missPopups = []; payoutPopups = []; // 暗転下に残ポップアップが透けないようクリア
+  /* 直前の通常モードのエフェクト状態（ギヨギヨ等のhitType別演出、particles等）を
+     init()と同じ後始末で完全にクリアする（_clearTrialFxState参照。実機指摘で発覚:
+     ここが手薄だったため、当たり演出の途中でキングギヨウザが発動すると
+     その演出がキングギヨウザ画面の下に透けて残っていた） */
+  _clearTrialFxState();
   _buildBossOC();
   _omen = { step: 0, timer: 0, items: [], flash: 0 };
   phase = 'bossOmen';
