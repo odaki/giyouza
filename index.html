@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.55';
+const VERSION = 'v4.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2876,6 +2876,10 @@ function update() {
     _updateBossDefeat();
     return;
   }
+  if (phase === 'bossDefeatShrink') {
+    _updateBossDefeatShrink();
+    return;
+  }
   if (phase === 'bossDefeatOutro') {
     _updateBossDefeatOutro();
     return;
@@ -4556,6 +4560,49 @@ function _drawScreenFade() {
   ctx.restore();
 }
 
+/* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
+   弾け散り演出（_startBossDefeatOutro）へ切り替える前段。従来は画面が
+   単純に切り替わるだけで、キングギヨウザとギヨウザの集合体が同一の存在
+   だという繋がりが分かりにくかった（ユーザー指摘）。誕生演出・戦闘位置移行・
+   勝利拡大と同じ_easeKingXformの指数収束をそのまま再利用し、キングギヨウザを
+   等倍から弾け散り開始位置（中心=_startBossDefeatOutroのcx,cy）へ縮小・移動
+   させることで「キングギヨウザが縮んでギヨウザの集合体になる」と分かる
+   ブリッジ演出にする */
+function _startBossDefeatShrink() {
+  phase = 'bossDefeatShrink';
+  _bossDefeatShrinkTimer = 0;
+  if (_king) {
+    _king.bx = W / 2;
+    _king.by = H / 2 - (IS_PORTRAIT ? 60 : 0); // _startBossDefeatOutroのcx,cyと同値
+    _king.scale = 0.02; // 0にはせずわずかに残す（弾け散り開始時の見た目の核として）
+  }
+}
+
+function _updateBossDefeatShrink() {
+  _bossDefeatShrinkTimer++;
+  if (_king) _easeKingXform();
+  _updateKingCharFlights();
+  /* dscaleが目標近くまで収束したら弾け散り演出へ。収束が遅れた場合の保険として
+     上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
+  if (!_king || _king.dscale <= 0.05 || _bossDefeatShrinkTimer > 40) {
+    _startBossDefeatOutro();
+  }
+}
+
+function drawBossDefeatShrink() {
+  if (phase !== 'bossDefeatShrink') return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+  if (_king) {
+    ctx.save();
+    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+    ctx.restore();
+    drawKingCharFlights();
+  }
+  ctx.restore();
+}
+
 function _startBossDefeatOutro() {
   const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
   const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
@@ -4720,6 +4767,7 @@ let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
+let _bossDefeatShrinkTimer = 0;
 let _scorchBlotSprite = null;
 
 /* 焼き目スタンプの元絵を初回に1回だけ生成（不定形の焦げ跡×3層） */
@@ -5709,7 +5757,7 @@ function draw() {
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール（ボス戦闘中は非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') {
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
     for (let i=0;i<4;i++) drawWheel(i);
   }
 
@@ -5752,7 +5800,7 @@ function draw() {
   }
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') {
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
     if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
   }
   drawCoinHeader();
@@ -5801,10 +5849,11 @@ function draw() {
   drawBossBattle();
   drawBossVictory();
   drawBossDefeat();
+  drawBossDefeatShrink();
   drawBossDefeatOutro();
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatOutro') drawSyncMeter();
+  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') drawSyncMeter();
   drawSyncJust();
 
   /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
@@ -7023,7 +7072,7 @@ function drawSlowHandBadge() {
      まとめて対象外にする（水平展開: bossOmenのみ除外していたのを
      こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた） */
   if (phase === 'bossOmen' || phase === 'boss' || phase === 'bossVictory' ||
-      phase === 'bossDefeat' || phase === 'bossDefeatOutro') return;
+      phase === 'bossDefeat' || phase === 'bossDefeatShrink' || phase === 'bossDefeatOutro') return;
   if (isGameOver) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
@@ -7723,10 +7772,16 @@ function handleGameClick(inputPerfMs) {
   if (phase === 'bossDefeat') {
     /* 所持ギヨウザが尽きた場合は通常のゲームオーバー（canRestart相当）と
        同じ待ち時間(45フレーム)で直接復帰。全損でなければ、通常モードへ戻る前に
-       キングがギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatOutro)を挟む
-       （ユーザー要望）。CONTINUEバッジの表示に合わせて90フレーム待つ（drawBossDefeat参照） */
+       キングが縮んでギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink→
+       _startBossDefeatOutro)を挟む（ユーザー要望）。CONTINUEバッジの表示に
+       合わせて90フレーム待つ（drawBossDefeat参照） */
     if (coins <= 0) { if (_bossDefeatTimer > 45) _kingBattleEnd(); return; }
-    if (_bossDefeatTimer > 90) _startBossDefeatOutro();
+    if (_bossDefeatTimer > 90) _startBossDefeatShrink();
+    return;
+  }
+  if (phase === 'bossDefeatShrink') {
+    /* 縮小演出中は入力を無視（_updateBossDefeatShrinkが自動的に
+       弾け散り演出へ進める） */
     return;
   }
   if (phase === 'bossDefeatOutro') {
