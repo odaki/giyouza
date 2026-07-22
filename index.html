@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.52';
+const VERSION = 'v4.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1146,7 +1146,7 @@ function getAudioCtx() {
     renderBGMBuffer(audioCtx.sampleRate, {
       bassArr: BGM_BASS_BOSS,
       bassDurMul: 0.85, bassDecay: 0.05,
-      useTaiko: true, useRumble: true, melAcid: true, kickVol: 0.64,
+      useTaiko: true, useRumble: true, melAcid: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
     }).then(buf => {
       bossBgmBuffer = buf;
     }).catch(e => { console.warn('Boss BGM render failed:', e); });
@@ -1395,13 +1395,13 @@ function _playTaikoHit(ctx, t, dest, strong) {
   if (strong) {
     osc.frequency.setValueAtTime(130, t);
     osc.frequency.exponentialRampToValueAtTime(50, t + 0.14);
-    gain.gain.setValueAtTime(0.5, t);
+    gain.gain.setValueAtTime(1.0, t); // ユーザー要望で倍量（0.5→1.0）
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
     osc.start(t); osc.stop(t + 0.34);
   } else {
     osc.frequency.setValueAtTime(170, t);
     osc.frequency.exponentialRampToValueAtTime(70, t + 0.07);
-    gain.gain.setValueAtTime(0.32, t);
+    gain.gain.setValueAtTime(0.64, t); // ユーザー要望で倍量（0.32→0.64）
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
     osc.start(t); osc.stop(t + 0.20);
   }
@@ -1454,9 +1454,12 @@ function _playGroundRumble(ctx, t, dest) {
      地鳴り0.212 に対し和太鼓強打0.074・キック0.060 と3倍近い差があった。
      地鳴りの目標RMSを和太鼓強打よりやや大きい0.10程度に設定し、
      現状比0.212→0.10（倍率≈0.47）をゲイン包絡線に一律適用した */
+  /* ユーザー要望でさらに半分に（0.22→0.11・0.14→0.07）。和太鼓・キックは
+     倍量にしたため、地鳴りとの相対バランスは前回調整よりさらに開く
+     （意図的な指示のため、RMS実測はしつつも目標値には合わせにいかない） */
   gain.gain.setValueAtTime(0, t);
-  gain.gain.linearRampToValueAtTime(0.22, t + 0.05); // 鋭いアタックは維持（0.46→0.22）
-  gain.gain.linearRampToValueAtTime(0.14, t + 0.5);
+  gain.gain.linearRampToValueAtTime(0.11, t + 0.05);
+  gain.gain.linearRampToValueAtTime(0.07, t + 0.5);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
   osc.start(t); osc.stop(t + 1.15);
 }
