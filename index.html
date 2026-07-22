@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.57';
+const VERSION = 'v4.58';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5497,8 +5497,10 @@ function drawBossDefeat() {
      （実機指摘: 「下に表示される文字列が重なっている」） */
   if (_bossDefeatTimer > 40) {
     ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
-    const lost = _king ? _king.lostCoins : 0;
-    outText(`ギヨウザ ${lost}個が 吸収された……`, W / 2, Math.max(H - 80, titleY + 40),
+    /* 没収個数の実数表示（ギヨウザN個が吸収された）から、割合表示に変更
+       （ユーザー要望）。_startBossDefeatの没収ロジック（Math.ceil(coins/2)）
+       が常に「所持数の半分」である事実そのままの文言にした */
+    outText('所持ギヨウザの半数が 吸収された……', W / 2, Math.max(H - 80, titleY + 40),
       '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
   }
   if (_bossDefeatTimer > 90) {
