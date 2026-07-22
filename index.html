@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.61';
+const VERSION = 'v4.62';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4807,20 +4807,28 @@ const KING_XFORM_EASE = 0.12;
    演出。通常モードの missPopups/payoutPopups と同じ「配列に積んで毎フレーム
    自走・自然消滅」方式）。的が確定するたび(1本ロックごと)にキャラを1体スポーンし、
    ボス付近まで飛ばして待機、4本目の判定が出た時点で未解決分すべてに結果
-   （こんがり=吸い込まれて消える／ハズレ=飛んできた的へ戻ってぶつかり消える）を
-   伝える。
+   （こんがり=吸い込まれて消える／ハズレ=飛んできた的へ戻って衝突・反発・
+   落下し、画面外へ消える）を伝える。
    着地先は結果が判明する前（1〜3本目）から、そのタップ自体の精度（JUST/GOOD）で
    位置・サイズを確定した焦げ跡候補（_createKingMark）を最初から使う（OK以下は
    焦げ跡候補なし＝ボス中心へ向かうだけ）。4本目で「こ・ん・が・り」全一致が
    確定した時点で、各文字の焦げ跡候補を正式に _king.marks へ登録して%を加算する。
-   不一致（ハズレ）ならどのタップも登録されず、そのまま的へ戻るだけ（ユーザー要望:
-   マークした文字が的に飛んできてぶつかる見た目にしたい。的側のひび演出は
-   failCount連動の既存演出をそのまま使うため、この飛翔演出側では何も生成しない） */
-const KING_CHAR_FLY_FRAMES = 16;        // 飛行（接近／復路とも共通）にかかるフレーム数
+   不一致（ハズレ）ならどのタップも登録されず、そのまま的へ戻って物理的に
+   跳ね返り落下するだけ（ユーザー要望: マークした文字が的に飛んできて
+   ぶつかり、物理エミュレーションで衝突・反発・落下を表現し、最終的に画面外へ
+   落ちていくようにしたい。的側のひび演出はfailCount連動の既存演出をそのまま
+   使うため、この飛翔演出側では何も生成しない） */
+const KING_CHAR_FLY_FRAMES = 16;        // 往路（接近）・復路接近（bounce）にかかるフレーム数
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
+/* ハズレは的に衝突後、反発して画面外に出るまでフェードせず表示し続ける
+   （ユーザー指摘: 途中でフェードアウトするのは違う、画面外に消えるまで
+   見えていてほしい）。MAX_FRAMESは万一画面外に出ない角度になった場合の
+   保険上限（通常は発火しない） */
+const KING_CHAR_FALL_MAX_FRAMES = 180;
+const KING_CHAR_OFFSCREEN_MARGIN = 60;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
-let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, rsx,rsy }
+let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
@@ -5095,10 +5103,9 @@ function _kingCurrentFlightPos(f) {
   }
   if (f.state === 'wait') return { x: target.x, y: target.y + Math.sin(f.frames * 0.12) * 2 };
   if (f.state === 'stick') return target;
-  /* bounce: ハズレ確定時、着地点(rsx,rsy)から出発点(sx,sy＝的)へ戻る復路。
-     往路(fly)と対称のイージング・弧を使う */
-  const e = 1 - (1 - Math.min(1, f.frames / KING_CHAR_FLY_FRAMES)) ** 2; // ease-out
-  return { x: f.rsx + (f.sx - f.rsx) * e, y: f.rsy + (f.sy - f.rsy) * e - Math.sin(e * Math.PI) * 18 };
+  /* bounce（的への接近）・fall（衝突後の反発落下）は物理シミュレーション
+     （bx/by/bvx/bvy）で位置を直接持っているので、そのまま返す */
+  return { x: f.bx, y: f.by };
 }
 
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
@@ -5220,15 +5227,28 @@ function _easeKingXform() {
 }
 
 /* ハズレ確定の文字を、着地点（ボス側）から出発点（的＝タップした自分の
-   ミニリール）へ戻す復路飛行に切り替える（ユーザー要望: マークした文字が
-   的に飛んできてぶつかる見た目にしたい。往路と対称な弧を描いて的まで戻り、
-   ぶつかった瞬間に消える＝的のひびはfailCount連動の既存演出をそのまま使う
-   ため、ここでは新たに何も生成しない）。往路と同じイージング・フレーム数
-   （KING_CHAR_FLY_FRAMES）を使い、出発点と到着点を入れ替えるだけにする */
+   ミニリール）へ戻す物理シミュレーションに切り替える（ユーザー要望: 的への
+   衝突・反発・落下を物理エミュレーションで表現し、最終的に画面外へ落ちて
+   いくようにしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを
+   設定する。等速直線運動で的へ向かい、KING_CHAR_FLY_FRAMES後（＝ちょうど
+   的に到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）
+   する。的のひびはfailCount連動の既存演出をそのまま使うため、ここでは
+   新たに何も生成しない */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
   const pos = _kingFlightTargetPos(f);
-  f.rsx = pos.x; f.rsy = pos.y; // 復路の出発点＝往路の到着点（現在の着地位置）
+  f.bx = pos.x; f.by = pos.y;
+  const dx = f.sx - pos.x, dy = f.sy - pos.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const spd = dist / KING_CHAR_FLY_FRAMES; // 往路と同程度の所要フレームで的に届く速度
+  f.bvx = dx / dist * spd;
+  f.bvy = dy / dist * spd;
+}
+
+/* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
+function _isKingCharOffscreen(f) {
+  return f.bx < -KING_CHAR_OFFSCREEN_MARGIN || f.bx > W + KING_CHAR_OFFSCREEN_MARGIN ||
+         f.by < -KING_CHAR_OFFSCREEN_MARGIN || f.by > H + KING_CHAR_OFFSCREEN_MARGIN;
 }
 
 /* こんがり確定の文字がボスへ実際に到達した瞬間。ここで初めて対応する焦げ跡の
@@ -5262,13 +5282,32 @@ function _updateKingCharFlights() {
     } else if (f.state === 'stick') {
       f.frames++;
     } else if (f.state === 'bounce') {
-      f.frames++; // 位置は_kingCurrentFlightPosがrsx/rsy→sx/syの復路イージングで算出する
+      /* 的への接近（等速直線運動）。KING_CHAR_FLY_FRAMES＝ちょうど的に届く
+         フレーム数に達したら衝突とみなし、反発速度を与えてfallへ遷移する */
+      f.frames++;
+      f.bx += f.bvx; f.by += f.bvy;
+      if (f.frames >= KING_CHAR_FLY_FRAMES) {
+        f.state = 'fall'; f.frames = 0;
+        /* 反発: 接近してきた向きのほぼ逆＋上向き成分を必ず混ぜる
+           （的の面で跳ね返った見た目にするため、下向きに反発することはない） */
+        const ang = Math.atan2(f.bvy, f.bvx) + Math.PI + (Math.random() - 0.5) * 0.7;
+        const spd = 5 + Math.random() * 2.5;
+        f.bvx = Math.cos(ang) * spd;
+        f.bvy = Math.min(-2.5, Math.sin(ang) * spd);
+      }
+    } else if (f.state === 'fall') {
+      /* 反発後の落下（重力）。水平方向はわずかに減速させ、垂直方向は
+         重力加速度で下向きに増していく。画面外に出るまで表示し続ける */
+      f.frames++;
+      f.bx += f.bvx; f.by += f.bvy;
+      f.bvy += 0.32;
+      f.bvx *= 0.99;
     }
   }
   swapRemove(_kingCharFlights, f => {
-    if (f.state === 'stick')  return f.frames < KING_CHAR_STICK_FADE_FRAMES;
-    if (f.state === 'bounce') return f.frames < KING_CHAR_FLY_FRAMES; // 的まで戻り着いたら消える
-    return true; // fly/wait は常に残す
+    if (f.state === 'stick') return f.frames < KING_CHAR_STICK_FADE_FRAMES;
+    if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
+    return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
   });
 }
 
@@ -5294,9 +5333,10 @@ function _updateBossBattle() {
 }
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
-   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで跳ね返って
-   落下（画面外に出るまでフェードしない。ユーザー指摘: 途中で消えるのではなく
-   画面外に弾け飛ぶまで見えていてほしい）。位置計算は _kingCurrentFlightPos に集約。
+   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで的へ
+   直線的に接近、fall=的に衝突した反発後の重力落下（画面外に出るまでフェード
+   しない。ユーザー指摘: 途中で消えるのではなく画面外に弾け飛ぶまで見えていて
+   ほしい）。位置計算は _kingCurrentFlightPos に集約。
    文字色はそのタップのスコア（f.score）で通常モードのSYNCメーターと同じ
    赤〜黄〜緑（_syncBarColor）を使う（ユーザー指摘: OK/GOOD/JUSTの評価に
    合わせて色を変えたい・通常ゲーム時と同じ仕様にしたい）。
