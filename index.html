@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.47';
+const VERSION = 'v4.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1433,7 +1433,28 @@ async function renderBGMBuffer(sampleRate, {
 } = {}) {
   const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
   const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
-  const dest      = offCtx.destination;
+  /* 全パートをリミッター経由でdestinationへ流す。ボス版はステップ0で
+     地鳴り・和太鼓・キック・ベース・メロディが同時に鳴り、単純合算だと
+     ピーク振幅が1.6を超えてデジタルクリッピングしていた（実機指摘:
+     「耳障りなキューという高音」「重低音になっていない」の直接原因。
+     クリッピングの高調波歪みが地鳴りの低音を覆い隠し、耳障りな高音成分を
+     生んでいた）。DynamicsCompressorNodeで疑似リミッターとして働かせる。
+     通常BGMも軽微なクリッピング(ピーク1.2程度)があったため同じ経路に通し、
+     副次的に解消する */
+  const limiter = offCtx.createDynamicsCompressor();
+  limiter.threshold.value = -10;
+  limiter.knee.value = 3;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.001;
+  limiter.release.value = 0.1;
+  /* DynamicsCompressorNode単体だと最初期のアタック分をわずかに取りこぼし
+     ピーク1.0をわずかに超えることがあったため、仕上げに固定ゲインで
+     さらに9%引き下げて確実に1.0未満へ収める（安全マージン） */
+  const safety = offCtx.createGain();
+  safety.gain.value = 0.91;
+  limiter.connect(safety);
+  safety.connect(offCtx.destination);
+  const dest      = limiter;
   for (let s = 0; s < BGM_MEL.length; s++) {
     const t   = s * BGM_BEAT * 0.5;
     const dur = BGM_BEAT * 0.5;
