@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.59';
+const VERSION = 'v4.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4943,7 +4943,7 @@ function _initBossBattle() {
      こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする（実機報告で発覚）。 */
   const omenBy = H / 2 - (IS_PORTRAIT ? 60 : 0);
   _king = {
-    liveOC, half, marks, cookPct: 0, scale,
+    liveOC, half, marks, cracks: [], cookPct: 0, scale,
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
@@ -4979,15 +4979,17 @@ function _renderKingBody() {
     const t = (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000);
     if (t < 1) activeCount++; else settledCount++;
   }
-  if (pct <= 0 && activeCount === 0 && settledCount === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
+  if (pct <= 0 && activeCount === 0 && settledCount === 0 && _king.cracks.length === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
   /* 再合成スキップの条件は pct 一致だけでは不十分: 前回まだフェード中の焦げ跡が
      残っていた（_toneHadActive）場合、今回activeCountが0になっていても「焦げ跡を
      残痕アルファまで落とし切る」1回の再合成をしないと古い焦げ跡が残ったままキャッシュ
      されてしまう（実機検証で発覚: フェード完了直後の1フレームが欠落しボスが直前
      フレームのまま固まる不具合）。settledCountの増加も同様に再合成トリガーにする
-     （新たに永続痕入りした焦げ跡を反映するため）。 */
+     （新たに永続痕入りした焦げ跡を反映するため）。ひび（cracks）はフェードしない
+     永続描画のため、個数が増えた（＝新しいひびが着弾した）ことだけを再合成
+     トリガーにする（_crackCount参照） */
   if (activeCount === 0 && _king._toneRenderedPct === pct && !_king._toneHadActive &&
-      _king._settledCount === settledCount) return _king.liveOC;
+      _king._settledCount === settledCount && _king._crackCount === _king.cracks.length) return _king.liveOC;
   const lc = _king.liveOC.getContext('2d');
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.clearRect(0, 0, _king.liveOC.width, _king.liveOC.height);
@@ -5022,6 +5024,20 @@ function _renderKingBody() {
     lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
     lc.restore();
   }
+  /* ひび: ハズレ確定の文字が着弾した衝突点に残る恒久痕（フェードしない。
+     _startKingCharBounce/_createKingCrackMark参照。ユーザー要望:
+     「マークした文字が的に飛んできてぶつかって的にひびが入る」感じにしたい） */
+  lc.strokeStyle = 'rgba(20,10,5,0.85)';
+  lc.lineWidth = 1.4;
+  for (const cr of _king.cracks) {
+    lc.save();
+    lc.translate(cr.lx, cr.ly);
+    lc.beginPath();
+    lc.moveTo(cr.pts[0].x, cr.pts[0].y);
+    for (let j = 1; j < cr.pts.length; j++) lc.lineTo(cr.pts[j].x, cr.pts[j].y);
+    lc.stroke();
+    lc.restore();
+  }
   /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けない常に元の色で最後に上描きする
      （白目の白さと焦げ色とのコントラストを保つユーザー要望）。pctに応じて表情が
      変化する（_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
@@ -5035,6 +5051,7 @@ function _renderKingBody() {
   _king._toneRenderedPct = pct;
   _king._toneHadActive = activeCount > 0;
   _king._settledCount = settledCount;
+  _king._crackCount = _king.cracks.length;
   return _king.liveOC;
 }
 
@@ -5075,6 +5092,33 @@ function _createKingMark() {
     rot: Math.random() * Math.PI * 2,
     revealedAt: null,
   };
+}
+
+/* ハズレ確定の文字がボスへ着弾した衝突点に残す「ひび」を1個生成する
+   （ユーザー要望: マークした文字が的に飛んできてぶつかって、ぶつかった場所に
+   ひびが入るようにしたい）。位置は指定があればそれを使う（JUST/GOOD判定の
+   飛翔先=markRef.lx/ly。実際にその文字が飛んでいった場所にひびが入って見える
+   ようにするため）。未指定（OK以下のタップ、markRefなしでボス中心へ飛ぶ
+   ケース）はボス胴体内に一様分布で生成する（_createKingMarkと同じ分布）。
+   線の形は_generateKingReelCracks（的側のひび）と同じ「中心から2〜3節の
+   折れ線」技法をボスの体格（_BOSS_S）基準のサイズに合わせて流用した */
+function _createKingCrackMark(lx, ly) {
+  if (lx == null) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.sqrt(Math.random());
+    lx = Math.cos(ang) * _BOSS_S * 0.52 * rad;
+    ly = _BOSS_S * 0.08 + Math.sin(ang) * _BOSS_S * 0.42 * rad;
+  }
+  const maxR = _BOSS_S * 0.09; // ひび1本の広がり（焦げ跡サイズと同程度）
+  let a = Math.random() * Math.PI * 2, r = 0;
+  const pts = [{ x: 0, y: 0 }];
+  const segCount = 2 + Math.floor(Math.random() * 2);
+  for (let j = 0; j < segCount; j++) {
+    r += maxR * (0.4 + Math.random() * 0.4);
+    a += (Math.random() - 0.5) * 1.2;
+    pts.push({ x: Math.cos(a) * Math.min(r, maxR), y: Math.sin(a) * Math.min(r, maxR) });
+  }
+  return { lx, ly, pts };
 }
 
 /* 文字の着地先（＝焦げ跡markRefの実位置。markRefが無い＝OK以下のタップは
@@ -5228,6 +5272,9 @@ function _startKingCharBounce(f) {
   const ang = Math.atan2(f.sy - pos.y, f.sx - pos.x) + (Math.random() - 0.5) * 0.7;
   const spd = 6 + Math.random() * 3;
   f.bvx = Math.cos(ang) * spd; f.bvy = Math.sin(ang) * spd - 3;
+  /* 着弾（＝跳ね返りに転じる瞬間）にひびを残す（_createKingCrackMark参照。
+     ユーザー要望: 文字が的にぶつかった感じを出したい） */
+  if (_king) _king.cracks.push(_createKingCrackMark(f.markRef ? f.markRef.lx : null, f.markRef ? f.markRef.ly : null));
 }
 
 /* 跳ね返り中の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
