@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.45';
+const VERSION = 'v4.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6857,7 +6857,13 @@ function drawSyncJust() {
 function drawSlowHandBadge() {
   if (phase === 'startup') return;
   if (phase === 'tapestart') return; // ゲームオーバー復帰アニメーション中は非表示
-  if (phase === 'bossOmen') return; // 予告のテープストップでグレー化してもバッジは出さない
+  /* ボス関連フェーズはいずれもスローハンドと無関係にgrayRateTargetを動かす
+     （予告のテープストップ、こんがりしっぱい時のテープ停止など）。
+     grayRateCurが下がる＝スローハンドではないため、ボス関連フェーズは
+     まとめて対象外にする（水平展開: bossOmenのみ除外していたのを
+     こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた） */
+  if (phase === 'bossOmen' || phase === 'boss' || phase === 'bossVictory' ||
+      phase === 'bossDefeat' || phase === 'bossDefeatOutro') return;
   if (isGameOver) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
