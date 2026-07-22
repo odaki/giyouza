@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.51';
+const VERSION = 'v4.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1146,7 +1146,7 @@ function getAudioCtx() {
     renderBGMBuffer(audioCtx.sampleRate, {
       bassArr: BGM_BASS_BOSS,
       bassDurMul: 0.85, bassDecay: 0.05,
-      useTaiko: true, useRumble: true, melAcid: true,
+      useTaiko: true, useRumble: true, melAcid: true, kickVol: 0.64,
     }).then(buf => {
       bossBgmBuffer = buf;
     }).catch(e => { console.warn('Boss BGM render failed:', e); });
@@ -1367,6 +1367,22 @@ const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
 const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
+/* バスドラム（ピッチダウン式キック）。ボス版のバランス調整のため音量を
+   引数化し、_playTaikoHitと同じ形で切り出した（renderBGMBufferのkickVol
+   参照。実機評価でRMSエネルギーを実測した結果、地鳴りに対してキックが
+   相対的に小さすぎたため、ボス側だけ音量を引き上げられるようにした） */
+function _playKick(ctx, t, dest, vol) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain); gain.connect(dest);
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(110, t);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+  osc.start(t); osc.stop(t + 0.21);
+}
+
 /* 和太鼓風の合いの手（低音オシレーターのピッチダウンで模した打撃音。
    キック用のシンセ手法を流用しつつ、キックより低い開始ピッチ・長めの
    余韻にして「ドン」という締太鼓の響きに寄せている。strong=強打、
@@ -1430,11 +1446,17 @@ function _playGroundRumble(ctx, t, dest) {
   shaper.curve = _acidDistortionCurve(4);
   shaper.oversample = '4x';
 
-  /* 音圧を上げすぎて他パート（キック0.45・和太鼓強打0.5）より突出していた
-     との指摘を受け、それらと釣り合う水準まで下げた（0.62→0.46） */
+  /* 音量調整の経緯: ピーク包絡線の値だけを他パートに合わせても
+     （0.62→0.46）実際には地鳴りだけ突出して聞こえるとの指摘が続いた。
+     地鳴りは1秒以上持続する上にレゾナンスフィルター・歪みを通すため、
+     ピーク値が同じでも総エネルギー（RMS）は他の一発打楽器よりずっと
+     大きくなる。実際に各パートを単独レンダリングしRMSを実測したところ、
+     地鳴り0.212 に対し和太鼓強打0.074・キック0.060 と3倍近い差があった。
+     地鳴りの目標RMSを和太鼓強打よりやや大きい0.10程度に設定し、
+     現状比0.212→0.10（倍率≈0.47）をゲイン包絡線に一律適用した */
   gain.gain.setValueAtTime(0, t);
-  gain.gain.linearRampToValueAtTime(0.46, t + 0.05); // 鋭いアタックは維持
-  gain.gain.linearRampToValueAtTime(0.30, t + 0.5);
+  gain.gain.linearRampToValueAtTime(0.22, t + 0.05); // 鋭いアタックは維持（0.46→0.22）
+  gain.gain.linearRampToValueAtTime(0.14, t + 0.5);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
   osc.start(t); osc.stop(t + 1.15);
 }
@@ -1483,7 +1505,8 @@ function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
      useTaiko   : 和太鼓の強打を追加するか（BGM_TAIKO_STRONG/FLOURISH参照）
      useRumble  : ループ頭に低音の地鳴りを追加するか（_playGroundRumble参照）
      melAcid    : メロディをTB-303風アシッド音色にするか（_playAcidMelNote
-                  参照。trueの場合melTypeは無視される） */
+                  参照。trueの場合melTypeは無視される）
+     kickVol    : キックの音量（_playKick参照） */
 async function renderBGMBuffer(sampleRate, {
   bassArr    = BGM_BASS,
   melType    = 'triangle',
@@ -1492,6 +1515,7 @@ async function renderBGMBuffer(sampleRate, {
   useTaiko   = false,
   useRumble  = false,
   melAcid    = false,
+  kickVol    = 0.45,
 } = {}) {
   const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
   const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
@@ -1529,17 +1553,7 @@ async function renderBGMBuffer(sampleRate, {
     if (bas) playOsc(offCtx, 'sine', noteHz(bas[0], bas[1]), t, dur * bassDurMul, bas[2], bassDecay, null, null, dest);
     if (useRumble && s === 0) _playGroundRumble(offCtx, t, dest);
     playNoise(offCtx, t, 0.04, BGM_HAT[s], 8000, dest);
-    if (BGM_KICK.has(s)) {
-      const osc  = offCtx.createOscillator();
-      const gain = offCtx.createGain();
-      osc.connect(gain); gain.connect(dest);
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(110, t);
-      osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
-      gain.gain.setValueAtTime(0.45, t);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-      osc.start(t); osc.stop(t + 0.21);
-    }
+    if (BGM_KICK.has(s)) _playKick(offCtx, t, dest, kickVol);
     if (useTaiko) {
       if (BGM_TAIKO_STRONG.has(s))   _playTaikoHit(offCtx, t, dest, true);
       else if (BGM_TAIKO_FLOURISH.has(s)) _playTaikoHit(offCtx, t, dest, false);
