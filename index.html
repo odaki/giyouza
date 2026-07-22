@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.62';
+const VERSION = 'v4.63';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4828,7 +4828,7 @@ const KING_CHAR_FALL_MAX_FRAMES = 180;
 const KING_CHAR_OFFSCREEN_MARGIN = 60;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
-let _kingCharFlights = []; // { char, sx,sy, tx,ty, state, frames, resolve, bx,by,bvx,bvy }
+let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
@@ -5061,6 +5061,11 @@ function _spawnKingCharFlight(w) {
   _kingCharFlights.push({
     char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
+    /* ハズレ時の復路（_startKingCharBounce）が戻る先＝的の上部、三角ポインタ
+       付近（drawKingReelのpx,pyと同じ式）。的の下（sx,sy）へ戻すと文字が
+       ボスと反対側から回り込む不自然な軌道になってしまうため、ボス側を
+       向いている上側を衝突点にする（ユーザー指摘） */
+    rtx: w.x, rty: w.y - (KING_WR + 12),
     tier, markRef: tier ? _createKingMark() : null,
     state: 'fly', frames: 0, resolve: null,
   });
@@ -5226,19 +5231,20 @@ function _easeKingXform() {
   _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
 }
 
-/* ハズレ確定の文字を、着地点（ボス側）から出発点（的＝タップした自分の
-   ミニリール）へ戻す物理シミュレーションに切り替える（ユーザー要望: 的への
-   衝突・反発・落下を物理エミュレーションで表現し、最終的に画面外へ落ちて
-   いくようにしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを
-   設定する。等速直線運動で的へ向かい、KING_CHAR_FLY_FRAMES後（＝ちょうど
-   的に到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）
-   する。的のひびはfailCount連動の既存演出をそのまま使うため、ここでは
-   新たに何も生成しない */
+/* ハズレ確定の文字を、着地点（ボス側）から的の上部（三角ポインタ付近、
+   f.rtx/rty＝ボス側を向いている面）へ戻す物理シミュレーションに切り替える
+   （ユーザー要望: 的への衝突・反発・落下を物理エミュレーションで表現し、
+   最終的に画面外へ落ちていくようにしたい。戻る先は的の下ではなくボス側の
+   上にしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを設定
+   する。等速直線運動で的へ向かい、KING_CHAR_FLY_FRAMES後（＝ちょうど的に
+   到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）する。
+   的のひびはfailCount連動の既存演出をそのまま使うため、ここでは新たに
+   何も生成しない */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
   const pos = _kingFlightTargetPos(f);
   f.bx = pos.x; f.by = pos.y;
-  const dx = f.sx - pos.x, dy = f.sy - pos.y;
+  const dx = f.rtx - pos.x, dy = f.rty - pos.y;
   const dist = Math.hypot(dx, dy) || 1;
   const spd = dist / KING_CHAR_FLY_FRAMES; // 往路と同程度の所要フレームで的に届く速度
   f.bvx = dx / dist * spd;
