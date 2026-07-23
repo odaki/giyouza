@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.87';
+const VERSION = 'v4.88';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1719,8 +1719,20 @@ function _playDoraHit(ctx, t, dest) {
       倍音を5層→2層（基音+明るい1オーバートーンのみ）に減らして単発の
       鐘の音として聞き取りやすくし、基音もアルペジオの頂点(C6)より
       1オクターブ上のC7へ上げて他パートに埋もれず明確に抜けて聞こえる
-      ようにし、アタックも0.02s→0.004sの瞬間的な立ち上がりにして
-      「叩いた瞬間に鳴る」チャイム特有の鋭さを出した
+      ようにした。
+      さらにユーザー指摘「物理的なベルを金属ソレノイドで1回叩いた時の音が
+      チーン音だが、そうなっているか」を受けて打撃の物理を作り直した。
+      正弦波を4msでゆっくり立ち上げるだけでは「フェードインする電子音」
+      であって「叩かれた」音にはならない。実際の打撃音は
+      (1)接触の瞬間に生じる短い広帯域クリック（ソレノイドの金属接触音）と
+      (2)それによって励起される共鳴体（ベル）の減衰振動、の2要素で成り立つ
+      （物理モデリング音源の「励起+共鳴」の定石）。
+      (1)はplayNoiseの短時間・高域ハイパスで表現し、(2)は倍音ごとの
+      アタックをほぼ瞬時(0.0015s)にして「打たれた瞬間から鳴り始める」
+      立ち上がりにする。あわせて、打撃直後だけ光って速く消える高次倍音
+      （金属打撃特有の「ピン」という煌めき）を1本追加し、基音・明るい
+      オーバートーンは長く伸びる「チーン」の芯として残す（高次倍音ほど
+      速く減衰するのは実際の金属共鳴体の物理特性と一致する）
    3. 仕上げのきらめき（実績解除'ach'と同じ動機を使い、「最後の実績」
       であることを音楽的にも結びつける） */
 function _playKongariCompleteFanfare(ctx, t, dest) {
@@ -1733,20 +1745,24 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
   fanfare.forEach(([f, dt, dur]) => playOsc(ctx, 'square', f, t+dt, dur, 0.30, 0.10, null, null, d));
   [noteHz('C',3), noteHz('G',3), noteHz('C',4)].forEach((f, i) =>
     playOsc(ctx, 'sine', f, t + i*0.28, 0.7, 0.34, 0.22, null, null, d));
+  const strikeT = t + 0.39; // 主和音の頂点(C6)と同時に打つ
+  playNoise(ctx, strikeT, 0.008, 0.22, 6000, d); // ソレノイドがベルに接触する瞬間の金属クリック
   const base = noteHz('C', 7); // アルペジオの頂点(C6)より1オクターブ上、チーン特有の高く澄んだ音高
-  const partials = [1, 2.4]; // 基音+明るい1オーバートーンのみ（単発の鐘の音。多層にすると銅鑼寄りになる）
-  partials.forEach((ratio, i) => {
+  const partials = [
+    { ratio: 1,   vol: 0.28, decay: 1.5 },  // 基音: 長く伸びる「チーン」の芯
+    { ratio: 2.4, vol: 0.11, decay: 0.9 },  // 明るいオーバートーン
+    { ratio: 5.2, vol: 0.07, decay: 0.12 }, // 打撃直後だけ光る高次倍音（金属打撃特有の「ピン」）
+  ];
+  partials.forEach(({ ratio, vol, decay }) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain); gain.connect(d);
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(base * ratio, t + 0.39); // 主和音の頂点(C6)と同時に鳴り始める
-    const vol = i === 0 ? 0.28 : 0.11;
-    const decay = i === 0 ? 1.5 : 0.9;
-    gain.gain.setValueAtTime(0.0001, t + 0.39);
-    gain.gain.linearRampToValueAtTime(vol, t + 0.394); // 瞬間的なアタック（チャイムを叩いた鋭さ）
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.39 + decay);
-    osc.start(t + 0.39); osc.stop(t + 0.39 + decay + 0.05);
+    osc.frequency.setValueAtTime(base * ratio, strikeT);
+    gain.gain.setValueAtTime(0.0001, strikeT);
+    gain.gain.linearRampToValueAtTime(vol, strikeT + 0.0015); // ほぼ瞬時（叩かれた瞬間から鳴り始める）
+    gain.gain.exponentialRampToValueAtTime(0.0001, strikeT + decay);
+    osc.start(strikeT); osc.stop(strikeT + decay + 0.05);
   });
   [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)].forEach((f, i) =>
     playOsc(ctx, 'sine', f, t + 1.0 + i*0.07, 0.16, 0.22, 0.10, null, null, d));
