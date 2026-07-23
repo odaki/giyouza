@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.63';
+const VERSION = 'v4.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2620,31 +2620,51 @@ function _createKingReel(x, y, weights) {
     locked: false,
     result: null,
     _oc:    null,
-    _cracks: _generateKingReelCracks(),
   };
   _buildKingReelOC(w);
   return w;
 }
 
-/* ルーレット破壊演出用のひび割れ線をKING_MAX_FAILS本ぶんあらかじめ生成する
-   （毎フレーム乱数を振ると位置がちらつくため、的の作成時に1回だけ生成し、
-   描画側は_king.failCount本だけ描く。再スピンのたびに的自体が作り直される
-   ため、ひびも毎回新しい形になる＝壊れ方が固定化されず単調にならない） */
-function _generateKingReelCracks() {
-  const cracks = [];
-  for (let i = 0; i < KING_MAX_FAILS; i++) {
-    let a = Math.random() * Math.PI * 2, r = 0;
-    const pts = [{ x: 0, y: 0 }];
-    const segCount = 2 + Math.floor(Math.random() * 2); // 2〜3節の折れ線
-    for (let j = 0; j < segCount; j++) {
-      r += KING_WR * (0.3 + Math.random() * 0.35);
-      a += (Math.random() - 0.5) * 1.2;
-      const rr = Math.min(r, KING_WR);
-      pts.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
-    }
-    cracks.push(pts);
+/* 的のひび割れ（破壊演出）用の先細りウェッジ（扇形の破片）ポリゴンを1個生成する。
+   ユーザー要望: 「ヒビが入るのは、飛んできた文字が的に当たった場所を起点に
+   したい。的の、文字が当たった縁部分から、的の中心方向に向かって割れる。
+   中心まで全部割れるのもおかしいので、途中（中心から半径の多くても1/2くらい）
+   まで。当たった向きを勘案して割れる方向が物理法則的に自然だとなお良い。
+   クラックの幅も端が大きく隙間が開いて、中心方向に向かうに従って割れている
+   幅が狭くなる」。
+   文字は常に的の縁の真上（三角ポインタ位置、drawKingReelのpx,pyと同じ向き）
+   に着弾する（_startKingCharBounce参照）ため起点は常にangle=-PI/2。
+   biasAngleでボスの水平位置に応じた衝突角の傾きを軽く反映する（呼び出し側
+   算出）。的は世界座標（画面）上では常に固定向き（ポインタが常に真上）で
+   描かれるため、この関数が返すポリゴンも的の回転(w.rot)の影響を受けない
+   ワールド基準のローカル座標系で組む（drawKingReel参照：ctx.rotate(w.rot)の
+   外側で描く） */
+function _createKingCrackWedge(biasAngle) {
+  const baseAngle = -Math.PI / 2 + biasAngle;
+  const outerR = KING_WR;                                    // 起点＝的の縁
+  const innerR = KING_WR * (0.15 + Math.random() * 0.35);    // 終点＝中心からの距離（最大でも半径の約半分）
+  const segCount = 3 + Math.floor(Math.random() * 2);        // 3〜4節の折れ線（先細りの芯線）
+  const spine = [];
+  for (let j = 0; j <= segCount; j++) {
+    const t = j / segCount;
+    const r = outerR + (innerR - outerR) * t;
+    const a = baseAngle + (Math.random() - 0.5) * 0.5 * t; // 中心へ向かうにつれ左右にわずかに蛇行
+    spine.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
   }
-  return cracks;
+  /* 芯線の左右にオフセットして先細りの帯を作る（端が広く、先端でほぼ0幅） */
+  const outerW = KING_WR * 0.11;
+  const left = [], right = [];
+  for (let j = 0; j < spine.length; j++) {
+    const t = j / (spine.length - 1);
+    const hw = outerW * (1 - t) / 2; // 半幅（先端に向けて先細り）
+    const prev = spine[Math.max(0, j - 1)], next = spine[Math.min(spine.length - 1, j + 1)];
+    const dx = next.x - prev.x, dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len; // 進行方向に対する法線
+    left.push({ x: spine[j].x + nx * hw, y: spine[j].y + ny * hw });
+    right.push({ x: spine[j].x - nx * hw, y: spine[j].y - ny * hw });
+  }
+  return [...left, ...right.reverse()]; // 閉じたポリゴン（先端は左右がほぼ同点で自然に尖る）
 }
 
 function _buildKingReelOC(w) {
@@ -2680,26 +2700,36 @@ function _buildKingReelOC(w) {
   w._oc = oc; w._ocR = ocR;
 }
 
-function drawKingReel(w, active) {
+function drawKingReel(w, active, idx) {
   ctx.save();
   ctx.translate(w.x, w.y);
   ctx.rotate(w.rot);
   ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
-  /* 失敗のたびに1本ずつ増えるひび割れ（盤面に固定＝回転に追従させるため
-     w.rot適用済みのこの座標系で描く。ユーザー要望: 失敗するとルーレットが
-     少しずつ壊れていく演出） */
-  if (_king && _king.failCount > 0 && w._cracks) {
-    ctx.strokeStyle = 'rgba(15,15,15,0.8)';
-    ctx.lineWidth = 1.5;
-    for (let i = 0; i < _king.failCount; i++) {
-      const pts = w._cracks[i];
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
-      ctx.stroke();
+  ctx.restore();
+  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たる場所（常に的の縁の
+     真上＝三角ポインタ位置、_startKingCharBounce参照）を起点に、中心へ向けて
+     先細りに割れる。文字の着弾点は的の回転(w.rot)に関係なく常に画面の
+     「真上」固定（ポインタが常に真上を向くのと同じ理由）なので、ここも
+     w.rotを適用しないワールド基準の座標系で描く（segsの回転描画とは別の
+     ctx.save/restoreにしているのはそのため）。的自体は再スピンのたびに
+     新しいオブジェクトへ作り直されるが、ひびは_king.reelCracks[idx]に
+     的スロット単位で蓄積するため、再スピンをまたいで消えずに残る */
+  if (_king && _king.reelCracks && idx != null) {
+    const cracks = _king.reelCracks[idx];
+    if (cracks && cracks.length) {
+      ctx.save();
+      ctx.translate(w.x, w.y);
+      ctx.fillStyle = 'rgba(12,9,7,0.82)';
+      for (const poly of cracks) {
+        ctx.beginPath();
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j].x, poly[j].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
     }
   }
-  ctx.restore();
   ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
   ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
   ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
@@ -4955,6 +4985,7 @@ function _initBossBattle() {
     tx: W / 2, ty: reelY,
     reels, reelIdx: 0, resultTimer: null, resultMatched: false, charWeights,
     failCount: 0,
+    reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
   _kingLasers = [];
   _kingCharFlights = [];
@@ -5155,12 +5186,20 @@ function _kingReelShoot(inputPerfMs) {
       _kingApplyHit(avgScore);
       if (_king.cookPct >= 100) _startBossVictory();
     } else {
-      /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させ、ルーレットへ
+      /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させ、4つの的それぞれに
          ひびを1本増やす（ユーザー要望）。KING_MAX_FAILS回でルーレット完全破壊＝敗北。
          playSE('miss')は_kingApplyHit内の外れ演出と同じSEを流用（既存の「外れ」の
          聞こえ方と統一するため新規SEは追加しない） */
       _king.cookPct = Math.max(0, _king.cookPct - KING_MISS_PCT_PENALTY);
       _king.failCount = Math.min(KING_MAX_FAILS, _king.failCount + 1);
+      /* ひびの起点は文字が実際に当たる場所（常に的の縁の真上、_startKingCharBounce
+         参照）で固定だが、ボスの水平位置に対する各的の左右のずれぶんだけ衝突角を
+         わずかに傾け、当たった向きなりの自然さを出す（ユーザー要望） */
+      for (let i = 0; i < _king.reels.length; i++) {
+        const rw = _king.reels[i];
+        const biasAngle = Math.max(-0.35, Math.min(0.35, (rw.x - _king.dbx) / 220));
+        _king.reelCracks[i].push(_createKingCrackWedge(biasAngle));
+      }
       playSE('miss');
       if (_king.failCount >= KING_MAX_FAILS) _startBossDefeat();
     }
@@ -5392,7 +5431,7 @@ function drawBossBattle() {
   /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
   drawKingCharFlights();
   /* こんがりミニリール4連（旧: 砲台） */
-  for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx);
+  for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx, i);
   drawKingCookGauge();
 }
 
