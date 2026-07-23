@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.85';
+const VERSION = 'v4.86';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1700,6 +1700,49 @@ function _playDoraHit(ctx, t, dest) {
   });
 }
 
+/* こんがり達成（キング撃破）専用の達成感あるファンファーレ
+   （ユーザー要望: 「こんがりぎようざ達成時に、BGMはそこで止めて、達成感の
+   ある効果音を鳴らしてください」）。従来は_startBossVictoryが通常モードの
+   'jackpot'（stopBGM+scheduleBGMRestartで2秒後に自動再開する設計、
+   トライが続く通常モード向け）を流用していたため、勝利演出の最中にボスBGM
+   が復活してしまっていた。ボス戦の決着（もう戻らない）にはこの自動再開が
+   そぐわないため、専用ケースとして切り出す（_playDoraHit切り出し時と
+   同じ隔離方針）。BGM停止自体は_stopBossBGMForVictory側で行う。
+   構成:
+   1. 上昇アルペジオ+ベース（jackpotより1オクターブ広い、達成感の大きい音域）
+   2. ベルの残響（_playDoraHitと同じ加算合成の技法だが、暗いA2ではなく
+      明るいC6を基音にした非整数次倍音で、長く伸びる輝くような余韻にする）
+   3. 仕上げのきらめき（実績解除'ach'と同じ動機を使い、「最後の実績」
+      であることを音楽的にも結びつける） */
+function _playKongariCompleteFanfare(ctx, t, dest) {
+  const d = _seDest(ctx, dest);
+  const fanfare = [
+    [noteHz('C',5), 0.00, 0.16], [noteHz('E',5), 0.13, 0.16],
+    [noteHz('G',5), 0.26, 0.16], [noteHz('C',6), 0.39, 0.45],
+    [noteHz('E',6), 0.65, 0.16], [noteHz('G',6), 0.78, 0.55],
+  ];
+  fanfare.forEach(([f, dt, dur]) => playOsc(ctx, 'square', f, t+dt, dur, 0.30, 0.10, null, null, d));
+  [noteHz('C',3), noteHz('G',3), noteHz('C',4)].forEach((f, i) =>
+    playOsc(ctx, 'sine', f, t + i*0.28, 0.7, 0.34, 0.22, null, null, d));
+  const base = noteHz('C', 6); // 明るいベルの基音（_playDoraHitのA2＝暗い響きとは対照的）
+  const partials = [1, 2.0, 2.76, 3.3, 4.2]; // ベル特有の非整数次倍音比
+  partials.forEach((ratio, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(d);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(base * ratio, t + 0.39); // 主和音の頂点(C6)と同時に鳴り始める
+    const vol = 0.16 / (i + 1);
+    const decay = 2.0 - i * 0.18;
+    gain.gain.setValueAtTime(0.0001, t + 0.39);
+    gain.gain.linearRampToValueAtTime(vol, t + 0.41);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.39 + decay);
+    osc.start(t + 0.39); osc.stop(t + 0.39 + decay + 0.05);
+  });
+  [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)].forEach((f, i) =>
+    playOsc(ctx, 'sine', f, t + 1.0 + i*0.07, 0.16, 0.22, 0.10, null, null, d));
+}
+
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
    optsでボス戦用の差し替え要素をまとめて指定できる（メロディ・ハイハット・
    キックの音符自体・鳴らすステップは通常BGMと共通のため、音色・音量・
@@ -1975,6 +2018,25 @@ function stopBGMTape(durationMs = 1300) {
   grayRateTarget = 0.001; // グレースケールを最大に向かってアニメーション
 }
 
+/* こんがり達成（キング撃破）専用のBGM停止（ユーザー要望: 「BGMはそこで
+   止めて」）。stopBGMTapeを使わない理由: あちらは減速演出とグレースケール
+   演出（grayRateTarget）がセットになっており、「敗北・停滞」の質感になる。
+   勝利の高揚感（花火が上がる）とグレースケールは噛み合わないため、
+   bgmGainを短時間でフェードしてからソースを止めるだけの軽い処理にする。
+   fadeMs経過後に停止するが、その時点のbgmSourceが差し替え前のものと
+   同じ場合のみ止める（capturedSrcガード）: _bossVictoryTimer>90経過後の
+   CONTINUEタップで_kingBattleEndが新しいBGMソースを既に作っていた場合に、
+   誤って新ソースを止めてしまう事故を防ぐ */
+function _stopBossBGMForVictory(fadeMs = 120) {
+  if (!audioCtx || !bgmGain) return;
+  const t = audioCtx.currentTime;
+  bgmGain.gain.cancelScheduledValues(t);
+  bgmGain.gain.setValueAtTime(bgmGain.gain.value, t);
+  bgmGain.gain.linearRampToValueAtTime(0, t + fadeMs / 1000);
+  const capturedSrc = bgmSource;
+  setTimeout(() => { if (bgmSource === capturedSrc) _destroyBGMSource(); }, fadeMs + 30);
+}
+
 /* テープが回り始めるように加速（ゲームオーバーリセット専用）
    既存ソースがあればその位置から加速、なければ新規作成 */
 function startBGMTape(durationMs = 1400) {
@@ -2245,6 +2307,12 @@ function playSE(name, atTime) {
       /* キングギヨウザ登場の瞬間専用（_playDoraHit参照）:
          バーンという衝撃＋ドラのような金属的な余韻 */
       _playDoraHit(ctx, t);
+      break;
+    }
+    case 'kongari_complete': {
+      /* こんがり達成（キング撃破）の瞬間専用（_playKongariCompleteFanfare参照）:
+         上昇アルペジオ＋明るいベルの残響＋実績解除のきらめき */
+      _playKongariCompleteFanfare(ctx, t);
       break;
     }
     case 'sync_just': break; // 廃止: 視覚表示（JUST!/GOOD）のみ、SE なし
@@ -5924,7 +5992,13 @@ function _startBossVictory() {
   _bossVictoryTimer = 0;
   if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
   launchFireworks();
-  playSE('jackpot');
+  /* ユーザー要望: 「こんがりぎようざ達成時に、BGMはそこで止めて、達成感の
+     ある効果音を鳴らしてください」。従来は通常モードのjackpot（stopBGM+
+     2秒後に自動再開）を流用しており、勝利演出の最中にボスBGMが復活して
+     しまっていた。専用のBGM停止＋専用ファンファーレに差し替える
+     （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
+  _stopBossBGMForVictory();
+  playSE('kongari_complete');
   unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績。ユーザー要望）
 }
 
