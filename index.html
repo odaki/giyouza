@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.83';
+const VERSION = 'v4.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1634,6 +1634,41 @@ function _playAcidShootHit(ctx, t, dest) {
   _pluck(t + 0.025, noteHz('G', 3), 0.045, 0.17);
 }
 
+/* キングギヨウザ登場（誕生）の瞬間専用、ドラ（銅鑼）風の派手な一撃音
+   （ユーザー要望: 「バーン、とドラが鳴るような派手な感じにしたい」。
+   従来はboss_flash（雷鳴: ノイズ+A2単音）を流用していたが、boss_flashは
+   予兆収束開始・的破砕・こんがりしっぱい退場でも共用のSEのため、これを
+   派手にすると他3箇所も変わってしまう。登場の瞬間だけを差し替えたいので
+   新規ケースとして切り出す（_playAcidShootHit切り出し時と同じ隔離方針）。
+   構成は2層:
+   1. インパクト（バーン）: 低音の急減衰スライド（ドスンという衝撃）+
+      広帯域ノイズバースト（アタックのクラック感）
+   2. ドラの共鳴（金属的な唸り）: 基音（調内のA2、boss_flashと同じ音高で
+      統一）に対し非整数次の倍音比を複数重ね、それぞれ独立した長い減衰で
+      鳴らし続けて金属的な余韻を作る。整数次倍音列だと管楽器的な音になって
+      しまうため、あえて整数比から外す（ベル/銅鑼の加算合成の定石）。
+      高次倍音ほど音量を落とし・減衰を速くすることで自然な減衰特性にする */
+function _playDoraHit(ctx, t, dest) {
+  const d = _seDest(ctx, dest);
+  _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4); // インパクト: 低音ドスン
+  playNoise(ctx, t, 0.12, 0.5, 1500, d); // インパクト: アタックのノイズクラック
+  const base = noteHz('A', 2); // boss_flashの雷鳴と同じ音高で統一
+  const partials = [1, 2.0, 2.76, 3.3, 4.2, 5.4]; // ベル/銅鑼特有の非整数次倍音比
+  partials.forEach((ratio, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(d);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(base * ratio, t);
+    const vol = 0.22 / (i + 1);
+    const decay = 1.8 - i * 0.15;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(vol, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    osc.start(t); osc.stop(t + decay + 0.05);
+  });
+}
+
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
    optsでボス戦用の差し替え要素をまとめて指定できる（メロディ・ハイハット・
    キックの音符自体・鳴らすステップは通常BGMと共通のため、音色・音量・
@@ -2085,6 +2120,12 @@ function playSE(name, atTime) {
       /* 雷鳴: ノイズバースト+A2 */
       playNoise(ctx, t, 0.5, 0.4, 400);
       playOsc(ctx, 'sawtooth', noteHz('A',2), t, 0.3, 0.2, 0.2);
+      break;
+    }
+    case 'king_appear': {
+      /* キングギヨウザ登場の瞬間専用（_playDoraHit参照）:
+         バーンという衝撃＋ドラのような金属的な余韻 */
+      _playDoraHit(ctx, t);
       break;
     }
     case 'sync_just': break; // 廃止: 視覚表示（JUST!/GOOD）のみ、SE なし
@@ -4666,7 +4707,7 @@ function _updateBossOmen() {
       for (const g of o.items) g._dead = true;
       o.items = [];
       grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
-      playSE('boss_flash');
+      playSE('king_appear'); // バーン+ドラの派手な一撃（ユーザー要望、_playDoraHit参照）
     }
   } else if (o.step === 6) {
     /* 誕生フラッシュ+タイトル */
