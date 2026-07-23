@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.75';
+const VERSION = 'v4.76';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2405,6 +2405,28 @@ function initGame() {
   init(true);
 }
 
+/* ゲームオーバー（gameOverReset）・キングギヨウザ戦終了（_kingBattleEnd）
+   共通の通常モード復帰処理。テープ加速演出（startBGMTape）でBGMを再開し、
+   加速完了まで射撃をロックするtapestartフェーズから再スタートする
+   （update()でrate≥0.99になったらidleへ移行）。
+   - _resumeAudioCtxはinit()の後に呼ぶ: interrupted復帰では_recreateAudioGraph
+     がbgmSourceを破棄するため、先に呼ぶとinit()内の「bgmSourceが無ければ
+     startBGM()」（即時フルテンポ再生）が誤発動してテープ加速演出を
+     スキップしてしまう。init()時点では旧ソースが残っている（stopBGMTapeは
+     ソースを止めず極低速で保持する設計）のでstartBGM()は呼ばれず、破棄後は
+     startBGMTapeのフォールバック（新規ソースを極低速から加速）が演出を担う。
+   - interrupted状態はresume()では復帰できないため必ず_resumeAudioCtx()経由
+     （feedback_ios_safari_audio memory参照） */
+function _restartToTapestart() {
+  init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
+  phase = 'tapestart';
+  /* グレースケール解除。startBGMTape側でも設定されるが非同期（_resumeAudioCtx
+     のコールバック）のため、無音起動（audioCtxなし）でも確実に解除されるよう
+     ここで同期的に設定する */
+  grayRateTarget = 1.0;
+  if (audioCtx) _resumeAudioCtx(startBGMTape);
+}
+
 function gameOverReset() {
   coins      = 60;
   coinsDisp  = 0; _lastCoinsDispCached = -1; // tapestart中は0固定、idle移行後に0→60アニメーション
@@ -2420,13 +2442,7 @@ function gameOverReset() {
   _resetFeverState();
   for (const g of items) g._dead = true; items = [];
   lsSave();
-  /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない）
-     interrupted状態はresume()では復帰できないため_resumeAudioCtx()経由にする
-     （feedback_ios_safari_audio memory参照） */
-  if (audioCtx) _resumeAudioCtx(startBGMTape);
-  init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
-  /* テープが加速完了するまで射撃を禁止。update()でrate≥0.99になったらidleに移行 */
-  phase = 'tapestart';
+  _restartToTapestart();
 }
 
 /* トライ終了時のエフェクト系状態を一括で後始末する（init()と_startBossOmen
@@ -4652,6 +4668,15 @@ function _updateBossOmen() {
   /* step7: ボス鎮座（handleGameClick がタップで _initBossBattle を呼び戦闘開始） */
 }
 
+/* ボス戦闘系フェーズ（bossOmenは含まない: 予兆中はホイール等の通常UIをまだ
+   表示するため）。通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは
+   必ずこの述語を使うこと。以前は6項目のphase比較チェーンを各ガードにコピー
+   していたため、新フェーズ追加時（bossShatter等）の広げ忘れが実バグになった
+   （drawSlowHandBadgeのコメント参照）。一元化により全ガードへ同時反映される */
+const BOSS_BATTLE_PHASES = new Set(
+  ['boss', 'bossShatter', 'bossVictory', 'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
+function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
+
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 function _kingBattleEnd() {
   _king = null; _kingLasers = []; _kingCharFlights = [];
@@ -4678,13 +4703,7 @@ function _kingBattleEnd() {
     phase = 'done';
     return;
   }
-  /* interrupted状態はresume()では復帰できないため_resumeAudioCtx()経由にする
-     （feedback_ios_safari_audio memory参照。以前はここが素のresume()のみで、
-     キング戦中にinterruptedへ入っていた場合BGMが壊れたまま復帰していた） */
-  if (audioCtx) _resumeAudioCtx(startBGMTape);
-  grayRateTarget = 1.0;
-  init(false, true);
-  phase = 'tapestart';
+  _restartToTapestart();
 }
 
 /* こんがりしっぱい（全損には至らない敗北）から通常モードへ戻る前のつなぎ演出。
@@ -6147,7 +6166,7 @@ function draw() {
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール（ボス戦闘中は非表示） */
-  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
+  if (!_isBossBattlePhase()) {
     for (let i=0;i<4;i++) drawWheel(i);
   }
 
@@ -6190,7 +6209,7 @@ function draw() {
   }
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
-  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
+  if (!_isBossBattlePhase()) {
     if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
   }
   drawCoinHeader();
@@ -6243,7 +6262,7 @@ function draw() {
   drawBossDefeatOutro();
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
-  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') drawSyncMeter();
+  if (!_isBossBattlePhase()) drawSyncMeter();
   drawSyncJust();
 
   /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
@@ -7464,9 +7483,9 @@ function drawSlowHandBadge() {
      （予告のテープストップ、こんがりしっぱい時のテープ停止など）。
      grayRateCurが下がる＝スローハンドではないため、ボス関連フェーズは
      まとめて対象外にする（水平展開: bossOmenのみ除外していたのを
-     こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた） */
-  if (phase === 'bossOmen' || phase === 'boss' || phase === 'bossShatter' || phase === 'bossVictory' ||
-      phase === 'bossDefeat' || phase === 'bossDefeatShrink' || phase === 'bossDefeatOutro') return;
+     こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた。
+     現在は_isBossBattlePhase()で一元化し、bossOmenだけ個別に足す） */
+  if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (isGameOver) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
