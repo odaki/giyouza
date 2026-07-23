@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.65';
+const VERSION = 'v4.66';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7843,6 +7843,14 @@ function onShoot(_inputPerfMs){
     if (coins < bet) return; // 念のため
     betLocked = true;
     coins -= bet;
+    /* ベット直後（このトライで所持コインが最も低くなる時点）にも実績チェックを
+       挟む。以前はcheckCoinsAch()が4本目着弾後の配当加算後にしか呼ばれず、
+       「残りわずかでベット→そのトライ自体が配当加算で一気に200超まで届く」
+       ケースでは coins<=9 の瞬間が一度も観測されず、不死鳥（comeback、
+       wasPoorフラグ）が立たないまま実績を取りこぼす不具合があった（実機指摘:
+       「残1から当たりを重ねて200を越えたにもかかわらず実績がつかなかった」）。
+       ベット直後の最安値をここで確実に拾うことで解消する */
+    checkCoinsAch();
     unlockAch('first_shot');
     if (bet >= 100) unlockAch('bet_max');
     /* プレイ回数カウント */
