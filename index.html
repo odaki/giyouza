@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.81';
+const VERSION = 'v4.82';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5166,7 +5166,7 @@ function _initBossBattle() {
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
     reels, reelIdx: 0, resultTimer: null, resultMatched: false, charWeights,
-    failCount: 0, pendingDefeat: false,
+    failCount: 0, pendingDefeat: false, missAttemptToken: null,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
   _kingLasers = [];
@@ -5390,15 +5390,23 @@ function _kingReelShoot(inputPerfMs) {
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先は
        スポーン時から確定済みのためここでの位置変更は不要
        （こんがり=そのまま吸い込まれる／ハズレ=そこから跳ね返る）。
-       ハズレの4体には共通のattemptTokenを持たせ、全員が衝突し終えたタイミングを
-       _updateKingCharFlights側で検知できるようにする（シャッター演出のトリガー） */
+       ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が
+       全て入り終えたか」（シャッター演出のトリガー、_updateKingCharFlights参照）、
+       aliveは「4体とも画面外へ消えて配列から取り除かれたか」（次のトライを
+       許可する条件、_updateBossBattle参照）を別々に数える。衝突完了と画面外
+       退場はタイミングが異なる（衝突後もfall状態でしばらく画面内に残る）ため
+       2つのカウンタが必要 */
     const resolveAs = matched ? 'stick' : 'bounce';
-    const attemptToken = matched ? null : { remaining: 0 };
+    const attemptToken = matched ? null : { remaining: 0, alive: 0 };
     for (const f of _kingCharFlights) {
       if (f.resolve !== null) continue;
       f.resolve = resolveAs;
-      if (attemptToken) { f.attemptToken = attemptToken; attemptToken.remaining++; }
+      if (attemptToken) { f.attemptToken = attemptToken; attemptToken.remaining++; attemptToken.alive++; }
     }
+    /* ユーザー要望: 「こんがりが揃わなかった場合、落下してきた文字が的にぶつかって
+       全て画面外に消えるまで、次のトライができないようにしてほしい」。
+       _king側に保持し、_updateBossBattleの再スピン可否判定で参照する */
+    _king.missAttemptToken = attemptToken;
   }
 }
 
@@ -5591,6 +5599,11 @@ function _updateKingCharFlights() {
     if (f.state === 'stick') return f.frames < KING_CHAR_STICK_FADE_FRAMES;
     if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
     return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
+  }, f => {
+    /* 画面外へ消えて配列から取り除かれた瞬間にattemptToken.aliveを減らす。
+       _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を
+       見て初めて次のトライ（respin）を許可する（ユーザー要望） */
+    if (f.attemptToken) f.attemptToken.alive--;
   });
 }
 
@@ -5615,8 +5628,17 @@ function _updateBossBattle() {
   if (_king.resultTimer !== null && !_king.pendingDefeat) {
     _king.resultTimer++;
     const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
-    if (_king.resultTimer > minWait && onBeatGrid()) {
+    /* ハズレの場合、弾き飛ばされた4体が全て画面外に消え終える
+       （missAttemptToken.alive<=0）まで再スピンしない（ユーザー要望:
+       「こんがりが揃わなかった場合、落下してきた文字が的にぶつかって全て
+       画面外に消えるまで、次のトライができないようにしてほしい」）。
+       reelIdx=4のまま再スピンを止めれば_kingReelShootの既存ガードで
+       入力（次のトライ）も自動的に塞がれる。的中（stick）はフェードが
+       10フレームと短く体感の待ちにならないため、この待ちは課さない */
+    const missClear = _king.resultMatched || !_king.missAttemptToken || _king.missAttemptToken.alive <= 0;
+    if (_king.resultTimer > minWait && onBeatGrid() && missClear) {
       _king.resultTimer = null;
+      _king.missAttemptToken = null;
       _respinKingReels();
     }
   }
