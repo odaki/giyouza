@@ -117,6 +117,60 @@ const IS_PORTRAIT = _forcePortrait || (IS_TOUCH && window.innerWidth < window.in
 
 const W = IS_PORTRAIT ? 420  : 1060;
 const H = IS_PORTRAIT ? 820  : 560;
+/* ?cheatpanel URL パラメータで画面下端にタップ式チートパネルを表示する。
+   iOS Safari + 外付け（Bluetooth）キーボードでkeydown系のチートキー
+   （Ctrl+F/T/C・矢文字G/Y/U/Z）が一切反応しない不具合（実機指摘、複数の
+   JS側対策：予約ショートカット回避キー・KeyboardEvent.keyフォールバック・
+   canvasフォーカス確保、を試したが解消せず）への対処。タップはこのゲーム
+   の主入力手段そのものであり確実に届くため、キーボードに依存しない
+   代替経路として用意する。本番プレイでは?cheatpanelを付けない限り
+   一切描画・判定されない（既存の?king=等のデバッグ用URLパラメータと
+   同じ位置づけ） */
+const CHEAT_PANEL_ON = new URLSearchParams(location.search).has('cheatpanel');
+const CHEAT_PANEL_BTNS = [
+  { id: 'fever', label: 'FEVER' },
+  { id: 'slow',  label: 'SLOW'  },
+  { id: 'clr',   label: 'CLR'   },
+  { id: 'gi',    label: 'ギ'    },
+  { id: 'yo',    label: 'ヨ'    },
+  { id: 'u',     label: 'ウ'    },
+  { id: 'za',    label: 'ザ'    },
+];
+function _cheatPanelRect(i) {
+  const h = 26, gap = 2;
+  const w = (W - gap * (CHEAT_PANEL_BTNS.length - 1)) / CHEAT_PANEL_BTNS.length;
+  return { x: i * (w + gap), y: H - h, w, h };
+}
+function _runCheatPanelAction(id) {
+  if (id === 'fever') { _cheatFeverQueued = true; return; }
+  if (id === 'slow') {
+    _cheatSlowQueued = _cheatSlowQueued !== null ? null : !isSlowSpin;
+    return;
+  }
+  if (id === 'clr') {
+    try { localStorage.clear(); } catch(_e) {}
+    location.reload();
+    return;
+  }
+  const charMap = { gi: 'ギ', yo: 'ヨ', u: 'ウ', za: 'ザ' };
+  if (charMap[id] && phase === 'idle' && curIdx < 4) cheatShoot(charMap[id]);
+}
+function drawCheatPanel() {
+  if (!CHEAT_PANEL_ON) return;
+  ctx.save();
+  ctx.font = `bold 11px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < CHEAT_PANEL_BTNS.length; i++) {
+    const r = _cheatPanelRect(i);
+    ctx.fillStyle = 'rgba(200,0,80,0.75)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(CHEAT_PANEL_BTNS[i].label, r.x + r.w / 2, r.y + r.h / 2);
+  }
+  ctx.restore();
+}
 /* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画 */
 const _dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
 canvas.width  = W * _dpr;
@@ -124,7 +178,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.69';
+const VERSION = 'v4.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6198,6 +6252,8 @@ function draw() {
 
   /* 画面全体フェード: 最前面・シェイク変形の外で描く（余韻を大切にした暗転つなぎ） */
   _drawScreenFade();
+  /* デバッグ用タップ式チートパネル（?cheatpanel時のみ、常に最前面） */
+  drawCheatPanel();
 }
 
 /* ════════════════ 描画関数群 ════════════════ */
@@ -8089,6 +8145,11 @@ canvas.addEventListener('mousedown', e=>{
   /* _canvasRect キャッシュを使用（getBoundingClientRect() 強制レイアウトを排除） */
   const cx = (e.clientX - _canvasRect.left) * (W / _canvasRect.width);
   const cy = (e.clientY - _canvasRect.top)  * (H / _canvasRect.height);
+  if (CHEAT_PANEL_ON) {
+    for (let i = 0; i < CHEAT_PANEL_BTNS.length; i++) {
+      if (hitTest(_cheatPanelRect(i), cx, cy)) { _runCheatPanelAction(CHEAT_PANEL_BTNS[i].id); return; }
+    }
+  }
   if (FS_SUPPORTED && hitTest(FS_BTN_RECT, cx, cy)) { toggleFullscreen(); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
@@ -8133,6 +8194,11 @@ document.addEventListener('touchstart', e=>{
   /* 入力物理発生時刻（performance.now() 基準 ms） */
   const inputPerfMs = e.timeStamp;
   const pt = touchToCanvas(e.touches[0]);
+  if (CHEAT_PANEL_ON) {
+    for (let i = 0; i < CHEAT_PANEL_BTNS.length; i++) {
+      if (hitTest(_cheatPanelRect(i), pt.x, pt.y)) { _runCheatPanelAction(CHEAT_PANEL_BTNS[i].id); return; }
+    }
+  }
   /* 全画面ボタン: 最初にチェック（全フェーズで有効） */
   if (FS_SUPPORTED && hitTest(FS_BTN_RECT, pt.x, pt.y)) { toggleFullscreen(); return; }
   /* すべてのタッチで AudioContext をアンロックする。
