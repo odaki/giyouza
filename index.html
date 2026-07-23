@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.88';
+const VERSION = 'v4.89';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1712,6 +1712,13 @@ function _playDoraHit(ctx, t, dest) {
    1. 上昇アルペジオ+ベース（jackpotより1オクターブ広い、達成感の大きい音域）
    2. 「チーン」（オーブン/レンジの調理完了を示す定番SE。ユーザー指摘:
       「今も近いですが、もっとチーン音だとわかるようにしてほしい」）。
+      さらに「ファンファーレとチーン音が重なってしまい、よく聞こえません。
+      ファンファーレの後に、チーン音がタイミングよく、単独で鳴るように
+      してください」との指摘を受け、鳴らすタイミングをファンファーレの
+      主和音(C6, t+0.39)と同時打ちから、ファンファーレの全パート（メロディ
+      最終音G6と、より遅く鳴り終わるベース最終音C4の減衰・リリースを含む）
+      が鳴り止んだ後のt+1.6へ移動した。これによりチーン単独のアタックが
+      確実に聞き取れる。
       当初は_playDoraHitと同じ5倍音の加算合成（銅鑼寄りの厚い響き）で
       「明るいベルの残響」を狙ったが、倍音が多く唸りが乗るとチーンより
       銅鑼・鐘の乱打に近く聞こえてしまう。実物のチーン音の特徴（単発・
@@ -1745,7 +1752,11 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
   fanfare.forEach(([f, dt, dur]) => playOsc(ctx, 'square', f, t+dt, dur, 0.30, 0.10, null, null, d));
   [noteHz('C',3), noteHz('G',3), noteHz('C',4)].forEach((f, i) =>
     playOsc(ctx, 'sine', f, t + i*0.28, 0.7, 0.34, 0.22, null, null, d));
-  const strikeT = t + 0.39; // 主和音の頂点(C6)と同時に打つ
+  /* ファンファーレの最終音（メロディG6: t+0.78開始, dur0.55+decay0.10+
+     release0.02→t+1.45で消音／ベースC4: t+0.56開始, dur0.7+decay0.22+
+     release0.02→t+1.5で消音）が鳴り止んだ後、0.1秒の間を置いてから
+     単独で打つ */
+  const strikeT = t + 1.6;
   playNoise(ctx, strikeT, 0.008, 0.22, 6000, d); // ソレノイドがベルに接触する瞬間の金属クリック
   const base = noteHz('C', 7); // アルペジオの頂点(C6)より1オクターブ上、チーン特有の高く澄んだ音高
   const partials = [
@@ -1764,8 +1775,11 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
     gain.gain.exponentialRampToValueAtTime(0.0001, strikeT + decay);
     osc.start(strikeT); osc.stop(strikeT + decay + 0.05);
   });
+  /* 仕上げのきらめき: チーンの打撃が単独で聞こえるよう、アタックから
+     0.6秒後（打撃直後の余韻の途中）に開始する（以前はファンファーレ基準の
+     t+1.0だったが、チーンをt+1.6へ移動したため位置もチーン基準に合わせた） */
   [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)].forEach((f, i) =>
-    playOsc(ctx, 'sine', f, t + 1.0 + i*0.07, 0.16, 0.22, 0.10, null, null, d));
+    playOsc(ctx, 'sine', f, strikeT + 0.6 + i*0.07, 0.16, 0.22, 0.10, null, null, d));
 }
 
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
