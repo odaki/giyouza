@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.77';
+const VERSION = 'v4.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5552,10 +5552,14 @@ function _updateKingCharFlights() {
         /* 衝突の瞬間にひびを追加（ユーザー要望どおりのタイミング） */
         _addKingReelCrackAtCollision(f);
         /* 同じ失敗attemptの4体全てが衝突し終えたら、6回目の失敗（pendingDefeat）
-           の場合に限り的の破砕演出へ進む（_kingReelShoot参照） */
+           の場合に限り的の破砕演出へ進む（_kingReelShoot参照）。
+           phase==='boss'ガードは防御的措置: _updateKingCharFlightsは
+           bossVictory/bossDefeat系の各updateからも呼ばれ続けるため、万一
+           別phaseへ遷移済みの状態で衝突が完了してもシャッターで上書きしない
+           （pendingDefeat中の再スピン停止で通常は起こり得ないが、二重保険） */
         if (f.attemptToken) {
           f.attemptToken.remaining--;
-          if (f.attemptToken.remaining <= 0 && _king && _king.pendingDefeat) {
+          if (f.attemptToken.remaining <= 0 && _king && _king.pendingDefeat && phase === 'boss') {
             _startKingReelShatter();
           }
         }
@@ -5585,7 +5589,16 @@ function _updateBossBattle() {
      実機指摘で、wall-clockの固定待ち時間（旧KING_RESULT_HOLD_SEC）から、
      フレームカウンタ+BGM拍グリッド同期の解放条件に変更した。演奏・演出の進行に
      紐づくゲートなのでフレームカウンタが正しい（CLAUDE.md参照） */
-  if (_king.resultTimer !== null) {
+  /* 6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示した
+     ままロックされ続け、文字の衝突（ひび）→破砕へそのまま進む。
+     以前はKING_RESULT_MIN_WAIT.miss（2フレーム）＋拍同期ですぐ再スピンして
+     いたが、文字の衝突（シャッター発動）は復路込みで32フレーム以上先のため、
+     6回目失敗後も的が回り直してタップ受付が再開され、pendingDefeat中に追加
+     attemptを撃ててしまうバグがあった（最悪ケース: 追加attemptでこんがり
+     100%到達→_startBossVictoryの後に、先行attemptの衝突完了でシャッターが
+     発動し、勝利フローと敗北フローが衝突する）。再スピンを止めれば
+     reelIdx=4のまま_kingReelShootの既存ガードで入力も塞がれる */
+  if (_king.resultTimer !== null && !_king.pendingDefeat) {
     _king.resultTimer++;
     const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
     if (_king.resultTimer > minWait && onBeatGrid()) {
