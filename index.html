@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.72';
+const VERSION = 'v4.73';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3017,6 +3017,10 @@ function update() {
     _updateBossBattle();
     return;
   }
+  if (phase === 'bossShatter') {
+    _updateKingReelShatter();
+    return;
+  }
   if (phase === 'bossVictory') {
     _updateBossVictory();
     return;
@@ -4972,6 +4976,8 @@ const KING_CHAR_BOUNCE_FRICTION    = 0.55;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
+let _kingShatter = null; // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
+const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
@@ -5097,7 +5103,7 @@ function _initBossBattle() {
     dbx: W / 2, dby: omenBy, dscale: 1,
     tx: W / 2, ty: reelY,
     reels, reelIdx: 0, resultTimer: null, resultMatched: false, charWeights,
-    failCount: 0,
+    failCount: 0, pendingDefeat: false,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
   _kingLasers = [];
@@ -5200,7 +5206,7 @@ function _renderKingBody() {
    位置を使うことで、結果確定時に位置を作り直す必要が一切なくなる（実機指摘:
    待機中は中心寄りの仮位置にして結果確定時に本来の位置へ動かす実装を
    していたが、そもそも最初から本来の位置に配置してほしいという要望だった） */
-function _spawnKingCharFlight(w) {
+function _spawnKingCharFlight(w, reelIdx) {
   const tier = w.syncScore >= 0.667 ? 'just' : w.syncScore >= 0.333 ? 'good' : null;
   _kingCharFlights.push({
     char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
@@ -5210,8 +5216,9 @@ function _spawnKingCharFlight(w) {
        ボスと反対側から回り込む不自然な軌道になってしまうため、ボス側を
        向いている上側を衝突点にする（ユーザー指摘） */
     rtx: w.x, rty: w.y - (KING_WR + 12),
+    reelIdx, // 衝突の瞬間（_startKingCharBounce）にどの的のスロットへひびを追加するか
     tier, markRef: tier ? _createKingMark() : null,
-    state: 'fly', frames: 0, resolve: null,
+    state: 'fly', frames: 0, resolve: null, attemptToken: null,
   });
 }
 
@@ -5276,7 +5283,7 @@ function _kingReelShoot(inputPerfMs) {
   w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
   playSE('kingShoot');
   _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
-  _spawnKingCharFlight(w);
+  _spawnKingCharFlight(w, _king.reelIdx);
   _king.reelIdx++;
   if (_king.reelIdx >= 4) {
     const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
@@ -5299,34 +5306,35 @@ function _kingReelShoot(inputPerfMs) {
       _kingApplyHit(avgScore);
       if (_king.cookPct >= 100) _startBossVictory();
     } else {
-      /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させ、4つの的それぞれに
-         ひびを1本増やす（ユーザー要望）。KING_MAX_FAILS回でルーレット完全破壊＝敗北。
-         playSE('miss')は_kingApplyHit内の外れ演出と同じSEを流用（既存の「外れ」の
-         聞こえ方と統一するため新規SEは追加しない） */
+      /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
+         ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が
+         的へ衝突した瞬間（_startKingCharBounce、_updateKingCharFlights参照。
+         ユーザー要望: 「クラックが入るタイミングがおかしい。文字が衝突した瞬間
+         という話をしたはず」）。playSE('miss')は_kingApplyHit内の外れ演出と
+         同じSEを流用（既存の「外れ」の聞こえ方と統一するため新規SEは追加しない） */
       _king.cookPct = Math.max(0, _king.cookPct - KING_MISS_PCT_PENALTY);
       _king.failCount = Math.min(KING_MAX_FAILS, _king.failCount + 1);
-      /* ひびの起点は文字が実際に当たる場所（常に的の縁の真上、_startKingCharBounce
-         参照）で固定だが、ボスの水平位置に対する各的の左右のずれぶんだけ衝突角を
-         わずかに傾け、当たった向きなりの自然さを出す（ユーザー要望）。
-         ワールド座標上の衝突角から、その的の現在のw.rotを差し引いてローカル角度に
-         変換してから渡す（_createKingCrackWedge参照。的の回転にひびが追従する
-         ようにするため。的はこの時点で全てロック済み＝rotは固定） */
-      for (let i = 0; i < _king.reels.length; i++) {
-        const rw = _king.reels[i];
-        const biasAngle = Math.max(-0.35, Math.min(0.35, (rw.x - _king.dbx) / 220));
-        const worldAngle = -Math.PI / 2 + biasAngle;
-        _king.reelCracks[i].push(_createKingCrackWedge(worldAngle - rw.rot));
-      }
+      /* 6回目の失敗は即座に敗北確定にはせず、今回の4文字が全て的へ衝突（ひびが
+         全て入り終える）まで待ってから、的が砕けて破片が消えきった後に敗北を
+         確定する（ユーザー要望）。_updateKingCharFlightsのattemptToken.remaining
+         が0になった時点でpendingDefeatを見て_startKingReelShatterへ進む */
+      if (_king.failCount >= KING_MAX_FAILS) _king.pendingDefeat = true;
       playSE('miss');
-      if (_king.failCount >= KING_MAX_FAILS) _startBossDefeat();
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先は
        スポーン時から確定済みのためここでの位置変更は不要
-       （こんがり=そのまま吸い込まれる／ハズレ=そこから跳ね返る） */
+       （こんがり=そのまま吸い込まれる／ハズレ=そこから跳ね返る）。
+       ハズレの4体には共通のattemptTokenを持たせ、全員が衝突し終えたタイミングを
+       _updateKingCharFlights側で検知できるようにする（シャッター演出のトリガー） */
     const resolveAs = matched ? 'stick' : 'bounce';
-    for (const f of _kingCharFlights) if (f.resolve === null) f.resolve = resolveAs;
+    const attemptToken = matched ? null : { remaining: 0 };
+    for (const f of _kingCharFlights) {
+      if (f.resolve !== null) continue;
+      f.resolve = resolveAs;
+      if (attemptToken) { f.attemptToken = attemptToken; attemptToken.remaining++; }
+    }
   }
 }
 
@@ -5393,9 +5401,8 @@ function _easeKingXform() {
    最終的に画面外へ落ちていくようにしたい。戻る先は的の下ではなくボス側の
    上にしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを設定
    する。等速直線運動で的へ向かい、KING_CHAR_FLY_FRAMES後（＝ちょうど的に
-   到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）する。
-   的のひびはfailCount連動の既存演出をそのまま使うため、ここでは新たに
-   何も生成しない */
+   到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）し、
+   その瞬間に的へひびを追加する（_addKingReelCrackAtCollision参照） */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
   const pos = _kingFlightTargetPos(f);
@@ -5405,6 +5412,26 @@ function _startKingCharBounce(f) {
   const spd = dist / KING_CHAR_FLY_FRAMES; // 往路と同程度の所要フレームで的に届く速度
   f.bvx = dx / dist * spd;
   f.bvy = dy / dist * spd;
+}
+
+/* 文字が実際に的へ衝突した瞬間（bounce→fall遷移）にひびを1本追加する
+   （ユーザー要望: 「クラックが入るタイミングがおかしい。文字が衝突した瞬間
+   という話をしたはず」。以前はミス確定と同時に4的まとめて追加していたが、
+   衝突は個々の文字の飛翔完了タイミングでバラける現象のため、それぞれの
+   衝突の瞬間に合わせて1本ずつ追加するよう変更した）。的は再スピンにより
+   衝突時点では別オブジェクトへ差し替わっている場合があるため、f.reelIdx
+   （スロット番号、_spawnKingCharFlight参照）で現在の的を引き直す。
+   ワールド座標上の衝突角（常に真上＝-PI/2＋ボス位置に応じた傾き）から、
+   その的の「現在の」w.rotを差し引いてローカル角度に変換する（_createKingCrackWedge
+   参照。衝突時点で的が既に次の的へ切り替わっていても、新しい的の現在の
+   回転にひびが正しく追従する） */
+function _addKingReelCrackAtCollision(f) {
+  if (!_king || f.reelIdx == null) return;
+  const rw = _king.reels[f.reelIdx];
+  if (!rw) return;
+  const biasAngle = Math.max(-0.35, Math.min(0.35, (rw.x - _king.dbx) / 220));
+  const worldAngle = -Math.PI / 2 + biasAngle;
+  _king.reelCracks[f.reelIdx].push(_createKingCrackWedge(worldAngle - rw.rot));
 }
 
 /* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
@@ -5458,6 +5485,16 @@ function _updateKingCharFlights() {
         const jitter = (Math.random() - 0.5) * 0.5;
         f.bvx = f.bvx * KING_CHAR_BOUNCE_FRICTION + jitter;
         f.bvy = -f.bvy * KING_CHAR_BOUNCE_RESTITUTION;
+        /* 衝突の瞬間にひびを追加（ユーザー要望どおりのタイミング） */
+        _addKingReelCrackAtCollision(f);
+        /* 同じ失敗attemptの4体全てが衝突し終えたら、6回目の失敗（pendingDefeat）
+           の場合に限り的の破砕演出へ進む（_kingReelShoot参照） */
+        if (f.attemptToken) {
+          f.attemptToken.remaining--;
+          if (f.attemptToken.remaining <= 0 && _king && _king.pendingDefeat) {
+            _startKingReelShatter();
+          }
+        }
       }
     } else if (f.state === 'fall') {
       /* 反発後の落下（重力）。水平方向はわずかに減速させ、垂直方向は
@@ -5526,7 +5563,10 @@ function drawKingCharFlights() {
 }
 
 function drawBossBattle() {
-  if (phase !== 'boss' || !_king) return;
+  /* bossShatter（6回目失敗の的破砕演出）中もボス本体・こんがりゲージは
+     表示し続け、的の絵柄だけ_kingShatterの破片描画に差し替える
+     （drawKingReelShatter参照） */
+  if ((phase !== 'boss' && phase !== 'bossShatter') || !_king) return;
   /* レーザー（層状ストローク・shadowBlur不使用の描画規約に準拠） */
   for (const l of _kingLasers) {
     const a = l.life / l.maxLife;
@@ -5549,8 +5589,13 @@ function drawBossBattle() {
   ctx.restore();
   /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
   drawKingCharFlights();
-  /* こんがりミニリール4連（旧: 砲台） */
-  for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx, i);
+  /* こんがりミニリール4連（旧: 砲台）。破砕演出中は的の絵柄の代わりに
+     飛び散る破片を描く */
+  if (phase === 'boss') {
+    for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx, i);
+  } else {
+    drawKingReelShatter();
+  }
   drawKingCookGauge();
 }
 
@@ -5637,6 +5682,79 @@ function drawBossVictory() {
     _drawBottomPillBadge('CONTINUE');
   }
   ctx.restore();
+}
+
+/* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
+   （_updateKingCharFlights参照）。ユーザー要望: 「6回目の失敗で的にクラックが
+   入り、的が砕けて破片が全て消えてからキングギヨウザ失敗が確定するべき」。
+   4的それぞれの4セグメントをそのまま破片として使い（新規ジオメトリを
+   起こさず既存のsegs/色をそのまま流用）、的の中心から外向きに飛び散らせる。
+   phaseを'bossShatter'に切り替えて入力を止め、_updateKingReelShatterが
+   全破片の消滅を監視して_startBossDefeatへ引き継ぐ */
+function _startKingReelShatter() {
+  phase = 'bossShatter';
+  const pieces = [];
+  for (const w of _king.reels) {
+    for (const seg of w.segs) {
+      const mid = w.rot + seg.start + seg.span / 2; // ワールド角度（現在の的の向き基準）
+      const spd = 2.5 + Math.random() * 3;
+      pieces.push({
+        cx: w.x, cy: w.y, x: 0, y: 0,
+        vx: Math.cos(mid) * spd, vy: Math.sin(mid) * spd - 2.5, // 少し上向きに弾ける
+        rot: w.rot + seg.start + seg.span / 2, rotSpd: (Math.random() - 0.5) * 0.3,
+        start: seg.start, span: seg.span, char: seg.char,
+      });
+    }
+  }
+  _kingShatter = { pieces, timer: 0 };
+  playSE('boss_flash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
+}
+
+function _updateKingReelShatter() {
+  /* ボス本体の呼吸・位置イージング、直前attemptの文字飛翔（まだ落下中の
+     ものが残っている場合）、レーザー演出は破砕中も止めない（_updateBossBattle
+     と同様の継続処理） */
+  if (_king) _easeKingXform();
+  _updateKingCharFlights();
+  for (const l of _kingLasers) l.life--;
+  swapRemove(_kingLasers, p => p.life > 0);
+
+  const s = _kingShatter;
+  if (!s) { _startBossDefeat(); return; }
+  s.timer++;
+  for (const p of s.pieces) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.3; // 重力
+    p.rot += p.rotSpd;
+  }
+  /* 全破片が画面外に出きった、または保険の上限フレームに達したら敗北確定へ
+     （ユーザー要望どおり、破片が全て消えてから敗北が確定する順序を守る） */
+  const allGone = s.timer > KING_SHATTER_MAX_FRAMES || s.pieces.every(p => {
+    const x = p.cx + p.x, y = p.cy + p.y;
+    return x < -80 || x > W + 80 || y < -80 || y > H + 80;
+  });
+  if (allGone) {
+    _kingShatter = null;
+    _startBossDefeat();
+  }
+}
+
+function drawKingReelShatter() {
+  if (phase !== 'bossShatter' || !_kingShatter) return;
+  for (const p of _kingShatter.pieces) {
+    ctx.save();
+    ctx.translate(p.cx + p.x, p.cy + p.y);
+    ctx.rotate(p.rot);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, KING_WR, -p.span / 2, p.span / 2);
+    ctx.closePath();
+    ctx.fillStyle = SEG_L[p.char];
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 /* こんがり攻撃失敗がKING_MAX_FAILS回に達し、ルーレットが完全破壊された＝敗北。
@@ -6015,7 +6133,7 @@ function draw() {
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール（ボス戦闘中は非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
+  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
     for (let i=0;i<4;i++) drawWheel(i);
   }
 
@@ -6058,7 +6176,7 @@ function draw() {
   }
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
+  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') {
     if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
   }
   drawCoinHeader();
@@ -6111,7 +6229,7 @@ function draw() {
   drawBossDefeatOutro();
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
-  if (phase !== 'boss' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') drawSyncMeter();
+  if (phase !== 'boss' && phase !== 'bossShatter' && phase !== 'bossVictory' && phase !== 'bossDefeat' && phase !== 'bossDefeatShrink' && phase !== 'bossDefeatOutro') drawSyncMeter();
   drawSyncJust();
 
   /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
@@ -7333,7 +7451,7 @@ function drawSlowHandBadge() {
      grayRateCurが下がる＝スローハンドではないため、ボス関連フェーズは
      まとめて対象外にする（水平展開: bossOmenのみ除外していたのを
      こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた） */
-  if (phase === 'bossOmen' || phase === 'boss' || phase === 'bossVictory' ||
+  if (phase === 'bossOmen' || phase === 'boss' || phase === 'bossShatter' || phase === 'bossVictory' ||
       phase === 'bossDefeat' || phase === 'bossDefeatShrink' || phase === 'bossDefeatOutro') return;
   if (isGameOver) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
@@ -8035,6 +8153,11 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'boss') { _kingReelShoot(inputPerfMs); return; }
+  if (phase === 'bossShatter') {
+    /* 的の破砕演出中は入力を無視（_updateKingReelShatterが自動的に
+       敗北確定（_startBossDefeat）へ進める） */
+    return;
+  }
   if (phase === 'bossVictory') {
     if (_bossVictoryTimer > 90) _kingBattleEnd();
     return;
