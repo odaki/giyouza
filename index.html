@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.82';
+const VERSION = 'v4.83';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4920,7 +4920,7 @@ function drawBossOmen() {
     ctx.drawImage(_bossOC.oc, -_bossOC.half, -_bossOC.half, _bossOC.half*2, _bossOC.half*2);
     ctx.restore();
     ctx.font = `bold ${IS_PORTRAIT ? 28 : 40}px 'Hiragino Mincho ProN',serif`;
-    outText('キングギヨウザ たんじょう！！', W/2, by - _BOSS_S*0.62,
+    outText('キングギヨウザ とうじょう！！', W/2, by - _BOSS_S*0.62,
       '#ffdd55', 'rgba(60,0,0,0.9)', 8);
     if (o.step === 7) _drawBottomPillBadge('CONTINUE');
   }
