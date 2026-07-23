@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.73';
+const VERSION = 'v4.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4659,9 +4659,24 @@ function _kingBattleEnd() {
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
   _defeatOutro = null;
   /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と
-     同じゲームオーバー復帰（フレッシュな60枚での再スタート）にする。
+     同じゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップで
+     gameOverReset）を経由させる（ユーザー要望: 「所持ギヨウザが0になる場合、
+     キングギヨウザが戻って飛んでいく演出を優先してください。その後、
+     所持ギヨウザ0のゲームオーバー演出に進んでください」）。ここで即座に
+     gameOverReset()を呼ぶと画面を見せないまま再スタートしてしまうため、
+     通常モードのisGameOver検出と同じ状態（phase='done'、endTimerから
+     canRestartが45フレーム後に立ち上がる、drawEndScreen参照）を作って
+     引き継ぐ。実際のリセット（gameOverReset）はそのCONTINUEタップ時に
+     handleGameClickのphase==='done'分岐から呼ばれる（通常モードと共通）。
      勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
-  if (coins <= 0) { gameOverReset(); return; }
+  if (coins <= 0) {
+    isGameOver = true;
+    endTimer = 0; canRestart = false; _continueShowDelay = 0;
+    grayRateTarget = 0.001; // 通常モードのコイン枯渇と同じグレーアウト
+    stopBGMTape(); // 同じくテープストップでBGMをフェードアウト
+    phase = 'done';
+    return;
+  }
   if (audioCtx) audioCtx.resume().catch(() => {});
   startBGMTape();
   grayRateTarget = 1.0;
@@ -5808,17 +5823,13 @@ function drawBossDefeat() {
     drawKingCharFlights();
   }
 
-  /* 没収で所持ギヨウザが尽きた場合は、通常モードのコイン枯渇時と全く同じ
-     画面・同じ待ち方にする（ユーザー要望）。_drawGameOverTitleを共用し、
-     こんがり失敗の見出しや没収個数の表示は出さない（通常のゲームオーバーの
-     文言だけに揃える） */
-  if (coins <= 0) {
-    const alpha = Math.min(1, _bossDefeatTimer / 35);
-    _drawGameOverTitle(alpha, _bossDefeatTimer, _bossDefeatTimer > 45);
-    ctx.restore();
-    return;
-  }
-
+  /* 没収で所持ギヨウザが尽きた場合も、まずは通常の「こんがり しっぱい」＋
+     キングが縮んでギヨウザ群へ戻っていく演出を優先し、そのあとで通常モードの
+     コイン枯渇ゲームオーバー画面へ進む（ユーザー要望: 「所持ギヨウザが0に
+     なる場合、キングギヨウザが戻って飛んでいく演出を優先してください。
+     その後、所持ギヨウザ0のゲームオーバー演出に進んでください」）。
+     coins<=0によるここでの早期分岐（通常ゲームオーバー画面を先に出す）は
+     廃止し、_kingBattleEnd側で出口を分ける（コメント参照） */
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const titleY = _king
@@ -8163,12 +8174,14 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossDefeat') {
-    /* 所持ギヨウザが尽きた場合は通常のゲームオーバー（canRestart相当）と
-       同じ待ち時間(45フレーム)で直接復帰。全損でなければ、通常モードへ戻る前に
+    /* 所持ギヨウザが尽きる・尽きないに関わらず、通常モードへ戻る前に必ず
        キングが縮んでギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink、
-       内部でクロスフェード後にbossDefeatOutroへ自動遷移)を挟む（ユーザー要望）。
-       CONTINUEバッジの表示に合わせて90フレーム待つ（drawBossDefeat参照） */
-    if (coins <= 0) { if (_bossDefeatTimer > 45) _kingBattleEnd(); return; }
+       内部でクロスフェード後にbossDefeatOutroへ自動遷移)を優先する
+       （ユーザー要望: 「所持ギヨウザが0になる場合、キングギヨウザが戻って
+       飛んでいく演出を優先してください。その後、所持ギヨウザ0のゲーム
+       オーバー演出に進んでください」）。全損時のゲームオーバー画面への
+       分岐は_kingBattleEnd側で行う。CONTINUEバッジの表示に合わせて
+       90フレーム待つ（drawBossDefeat参照） */
     if (_bossDefeatTimer > 90) _startBossDefeatShrink();
     return;
   }
