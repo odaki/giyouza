@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.86';
+const VERSION = 'v4.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1710,8 +1710,17 @@ function _playDoraHit(ctx, t, dest) {
    同じ隔離方針）。BGM停止自体は_stopBossBGMForVictory側で行う。
    構成:
    1. 上昇アルペジオ+ベース（jackpotより1オクターブ広い、達成感の大きい音域）
-   2. ベルの残響（_playDoraHitと同じ加算合成の技法だが、暗いA2ではなく
-      明るいC6を基音にした非整数次倍音で、長く伸びる輝くような余韻にする）
+   2. 「チーン」（オーブン/レンジの調理完了を示す定番SE。ユーザー指摘:
+      「今も近いですが、もっとチーン音だとわかるようにしてほしい」）。
+      当初は_playDoraHitと同じ5倍音の加算合成（銅鑼寄りの厚い響き）で
+      「明るいベルの残響」を狙ったが、倍音が多く唸りが乗るとチーンより
+      銅鑼・鐘の乱打に近く聞こえてしまう。実物のチーン音の特徴（単発・
+      高く澄んだ・アタックが鋭い・倍音は最小限）に寄せて簡素化した:
+      倍音を5層→2層（基音+明るい1オーバートーンのみ）に減らして単発の
+      鐘の音として聞き取りやすくし、基音もアルペジオの頂点(C6)より
+      1オクターブ上のC7へ上げて他パートに埋もれず明確に抜けて聞こえる
+      ようにし、アタックも0.02s→0.004sの瞬間的な立ち上がりにして
+      「叩いた瞬間に鳴る」チャイム特有の鋭さを出した
    3. 仕上げのきらめき（実績解除'ach'と同じ動機を使い、「最後の実績」
       であることを音楽的にも結びつける） */
 function _playKongariCompleteFanfare(ctx, t, dest) {
@@ -1724,18 +1733,18 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
   fanfare.forEach(([f, dt, dur]) => playOsc(ctx, 'square', f, t+dt, dur, 0.30, 0.10, null, null, d));
   [noteHz('C',3), noteHz('G',3), noteHz('C',4)].forEach((f, i) =>
     playOsc(ctx, 'sine', f, t + i*0.28, 0.7, 0.34, 0.22, null, null, d));
-  const base = noteHz('C', 6); // 明るいベルの基音（_playDoraHitのA2＝暗い響きとは対照的）
-  const partials = [1, 2.0, 2.76, 3.3, 4.2]; // ベル特有の非整数次倍音比
+  const base = noteHz('C', 7); // アルペジオの頂点(C6)より1オクターブ上、チーン特有の高く澄んだ音高
+  const partials = [1, 2.4]; // 基音+明るい1オーバートーンのみ（単発の鐘の音。多層にすると銅鑼寄りになる）
   partials.forEach((ratio, i) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain); gain.connect(d);
     osc.type = 'sine';
     osc.frequency.setValueAtTime(base * ratio, t + 0.39); // 主和音の頂点(C6)と同時に鳴り始める
-    const vol = 0.16 / (i + 1);
-    const decay = 2.0 - i * 0.18;
+    const vol = i === 0 ? 0.28 : 0.11;
+    const decay = i === 0 ? 1.5 : 0.9;
     gain.gain.setValueAtTime(0.0001, t + 0.39);
-    gain.gain.linearRampToValueAtTime(vol, t + 0.41);
+    gain.gain.linearRampToValueAtTime(vol, t + 0.394); // 瞬間的なアタック（チャイムを叩いた鋭さ）
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.39 + decay);
     osc.start(t + 0.39); osc.stop(t + 0.39 + decay + 0.05);
   });
