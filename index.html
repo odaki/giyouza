@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.78';
+const VERSION = 'v4.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2625,48 +2625,73 @@ function calcPayout() {
 /* ホイールOCのCSSピクセル半径（WR+余白・定数）。drawWheel でも参照 */
 const _WHEEL_OC_R = WR + 4;
 
-/* セグメント・文字・ハブを OffscreenCanvas に事前描画。
+/* セグメント・文字・ハブを OffscreenCanvas に事前描画する共通ビルダー。
    文字は mid + π/2 回転させてホイール中心が文字の下方になるようにする。
-   毎フレームの描画コストをなくし drawImage 1回に置き換える。 */
-function _buildWheelOC(w) {
-  if (typeof OffscreenCanvas === 'undefined') return;
-  const sz = Math.ceil(_WHEEL_OC_R * 2 * _dpr);
-  /* プールから再利用、なければ新規生成 */
-  const oc = _freeWheelOCs.pop() || new OffscreenCanvas(sz, sz);
+   毎フレームの描画コストをなくし drawImage 1回に置き換える。
+   通常ホイール（_buildWheelOC）とキング的（_buildKingReelOC）で同一の描画
+   構造をコピーして持っていたのを統合した。差分はoptで注入する:
+     r       : ホイール半径
+     ocR     : OCの論理半径（r+余白）
+     pool    : 返却済みOCの再利用プール
+     segLW   : セグメント枠線幅
+     charOff : 文字位置の半径比
+     charLW  : 文字縁取り幅
+     hubR    : 中心ハブ半径
+     fontOf  : セグメント→フォント文字列（通常はcreateWheelで事前計算済みの
+               s.font、キング的はspanから都度計算） */
+function _buildSegWheelOC(w, opt) {
+  const sz = Math.ceil(opt.ocR * 2 * _dpr);
+  /* プールから再利用、なければ新規生成。サイズ不一致はwidth代入でリサイズ
+     （キング的はKING_WRが縦画面初期化で確定するため、念のための保険） */
+  const oc = opt.pool.pop() || new OffscreenCanvas(sz, sz);
+  if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
   const c = oc.getContext('2d');
   /* 再利用時に前回の transform と内容をクリア */
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, sz, sz);
   c.scale(_dpr, _dpr);
-  c.translate(_WHEEL_OC_R, _WHEEL_OC_R); // ハブを中心に
+  c.translate(opt.ocR, opt.ocR); // ハブを中心に
 
+  const r = opt.r;
   for (const s of w.segs) {
     const mid = s.start + s.span / 2;
     /* セグメントグラジェントを OffscreenCanvas 座標で再生成 */
     const grd = c.createRadialGradient(
-      Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
+      Math.cos(mid)*r*0.3, Math.sin(mid)*r*0.3, 0, 0, 0, r);
     grd.addColorStop(0, SEG_L[s.char]);
     grd.addColorStop(1, SEG_D[s.char]);
     /* セグメント塗り・枠 */
-    c.beginPath(); c.moveTo(0,0); c.arc(0,0,WR, s.start, s.start+s.span); c.closePath();
+    c.beginPath(); c.moveTo(0,0); c.arc(0,0,r, s.start, s.start+s.span); c.closePath();
     c.fillStyle=grd; c.fill();
-    c.strokeStyle='rgba(245,208,32,0.3)'; c.lineWidth=1.5; c.stroke();
+    c.strokeStyle='rgba(245,208,32,0.3)'; c.lineWidth=opt.segLW; c.stroke();
     /* 文字: mid + π/2 回転でハブ中心が文字下方になるよう向きを固定 */
-    const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
+    const tx=Math.cos(mid)*r*opt.charOff, ty=Math.sin(mid)*r*opt.charOff;
     c.save();
     c.translate(tx, ty);
     c.rotate(mid + Math.PI/2);
-    c.font=s.font; c.textAlign='center'; c.textBaseline='middle';
-    c.lineWidth=4; c.strokeStyle='rgba(0,0,0,0.88)'; c.strokeText(s.char,0,0);
+    c.font=opt.fontOf(s); c.textAlign='center'; c.textBaseline='middle';
+    c.lineWidth=opt.charLW; c.strokeStyle='rgba(0,0,0,0.88)'; c.strokeText(s.char,0,0);
     c.fillStyle='#fffde7'; c.fillText(s.char,0,0);
     c.restore();
   }
   /* ハブ */
-  const hubG = c.createRadialGradient(0,0,0,0,0,10);
+  const hubG = c.createRadialGradient(0,0,0,0,0,opt.hubR);
   hubG.addColorStop(0,'#fffde7'); hubG.addColorStop(1,YD);
-  c.beginPath(); c.arc(0,0,10,0,Math.PI*2); c.fillStyle=hubG; c.fill();
+  c.beginPath(); c.arc(0,0,opt.hubR,0,Math.PI*2); c.fillStyle=hubG; c.fill();
 
-  w._oc = oc; // _ocR は _WHEEL_OC_R（定数）を参照するため不要
+  w._oc = oc;
+}
+
+/* 通常ホイール用オプション（サイズ定数のみ参照のため静的に1個だけ確保） */
+const _WHEEL_OC_OPT = {
+  r: WR, ocR: _WHEEL_OC_R, pool: _freeWheelOCs,
+  segLW: 1.5, charOff: 0.62, charLW: 4, hubR: 10,
+  fontOf: s => s.font, // createWheelで事前計算済み
+};
+
+function _buildWheelOC(w) {
+  if (typeof OffscreenCanvas === 'undefined') return;
+  _buildSegWheelOC(w, _WHEEL_OC_OPT);
 }
 
 function createWheel(x, y, feverChar) {
@@ -2802,43 +2827,24 @@ function _releaseKingReelOCs(reels) {
   }
 }
 
+/* キング的用フォント計算（spanに応じて9〜18px。通常ホイールと違い事前計算
+   フィールドを持たないため都度計算する） */
+function _kingReelFontOf(s) {
+  const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
+  return `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+}
+
 function _buildKingReelOC(w) {
   const ocR = KING_WR + 4;
-  const sz = Math.ceil(ocR * 2 * _dpr);
-  /* プール再利用。KING_WRは縦画面で_initBossBattleが再計算するが、Wが固定のため
-     実行中に値は変わらない＝サイズは安定。念のためサイズ不一致の場合は
-     width代入でリサイズする（canvasはwidth代入で内容もクリアされる） */
-  const oc = _freeKingReelOCs.pop() || new OffscreenCanvas(sz, sz);
-  if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
-  const c = oc.getContext('2d');
-  c.setTransform(1, 0, 0, 1, 0, 0);
-  c.clearRect(0, 0, sz, sz);
-  c.scale(_dpr, _dpr);
-  c.translate(ocR, ocR);
-  for (const s of w.segs) {
-    const mid = s.start + s.span / 2;
-    const grd = c.createRadialGradient(
-      Math.cos(mid)*KING_WR*0.3, Math.sin(mid)*KING_WR*0.3, 0, 0, 0, KING_WR);
-    grd.addColorStop(0, SEG_L[s.char]);
-    grd.addColorStop(1, SEG_D[s.char]);
-    c.beginPath(); c.moveTo(0,0); c.arc(0,0,KING_WR, s.start, s.start+s.span); c.closePath();
-    c.fillStyle = grd; c.fill();
-    c.strokeStyle = 'rgba(245,208,32,0.3)'; c.lineWidth = 1; c.stroke();
-    const tx = Math.cos(mid)*KING_WR*0.6, ty = Math.sin(mid)*KING_WR*0.6;
-    c.save();
-    c.translate(tx, ty);
-    c.rotate(mid + Math.PI/2);
-    const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
-    c.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
-    c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.lineWidth = 2.5; c.strokeStyle = 'rgba(0,0,0,0.88)'; c.strokeText(s.char, 0, 0);
-    c.fillStyle = '#fffde7'; c.fillText(s.char, 0, 0);
-    c.restore();
-  }
-  const hubG = c.createRadialGradient(0,0,0,0,0,KING_WR*0.16);
-  hubG.addColorStop(0,'#fffde7'); hubG.addColorStop(1,YD);
-  c.beginPath(); c.arc(0,0,KING_WR*0.16,0,Math.PI*2); c.fillStyle = hubG; c.fill();
-  w._oc = oc; w._ocR = ocR;
+  /* optを都度組むのはKING_WRが縦画面の_initBossBattleで確定するため
+     （静的constにすると初期値のKING_WRで固まってしまう）。4個/respinの
+     小オブジェクト生成でcanvas描画コストに比べ無視できる */
+  _buildSegWheelOC(w, {
+    r: KING_WR, ocR, pool: _freeKingReelOCs,
+    segLW: 1, charOff: 0.6, charLW: 2.5, hubR: KING_WR*0.16,
+    fontOf: _kingReelFontOf,
+  });
+  w._ocR = ocR;
 }
 
 function drawKingReel(w, active, idx) {
