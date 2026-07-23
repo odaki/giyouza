@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.74';
+const VERSION = 'v4.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2420,9 +2420,10 @@ function gameOverReset() {
   _resetFeverState();
   for (const g of items) g._dead = true; items = [];
   lsSave();
-  /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない） */
-  if (audioCtx) audioCtx.resume().catch(() => {});
-  startBGMTape();
+  /* テープが回り始める演出でBGM再開（init()内のstartBGMはbgmSource設定済みのため呼ばれない）
+     interrupted状態はresume()では復帰できないため_resumeAudioCtx()経由にする
+     （feedback_ios_safari_audio memory参照） */
+  if (audioCtx) _resumeAudioCtx(startBGMTape);
   init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
   /* テープが加速完了するまで射撃を禁止。update()でrate≥0.99になったらidleに移行 */
   phase = 'tapestart';
@@ -4677,8 +4678,10 @@ function _kingBattleEnd() {
     phase = 'done';
     return;
   }
-  if (audioCtx) audioCtx.resume().catch(() => {});
-  startBGMTape();
+  /* interrupted状態はresume()では復帰できないため_resumeAudioCtx()経由にする
+     （feedback_ios_safari_audio memory参照。以前はここが素のresume()のみで、
+     キング戦中にinterruptedへ入っていた場合BGMが壊れたまま復帰していた） */
+  if (audioCtx) _resumeAudioCtx(startBGMTape);
   grayRateTarget = 1.0;
   init(false, true);
   phase = 'tapestart';
