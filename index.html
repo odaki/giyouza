@@ -110,7 +110,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.64';
+const VERSION = 'v4.65';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4856,6 +4856,14 @@ const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消える�
    保険上限（通常は発火しない） */
 const KING_CHAR_FALL_MAX_FRAMES = 180;
 const KING_CHAR_OFFSCREEN_MARGIN = 60;
+/* 的への衝突反発の物理係数（ユーザー要望: 的にヒビを入れるために運動
+   エネルギーが消費されるので、はねかえりやその後の動きの勢いが減るはず）。
+   衝突点の法線は常に真上固定（着弾点=的の縁の真上、_startKingCharBounce
+   参照）なので、bvyがそのまま法線方向、bvxがそのまま接線方向の速度成分
+   になる。RESTITUTION（反発係数）は法線方向の速度保持率、FRICTIONは
+   接線方向の速度保持率。どちらも1未満にしてエネルギー損失を表現する */
+const KING_CHAR_BOUNCE_RESTITUTION = 0.4;
+const KING_CHAR_BOUNCE_FRICTION    = 0.55;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -5333,12 +5341,14 @@ function _updateKingCharFlights() {
       f.bx += f.bvx; f.by += f.bvy;
       if (f.frames >= KING_CHAR_FLY_FRAMES) {
         f.state = 'fall'; f.frames = 0;
-        /* 反発: 接近してきた向きのほぼ逆＋上向き成分を必ず混ぜる
-           （的の面で跳ね返った見た目にするため、下向きに反発することはない） */
-        const ang = Math.atan2(f.bvy, f.bvx) + Math.PI + (Math.random() - 0.5) * 0.7;
-        const spd = 5 + Math.random() * 2.5;
-        f.bvx = Math.cos(ang) * spd;
-        f.bvy = Math.min(-2.5, Math.sin(ang) * spd);
+        /* 反発: 衝突点の法線（常に真上固定）方向＝bvy、接線（水平）方向＝bvxとして
+           分解し、それぞれ反発係数・摩擦係数（ともに1未満）を掛けて減衰させる。
+           bvyは常に正（ボスから的へ下向きに接近してくるため）なので、
+           -RESTITUTION倍で符号反転（上向きに跳ね返る）しつつ確実に減速する。
+           わずかな乱数は接線方向にだけ加え、自然さを出しつつ主成分は物理計算に従わせる */
+        const jitter = (Math.random() - 0.5) * 0.5;
+        f.bvx = f.bvx * KING_CHAR_BOUNCE_FRICTION + jitter;
+        f.bvy = -f.bvy * KING_CHAR_BOUNCE_RESTITUTION;
       }
     } else if (f.state === 'fall') {
       /* 反発後の落下（重力）。水平方向はわずかに減速させ、垂直方向は
