@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.79';
+const VERSION = 'v4.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1360,12 +1360,17 @@ function _buildNoiseBuffer() {
 }
 
 /* 基本オシレーター再生 */
+/* dest未指定時の出力先解決: ライブコンテキストならmasterGain経由（ミュート制御）、
+   OfflineAudioContextならdestination直結（レンダリング用）。
+   playOsc/playNoise/_playAcidShootHit等でコピーされていた式を一元化 */
+function _seDest(ctx, dest) {
+  return dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination;
+}
+
 function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, dest) {
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
-  /* dest未指定時: ライブコンテキストならmasterGain経由（ミュート制御）、
-     OfflineAudioContextならdestination直結（レンダリング用）              */
-  osc.connect(gain); gain.connect(dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination);
+  osc.connect(gain); gain.connect(_seDest(ctx, dest));
   osc.type = type;
   osc.frequency.setValueAtTime(freq, startT);
   /* ビブラート: LFO で周波数変調（薄くかけるため delay 後にフェードイン） */
@@ -1416,7 +1421,7 @@ function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
   gain.gain.setValueAtTime(vol, startT);
   gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
   src.connect(hp); hp.connect(gain);
-  gain.connect(dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination);
+  gain.connect(_seDest(ctx, dest));
   src.start(startT); src.stop(startT + dur + 0.05);
 }
 
@@ -1472,44 +1477,44 @@ const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
 const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
+/* ピッチスライド系ワンショットの共通実装: type波形のオシレーターを
+   f0→f1へ指数スライドさせつつ、ゲイン包絡線envで鳴らして止める。
+   env: [経過秒, 値, 種別] の列。種別 'set'=setValueAtTime /
+   'lin'=linearRamp / 省略=exponentialRamp。
+   キック・和太鼓・SE（ズコー/スローハンド）が同一構造のosc+gain手組みを
+   それぞれコピーして持っていたのを統合した（ボス戦の音色追加で同構造が
+   5箇所に増えたため。パラメータはすべて既存値をそのまま移設） */
+function _playSlideOsc(ctx, dest, t, type, f0, f1, slideDur, env, stopAt) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain); gain.connect(dest);
+  osc.type = type;
+  osc.frequency.setValueAtTime(f0, t);
+  osc.frequency.exponentialRampToValueAtTime(f1, t + slideDur);
+  for (const [dt, v, mode] of env) {
+    if (mode === 'set')      gain.gain.setValueAtTime(v, t + dt);
+    else if (mode === 'lin') gain.gain.linearRampToValueAtTime(v, t + dt);
+    else                     gain.gain.exponentialRampToValueAtTime(v, t + dt);
+  }
+  osc.start(t); osc.stop(t + stopAt);
+}
+
 /* バスドラム（ピッチダウン式キック）。ボス版のバランス調整のため音量を
    引数化し、_playTaikoHitと同じ形で切り出した（renderBGMBufferのkickVol
    参照。実機評価でRMSエネルギーを実測した結果、地鳴りに対してキックが
    相対的に小さすぎたため、ボス側だけ音量を引き上げられるようにした） */
 function _playKick(ctx, t, dest, vol) {
-  const osc  = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain); gain.connect(dest);
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(110, t);
-  osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
-  gain.gain.setValueAtTime(vol, t);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-  osc.start(t); osc.stop(t + 0.21);
+  _playSlideOsc(ctx, dest, t, 'sine', 110, 40, 0.12, [[0, vol, 'set'], [0.18, 0.0001]], 0.21);
 }
 
 /* 和太鼓風の合いの手（低音オシレーターのピッチダウンで模した打撃音。
    キック用のシンセ手法を流用しつつ、キックより低い開始ピッチ・長めの
    余韻にして「ドン」という締太鼓の響きに寄せている。strong=強打、
-   flourish=ループ終端の素早い2連用に短め・やや高めに調整） */
+   flourish=ループ終端の素早い2連用に短め・やや高めに調整。
+   音量はユーザー要望で倍量済み（強打0.5→1.0・弱打0.32→0.64） */
 function _playTaikoHit(ctx, t, dest, strong) {
-  const osc  = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain); gain.connect(dest);
-  osc.type = 'sine';
-  if (strong) {
-    osc.frequency.setValueAtTime(130, t);
-    osc.frequency.exponentialRampToValueAtTime(50, t + 0.14);
-    gain.gain.setValueAtTime(1.0, t); // ユーザー要望で倍量（0.5→1.0）
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
-    osc.start(t); osc.stop(t + 0.34);
-  } else {
-    osc.frequency.setValueAtTime(170, t);
-    osc.frequency.exponentialRampToValueAtTime(70, t + 0.07);
-    gain.gain.setValueAtTime(0.64, t); // ユーザー要望で倍量（0.32→0.64）
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-    osc.start(t); osc.stop(t + 0.20);
-  }
+  if (strong) _playSlideOsc(ctx, dest, t, 'sine', 130, 50, 0.14, [[0, 1.0,  'set'], [0.30, 0.0001]], 0.34);
+  else        _playSlideOsc(ctx, dest, t, 'sine', 170, 70, 0.07, [[0, 0.64, 'set'], [0.16, 0.0001]], 0.20);
 }
 
 /* ソフトクリップ歪みカーブ（TB-303風アシッドベースの「凶悪」な唸りに使う） */
@@ -1520,6 +1525,30 @@ function _acidDistortionCurve(amount) {
     curve[i] = Math.tanh(x * amount) / Math.tanh(amount); // tanhソフトクリップ、ピークで正規化
   }
   return curve;
+}
+
+/* TB-303系音色の共通オーディオグラフ: sawtooth osc → lowpass filter
+   (→ ソフトクリップ歪み) → gain → dest を構築してノード束を返す。
+   周波数・Q・包絡線の設定は呼び出し側が行う。地鳴り（_playGroundRumble）・
+   アシッドメロディ（_playAcidMelNote）・リール射撃音（_playAcidShootHit）の
+   3音色が同一のチェーン構築をコピーして持っていたのを統合した。
+   distAmount=null で歪みなし（メロディ用: 音程の聞き取りやすさ優先） */
+function _acidChain(ctx, dest, distAmount) {
+  const osc    = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  const gain   = ctx.createGain();
+  osc.type    = 'sawtooth'; // 3音色とも倍音豊富な波形をフィルターで削って形作る
+  filter.type = 'lowpass';
+  if (distAmount != null) {
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = _acidDistortionCurve(distAmount);
+    shaper.oversample = '4x';
+    osc.connect(filter); filter.connect(shaper); shaper.connect(gain);
+  } else {
+    osc.connect(filter); filter.connect(gain);
+  }
+  gain.connect(dest);
+  return { osc, filter, gain };
 }
 
 /* 地鳴り風の超低音（ボス戦BGM専用・ループ頭に1回）。
@@ -1533,23 +1562,12 @@ function _acidDistortionCurve(amount) {
    なめらかにexponentialRampで下降させ「ぶぅーーぅ」の滑らかなスライドにする。
    仕上げにソフトクリップ歪みを軽くかけて凶悪さを足す */
 function _playGroundRumble(ctx, t, dest) {
-  const osc    = ctx.createOscillator();
-  const filter = ctx.createBiquadFilter();
-  const shaper = ctx.createWaveShaper();
-  const gain   = ctx.createGain();
-  osc.connect(filter); filter.connect(shaper); shaper.connect(gain); gain.connect(dest);
-
-  osc.type = 'sawtooth'; // アシッドベースらしい倍音豊富な波形（フィルターで削って形作る）
+  const { osc, filter, gain } = _acidChain(ctx, dest, 4);
   osc.frequency.setValueAtTime(130, t);
   osc.frequency.exponentialRampToValueAtTime(36, t + 1.0); // なめらかな尻下がりスライド（単音なのでカクつかない）
-
-  filter.type = 'lowpass';
   filter.Q.setValueAtTime(20, t); // 高レゾナンスでアシッド特有の「ウォゥ」を作る
   filter.frequency.setValueAtTime(3600, t);
   filter.frequency.exponentialRampToValueAtTime(240, t + 0.4); // カットオフも滑らかに掃引
-
-  shaper.curve = _acidDistortionCurve(4);
-  shaper.oversample = '4x';
 
   /* 音量調整の経緯: ピーク包絡線の値だけを他パートに合わせても
      （0.62→0.46）実際には地鳴りだけ突出して聞こえるとの指摘が続いた。
@@ -1578,15 +1596,8 @@ function _playGroundRumble(ctx, t, dest) {
    合わせて短く・高速にする。地鳴りより控えめなQ（10）で、旋律の音程が
    潰れて聞き取れなくならないようにしている */
 function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
-  const osc    = ctx.createOscillator();
-  const filter = ctx.createBiquadFilter();
-  const gain   = ctx.createGain();
-  osc.connect(filter); filter.connect(gain); gain.connect(dest);
-
-  osc.type = 'sawtooth';
+  const { osc, filter, gain } = _acidChain(ctx, dest, null); // 歪みなし（音程の聞き取り優先）
   osc.frequency.setValueAtTime(freq, t);
-
-  filter.type = 'lowpass';
   filter.Q.setValueAtTime(10, t);
   /* カットオフは音程に応じて追従させる（低い音符でも高い音符でも同じ
      絶対Hzだと聞こえ方が偏るため、基音との相対関係で決める） */
@@ -1609,24 +1620,11 @@ function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
    （ボス戦BGMのkickVol/melAcid等、他の音周りの変更と同じ隔離方針）。 */
 function _playAcidShootHit(ctx, t, dest) {
   const _pluck = (pt, freq, dur, vol) => {
-    const osc    = ctx.createOscillator();
-    const filter = ctx.createBiquadFilter();
-    const shaper = ctx.createWaveShaper();
-    const gain   = ctx.createGain();
-    osc.connect(filter); filter.connect(shaper); shaper.connect(gain);
-    gain.connect(dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination);
-
-    osc.type = 'sawtooth';
+    const { osc, filter, gain } = _acidChain(ctx, _seDest(ctx, dest), 3);
     osc.frequency.setValueAtTime(freq, pt);
-
-    filter.type = 'lowpass';
     filter.Q.setValueAtTime(16, pt);
     filter.frequency.setValueAtTime(Math.min(6000, freq * 10 + 800), pt);
     filter.frequency.exponentialRampToValueAtTime(Math.max(300, freq * 1.4), pt + dur);
-
-    shaper.curve = _acidDistortionCurve(3);
-    shaper.oversample = '4x';
-
     gain.gain.setValueAtTime(0.001, pt);
     gain.gain.exponentialRampToValueAtTime(vol, pt + 0.006);
     gain.gain.exponentialRampToValueAtTime(0.0001, pt + dur);
@@ -2048,15 +2046,8 @@ function playSE(name, atTime) {
     }
     case 'miss': {
       /* ズコー: D4→E2 スライド（元のキャラを保ちつつCメジャーのノートに調律） */
-      const osc  = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(masterGain ?? ctx.destination);
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(noteHz('D', 4), t);
-      osc.frequency.exponentialRampToValueAtTime(noteHz('E', 2), t + 0.45);
-      gain.gain.setValueAtTime(0.22, t);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.50);
-      osc.start(t); osc.stop(t + 0.52);
+      _playSlideOsc(ctx, _seDest(ctx), t, 'sawtooth', noteHz('D', 4), noteHz('E', 2), 0.45,
+        [[0, 0.22, 'set'], [0.50, 0.0001]], 0.52);
       break;
     }
     case 'coin': {
@@ -2098,19 +2089,10 @@ function playSE(name, atTime) {
     }
     case 'sync_just': break; // 廃止: 視覚表示（JUST!/GOOD）のみ、SE なし
     case 'slow_hand': {
-      /* スローハンド発動: テープが引っかかって遅くなるような"ウォ〜ン"音 */
-      const osc  = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(masterGain ?? ctx.destination);
-      osc.type = 'sine';
-      /* C5→E3 スライド（テープ感を保ちつつ両端を調内に調律） */
-      osc.frequency.setValueAtTime(noteHz('C',5), t);
-      osc.frequency.exponentialRampToValueAtTime(noteHz('E',3), t + 0.65);
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.linearRampToValueAtTime(0.32, t + 0.05);
-      gain.gain.setValueAtTime(0.32, t + 0.20);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
-      osc.start(t); osc.stop(t + 0.77);
+      /* スローハンド発動: テープが引っかかって遅くなるような"ウォ〜ン"音
+         C5→E3 スライド（テープ感を保ちつつ両端を調内に調律） */
+      _playSlideOsc(ctx, _seDest(ctx), t, 'sine', noteHz('C',5), noteHz('E',3), 0.65,
+        [[0, 0.0001, 'set'], [0.05, 0.32, 'lin'], [0.20, 0.32, 'set'], [0.75, 0.0001]], 0.77);
       /* 低音の重さを加える（E2: 調内に調律） */
       playOsc(ctx, 'triangle', noteHz('E',2), t + 0.05, 0.4, 0.18, 0.25);
       /* 短いノイズバースト（テープのこすれ感） */
