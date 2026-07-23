@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.89';
+const VERSION = 'v4.90';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6047,9 +6047,24 @@ function _updateBossVictory() {
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
   _updateKingCharFlights();
+  /* 湯気の生成位置はキングの表示スケール(dscale)に比例させる（ユーザー報告:
+     「横画面で確認したところ、こんがりキングギヨウザ達成時の湯気がよく
+     見えなくなっている」）。以前はオフセットが_BOSS_S*0.3の固定値で、
+     キングの実際の表示サイズ（_king.dscale。横画面はレイアウト上のスケール
+     が縦画面の1に対し約0.69まで縮む＝availHが狭く、こんがりゲージ・的との
+     兼ね合いでキング表示領域が横画面のほうが窮屈なため）を無視していた。
+     縦画面(dscale=1)では偶然コインヘッダーから十分離れて見えていたが、
+     横画面ではdscale分縮んでいないぶん相対的に高すぎる位置になり、
+     コインヘッダーの半透明パネル（drawCoinHeaderが後から描画され上に
+     重なる、_king.by - _BOSS_S*0.3=100 に対しヘッダー下端が109で
+     わずか1px差）に生成直後から重なって隠れていた。dbx/dby/dscaleを
+     使うことで、キングの実際の見た目のサイズ・位置に対して常に同じ
+     相対位置（頭上よりやや下、ヘッダーからは常に安全な距離）から
+     立ち上るようになる */
   if (_bossVictoryTimer % 6 === 0 && _king) {
     spawnParticle(
-      _king.bx + (Math.random() - 0.5) * _BOSS_S * 0.7, _king.by - _BOSS_S * 0.3,
+      _king.dbx + (Math.random() - 0.5) * _BOSS_S * 0.7 * _king.dscale,
+      _king.dby - _BOSS_S * 0.3 * _king.dscale,
       (Math.random() - 0.5) * 0.6, -1.2 - Math.random() * 0.8,
       'rgba(255,240,220,0.6)', 60 + Math.random() * 30, 4 + Math.random() * 4);
   }
