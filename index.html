@@ -128,13 +128,14 @@ const H = IS_PORTRAIT ? 820  : 560;
    同じ位置づけ） */
 const CHEAT_PANEL_ON = new URLSearchParams(location.search).has('cheatpanel');
 const CHEAT_PANEL_BTNS = [
-  { id: 'fever', label: 'FEVER' },
-  { id: 'slow',  label: 'SLOW'  },
-  { id: 'clr',   label: 'CLR'   },
-  { id: 'gi',    label: 'ギ'    },
-  { id: 'yo',    label: 'ヨ'    },
-  { id: 'u',     label: 'ウ'    },
-  { id: 'za',    label: 'ザ'    },
+  { id: 'fever',  label: 'FEVER' },
+  { id: 'slow',   label: 'SLOW'  },
+  { id: 'clr',    label: 'CLR'   },
+  { id: 'allach', label: 'ACH'   },
+  { id: 'gi',     label: 'ギ'    },
+  { id: 'yo',     label: 'ヨ'    },
+  { id: 'u',      label: 'ウ'    },
+  { id: 'za',     label: 'ザ'    },
 ];
 function _cheatPanelRect(i) {
   const h = 26, gap = 2;
@@ -150,6 +151,13 @@ function _runCheatPanelAction(id) {
   if (id === 'clr') {
     try { localStorage.clear(); } catch(_e) {}
     location.reload();
+    return;
+  }
+  if (id === 'allach') {
+    /* こんがり以外の実績を全て達成状態にする（キングギヨウザ出現条件のテスト用。
+       こんがり自体はキングギヨウザ討伐でのみ解除される最後の実績のため対象外にする
+       ＝_allAchExceptKongariDoneと同じ判定基準） */
+    for (const a of ACHIEVEMENTS) if (a.id !== KONGARI_ACH_ID) unlockAch(a.id);
     return;
   }
   const charMap = { gi: 'ギ', yo: 'ヨ', u: 'ウ', za: 'ザ' };
@@ -171,6 +179,33 @@ function drawCheatPanel() {
   }
   ctx.restore();
 }
+
+/* ?keydebug URL パラメータで、実機に届いたkeydownイベントの生の内容を
+   画面上に表示する診断オーバーレイ。ユーザー指摘: 「過去に試した時は
+   キーが効いた気がする、iPadだった可能性がある」。iPhone単体では
+   Ctrl+F/T/C（予約ショートカット回避キー含む）・矢文字G/Y/U/Z・
+   canvasフォーカス確保、いずれの対策後もキーボードチートが反応せず、
+   一方でiPadでは過去に動いていた可能性があるという新情報が出たため、
+   「そもそもkeydownが届いているか」を実機で直接確認できるようにする
+   （Web Inspector接続なしでも実機の画面だけで判断できる）。keydown
+   ハンドラの最も外側（他の早期returnより前）でログに追記するため、
+   ゲームのphase等に関係なく全てのkeydownを捕捉する */
+const KEY_DEBUG_ON = new URLSearchParams(location.search).has('keydebug');
+let _keyDebugLog = [];
+function drawKeyDebug() {
+  if (!KEY_DEBUG_ON) return;
+  ctx.save();
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  const lines = _keyDebugLog.length ? _keyDebugLog : ['(まだkeydownを受信していません)'];
+  const lineH = 14;
+  const boxH = lineH * lines.length + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(4, 4, W - 8, boxH);
+  ctx.fillStyle = '#0f0';
+  lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
+  ctx.restore();
+}
 /* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画 */
 const _dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
 canvas.width  = W * _dpr;
@@ -178,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.70';
+const VERSION = 'v4.71';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6254,6 +6289,8 @@ function draw() {
   _drawScreenFade();
   /* デバッグ用タップ式チートパネル（?cheatpanel時のみ、常に最前面） */
   drawCheatPanel();
+  /* デバッグ用keydown受信ログ（?keydebug時のみ、常に最前面） */
+  drawKeyDebug();
 }
 
 /* ════════════════ 描画関数群 ════════════════ */
@@ -8076,6 +8113,10 @@ function cheatShoot(char) {
 }
 
 document.addEventListener('keydown', e=>{
+  if (KEY_DEBUG_ON) {
+    _keyDebugLog.unshift(`code=${e.code||'(空)'} key=${e.key||'(空)'} ctrl=${e.ctrlKey} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
+    if (_keyDebugLog.length > 6) _keyDebugLog.length = 6;
+  }
   if (phase === 'startup') {
     if (e.code === 'Space') { e.preventDefault(); if (!audioCtx) getAudioCtx(); initGame(); }
     return;
