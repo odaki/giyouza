@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.71';
+const VERSION = 'v4.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2734,16 +2734,18 @@ function _createKingReel(x, y, weights) {
    中心まで全部割れるのもおかしいので、途中（中心から半径の多くても1/2くらい）
    まで。当たった向きを勘案して割れる方向が物理法則的に自然だとなお良い。
    クラックの幅も端が大きく隙間が開いて、中心方向に向かうに従って割れている
-   幅が狭くなる」。
-   文字は常に的の縁の真上（三角ポインタ位置、drawKingReelのpx,pyと同じ向き）
-   に着弾する（_startKingCharBounce参照）ため起点は常にangle=-PI/2。
-   biasAngleでボスの水平位置に応じた衝突角の傾きを軽く反映する（呼び出し側
-   算出）。的は世界座標（画面）上では常に固定向き（ポインタが常に真上）で
-   描かれるため、この関数が返すポリゴンも的の回転(w.rot)の影響を受けない
-   ワールド基準のローカル座標系で組む（drawKingReel参照：ctx.rotate(w.rot)の
-   外側で描く） */
-function _createKingCrackWedge(biasAngle) {
-  const baseAngle = -Math.PI / 2 + biasAngle;
+   幅が狭くなる」。さらに「的とクラック表示が独立してしまっている。回転する
+   的の文字衝突部分にクラックが入るのだから、クラックごと的が回転するはず」
+   という指摘を受け、ポリゴンは的の回転(w.rot)に追従するローカル座標系
+   （drawKingReelのctx.rotate(w.rot)の内側）で組むように変更した。
+   引数baseAngleは呼び出し側（_kingReelShoot）で「文字が実際に当たったワールド
+   座標上の角度（常に真上=-PI/2＋ボス位置に応じた傾き）」からその時点の
+   w.rotを差し引いて渡された、的自身から見たローカル角度。的が生きている
+   （ロック中〜再スピン後の回転中）間はこの値を使い続けるため、着弾直後は
+   実際の衝突位置と一致し、以後は的の回転にそのまま追従する（以前の
+   _generateKingReelCracksと同じ「的のローカル座標に固定してctx.rotateで
+   一緒に回す」方式に、着弾位置ベースの生成を組み合わせた形） */
+function _createKingCrackWedge(baseAngle) {
   const outerR = KING_WR;                                    // 起点＝的の縁
   const innerR = KING_WR * (0.15 + Math.random() * 0.35);    // 終点＝中心からの距離（最大でも半径の約半分）
   const segCount = 3 + Math.floor(Math.random() * 2);        // 3〜4節の折れ線（先細りの芯線）
@@ -2808,20 +2810,20 @@ function drawKingReel(w, active, idx) {
   ctx.translate(w.x, w.y);
   ctx.rotate(w.rot);
   ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
-  ctx.restore();
-  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たる場所（常に的の縁の
-     真上＝三角ポインタ位置、_startKingCharBounce参照）を起点に、中心へ向けて
-     先細りに割れる。文字の着弾点は的の回転(w.rot)に関係なく常に画面の
-     「真上」固定（ポインタが常に真上を向くのと同じ理由）なので、ここも
-     w.rotを適用しないワールド基準の座標系で描く（segsの回転描画とは別の
-     ctx.save/restoreにしているのはそのため）。的自体は再スピンのたびに
-     新しいオブジェクトへ作り直されるが、ひびは_king.reelCracks[idx]に
-     的スロット単位で蓄積するため、再スピンをまたいで消えずに残る */
+  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ
+     向けて先細りに割れる（_createKingCrackWedge参照）。ポリゴン自体は着弾
+     時点で的のローカル座標系（w.rotを差し引いた角度）で生成済みのため、
+     segsの回転描画と同じこの ctx.rotate(w.rot) の内側で描くことで、的が
+     回転する（再スピン後の回転中も含む）とひびも一緒に回転する
+     （ユーザー指摘: 「的とクラック表示が独立してしまっている。クラックごと
+     的が回転するはず」に対応。以前ここをctx.rotateの外側＝ワールド固定で
+     描いていたため、的が回っているのにひびだけ画面上で静止して見えていた）。
+     的自体は再スピンのたびに新しいオブジェクトへ作り直されるが、ひびは
+     _king.reelCracks[idx]に的スロット単位で蓄積するため、再スピンをまたいで
+     消えずに残る（新しい的の現在のw.rotでそのまま回転描画されるだけ） */
   if (_king && _king.reelCracks && idx != null) {
     const cracks = _king.reelCracks[idx];
     if (cracks && cracks.length) {
-      ctx.save();
-      ctx.translate(w.x, w.y);
       ctx.fillStyle = 'rgba(12,9,7,0.82)';
       for (const poly of cracks) {
         ctx.beginPath();
@@ -2830,9 +2832,9 @@ function drawKingReel(w, active, idx) {
         ctx.closePath();
         ctx.fill();
       }
-      ctx.restore();
     }
   }
+  ctx.restore();
   ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
   ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
   ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
@@ -5305,11 +5307,15 @@ function _kingReelShoot(inputPerfMs) {
       _king.failCount = Math.min(KING_MAX_FAILS, _king.failCount + 1);
       /* ひびの起点は文字が実際に当たる場所（常に的の縁の真上、_startKingCharBounce
          参照）で固定だが、ボスの水平位置に対する各的の左右のずれぶんだけ衝突角を
-         わずかに傾け、当たった向きなりの自然さを出す（ユーザー要望） */
+         わずかに傾け、当たった向きなりの自然さを出す（ユーザー要望）。
+         ワールド座標上の衝突角から、その的の現在のw.rotを差し引いてローカル角度に
+         変換してから渡す（_createKingCrackWedge参照。的の回転にひびが追従する
+         ようにするため。的はこの時点で全てロック済み＝rotは固定） */
       for (let i = 0; i < _king.reels.length; i++) {
         const rw = _king.reels[i];
         const biasAngle = Math.max(-0.35, Math.min(0.35, (rw.x - _king.dbx) / 220));
-        _king.reelCracks[i].push(_createKingCrackWedge(biasAngle));
+        const worldAngle = -Math.PI / 2 + biasAngle;
+        _king.reelCracks[i].push(_createKingCrackWedge(worldAngle - rw.rot));
       }
       playSE('miss');
       if (_king.failCount >= KING_MAX_FAILS) _startBossDefeat();
