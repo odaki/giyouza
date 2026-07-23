@@ -95,6 +95,20 @@ canvas {
 
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d', { alpha: false }); // 毎フレーム全面を塗るため不透明化（ページとの合成コスト削減）
+/* iOS Safari + 外付け（Bluetooth）キーボード対策: hardware keydownがページの
+   JSへ配送されるには、ページ内のどこかにフォーカス可能な要素が実際に
+   フォーカスされている必要がある。このゲームはcanvas1枚だけのUIで
+   tabindexも無いため、タップしてもどの要素にもフォーカスが当たらず、
+   キーボード自体もSafari自体への配送も生きているのにkeydownがページへ
+   一切届かない状態になっていた（実機指摘: 「URL欄には直接入力できるのに、
+   矢文字チートに無反応」＝キーボード入力経路自体は生きているのに
+   ページ内フォーカス先が無かったための取りこぼしと推測される）。
+   canvasをプログラム的にフォーカス可能にし、タップのたびに明示的に
+   フォーカスを取り直す（_ensureCanvasFocus参照） */
+canvas.tabIndex = -1;
+function _ensureCanvasFocus() {
+  try { canvas.focus({ preventScroll: true }); } catch(_e) { try { canvas.focus(); } catch(_e2) {} }
+}
 /* タッチデバイス判定 & 向き */
 const IS_TOUCH    = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 /* ?portrait URL パラメータでデスクトップからでも縦画面テスト可能 */
@@ -110,7 +124,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.68';
+const VERSION = 'v4.69';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -8069,6 +8083,7 @@ document.addEventListener('keydown', e=>{
 
 canvas.addEventListener('mousedown', e=>{
   if (e.button !== 0) return;
+  _ensureCanvasFocus();
   /* 入力物理発生時刻（performance.now() 基準 ms。ハンドラ到達前の遅延を補正） */
   const inputPerfMs = e.timeStamp;
   /* _canvasRect キャッシュを使用（getBoundingClientRect() 強制レイアウトを排除） */
@@ -8125,6 +8140,7 @@ document.addEventListener('touchstart', e=>{
      resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
      START ボタンの音声スケジューリング（initGame）は touchend で行う（後述）。 */
   _unlockAudio();
+  _ensureCanvasFocus(); // 外付けキーボードのkeydownをページへ配送させるためのフォーカス確保
 
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
@@ -8234,6 +8250,7 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', fitCanvas);
 }
 fitCanvas();
+_ensureCanvasFocus(); // 初回ロード時点でも試みる（iOSはジェスチャー無しでは定着しないためtouchstart側が本命）
 
 /* ── 全画面切替（Fullscreen API 対応環境のみ有効） ── */
 function toggleFullscreen() {
