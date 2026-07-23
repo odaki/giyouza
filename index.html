@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.76';
+const VERSION = 'v4.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -914,6 +914,7 @@ let _pendingWheels        = null;  // 事前構築済みホイール（null=未�
 let _pendingWheelScheduled= false; // スケジュール済みフラグ（重複防止）
 const _freeWheelOCs       = [];    // 解放済みOCプール（再利用でGCゼロ）
 const _freeResultOCs      = [];    // 結果文字OCプール（固定サイズで再利用）
+const _freeKingReelOCs    = [];    // キング的OCプール（通常ホイールとサイズが異なるため別管理）
 
 function _releaseWheelOCs(ws) {
   if (!ws) return;
@@ -2789,11 +2790,29 @@ function _createKingCrackWedge(baseAngle) {
   return [...left, ...right.reverse()]; // 閉じたポリゴン（先端は左右がほぼ同点で自然に尖る）
 }
 
+/* キング的のOCをプールへ返却する。通常ホイールの_releaseWheelOCsと対になる
+   （欠陥クラスの水平展開: 通常ホイールはプール運用なのにキング的だけ毎respinで
+   4枚ずつ新規生成・旧4枚は解放なしだった。長い戦闘では数十枚のOffscreenCanvasが
+   GC待ちで滞留し、iOS Safariのcanvasメモリを圧迫して戦闘後の処理落ち・音途切れの
+   原因になりうる） */
+function _releaseKingReelOCs(reels) {
+  if (!reels) return;
+  for (const w of reels) {
+    if (w?._oc) { _freeKingReelOCs.push(w._oc); w._oc = null; }
+  }
+}
+
 function _buildKingReelOC(w) {
   const ocR = KING_WR + 4;
   const sz = Math.ceil(ocR * 2 * _dpr);
-  const oc = new OffscreenCanvas(sz, sz);
+  /* プール再利用。KING_WRは縦画面で_initBossBattleが再計算するが、Wが固定のため
+     実行中に値は変わらない＝サイズは安定。念のためサイズ不一致の場合は
+     width代入でリサイズする（canvasはwidth代入で内容もクリアされる） */
+  const oc = _freeKingReelOCs.pop() || new OffscreenCanvas(sz, sz);
+  if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
   const c = oc.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, sz, sz);
   c.scale(_dpr, _dpr);
   c.translate(ocR, ocR);
   for (const s of w.segs) {
@@ -4679,6 +4698,7 @@ function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 function _kingBattleEnd() {
+  if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null; _kingLasers = []; _kingCharFlights = [];
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
@@ -4822,6 +4842,7 @@ function _updateBossDefeatShrink() {
   /* クロスフェード完了で本体を消して弾け散り演出へ。収束が遅れた場合の保険として
      上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
   if (!_king || _bossDefeatXfade >= 1 || _bossDefeatShrinkTimer > 60) {
+    if (_king) _releaseKingReelOCs(_king.reels); // 的OCをプールへ返却（リーク防止・水平展開）
     _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
     phase = 'bossDefeatOutro';
     playSE('boss_flash');
@@ -5081,8 +5102,13 @@ function _initBossBattle() {
      （DPR>1 環境で実際に発生したバグ：右・下が切れて見える）。
      内容は _renderKingBody() が命中の都度・素のスプライトから再構成するため、
      ここでは領域確保のみ行う（初期状態は _renderKingBody 側で _bossOC.oc を
-     そのまま返す高速経路があるため、初期描画は不要）。 */
-  const liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+     そのまま返す高速経路があるため、初期描画は不要）。
+     _bossOCにキャッシュして戦闘をまたいで再利用する（以前は毎戦闘で新規生成し
+     旧canvasがGC待ちで滞留していた＝キング的OCと同じリーククラスの水平展開。
+     合成状態のキャッシュキー（_toneRenderedPct等）は_king側に持つため、
+     canvasを使い回しても前戦闘の内容が誤って再利用されることはない） */
+  const liveOC = _bossOC.liveOC ||
+    (_bossOC.liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr));
   /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
      （個々の焦げ跡は _createKingMark がタップの都度その場で生成する） */
   const marks = [];
@@ -5377,6 +5403,7 @@ function _kingReelShoot(inputPerfMs) {
 
 /* 4本とも即座に再スピン（ヒット・ミス問わず毎回呼ばれる） */
 function _respinKingReels() {
+  _releaseKingReelOCs(_king.reels); // 旧的のOCをプールへ返却（リーク防止）
   for (let i = 0; i < 4; i++) {
     const { x, y } = _king.reels[i];
     _king.reels[i] = _createKingReel(x, y, _king.charWeights[i]); // 的ごとの現在の配分を引き継ぐ
