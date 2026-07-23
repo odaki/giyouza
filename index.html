@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.80';
+const VERSION = 'v4.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5019,6 +5019,18 @@ const KING_CHAR_OFFSCREEN_MARGIN = 60;
    接線方向の速度保持率。どちらも1未満にしてエネルギー損失を表現する */
 const KING_CHAR_BOUNCE_RESTITUTION = 0.4;
 const KING_CHAR_BOUNCE_FRICTION    = 0.55;
+/* 衝突時にキング側から加える能動的な「弾き飛ばし」インパルス（ユーザー指摘:
+   反発係数によるはね返りだけだと、勢いが弱く単なる自由落下に見える。的が
+   ヒビを入れられた腹いせに文字を払いのけるような、外力による弾き出しに
+   したい）。RESTITUTION/FRICTIONによる入射速度の反射「後」に加算し、
+   「弱い自然な跳ね返り」の上に「強い能動的な一撃」を上乗せする。
+   左右方向はボス中心から見たその的のオフセット方向（ひび演出のbiasAngleと
+   同じ考え方）に払い、常に強い上向きを加えて「叩き上げて弾き飛ばす」
+   軌道にする。回転（KNOCK_ROT）は弾かれた勢いを視覚的に強調する演出で、
+   物理的な角運動量計算ではなく左右方向に応じた見た目付けの乱数 */
+const KING_CHAR_KNOCK_SPEED_X = 5;
+const KING_CHAR_KNOCK_SPEED_Y = 9;
+const KING_CHAR_KNOCK_ROT_SPD = 0.25;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -5270,6 +5282,7 @@ function _spawnKingCharFlight(w, reelIdx) {
     reelIdx, // 衝突の瞬間（_startKingCharBounce）にどの的のスロットへひびを追加するか
     tier, markRef: tier ? _createKingMark() : null,
     state: 'fly', frames: 0, resolve: null, attemptToken: null,
+    rot: 0, rotSpd: 0, // 弾き飛ばし後の回転演出（衝突時に設定、drawKingCharFlights参照）
   });
 }
 
@@ -5537,6 +5550,16 @@ function _updateKingCharFlights() {
         const jitter = (Math.random() - 0.5) * 0.5;
         f.bvx = f.bvx * KING_CHAR_BOUNCE_FRICTION + jitter;
         f.bvy = -f.bvy * KING_CHAR_BOUNCE_RESTITUTION;
+        /* 弾き飛ばしインパルスを上乗せする（ユーザー指摘: 反発係数によるはね返り
+           だけだと勢いが弱く単なる自由落下に見える。的が払いのけるような能動的な
+           一撃を追加したい）。左右方向はボス中心から見たその的のオフセット方向
+           （ひび演出のbiasAngleと同じ考え方、_addKingReelCrackAtCollision参照）
+           に払い、上方向は常に強く跳ね上げる。回転は弾かれた勢いの視覚的強調 */
+        const reel = _king.reels[f.reelIdx];
+        const knockDir = reel ? (Math.sign(reel.x - _king.dbx) || 1) : 1;
+        f.bvx += knockDir * KING_CHAR_KNOCK_SPEED_X;
+        f.bvy -= KING_CHAR_KNOCK_SPEED_Y;
+        f.rotSpd = knockDir * KING_CHAR_KNOCK_ROT_SPD * (0.7 + Math.random() * 0.6);
         /* 衝突の瞬間にひびを追加（ユーザー要望どおりのタイミング） */
         _addKingReelCrackAtCollision(f);
         /* 同じ失敗attemptの4体全てが衝突し終えたら、6回目の失敗（pendingDefeat）
@@ -5553,12 +5576,15 @@ function _updateKingCharFlights() {
         }
       }
     } else if (f.state === 'fall') {
-      /* 反発後の落下（重力）。水平方向はわずかに減速させ、垂直方向は
-         重力加速度で下向きに増していく。画面外に出るまで表示し続ける */
+      /* 弾き飛ばされた後の落下（重力）。水平方向はわずかに減速させ、垂直方向は
+         重力加速度で下向きに増していく。画面外に出るまで表示し続ける。
+         回転は衝突時に設定したrotSpd（knock方向に応じた符号）で等速回転させ、
+         弾かれた勢いを視覚的に強調する（drawKingCharFlights参照） */
       f.frames++;
       f.bx += f.bvx; f.by += f.bvy;
       f.bvy += 0.32;
       f.bvx *= 0.99;
+      f.rot += f.rotSpd;
     }
   }
   swapRemove(_kingCharFlights, f => {
@@ -5621,8 +5647,19 @@ function drawKingCharFlights() {
     ctx.fillStyle = _syncBarColor(f.score)[0];
     const fontSize = f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_JUST_FONT_SCALE : KING_RESULT_FONT;
     ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
-    ctx.strokeText(f.char, x, y);
-    ctx.fillText(f.char, x, y);
+    /* fall中（弾き飛ばされた後）はrotで回転させ、勢いよく弾かれた様子を強調する
+       （KING_CHAR_KNOCK_ROT_SPD、_updateKingCharFlights参照） */
+    if (f.state === 'fall' && f.rot) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(f.rot);
+      ctx.strokeText(f.char, 0, 0);
+      ctx.fillText(f.char, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.strokeText(f.char, x, y);
+      ctx.fillText(f.char, x, y);
+    }
   }
   ctx.restore();
 }
