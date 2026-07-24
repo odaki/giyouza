@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.90';
+const VERSION = 'v4.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4955,6 +4955,7 @@ function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 function _kingBattleEnd() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null; _kingLasers = []; _kingCharFlights = [];
+  _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
   _bossRumblePendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
@@ -5304,6 +5305,16 @@ let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
 let _kingShatter = null; // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
 const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
+/* こんがり達成時の湯気（蒸したての湯気、_spawnVictorySteamWisp参照）専用の
+   独立した配列。共有particles配列（花火・命中インパクト用の重力+収縮物理が
+   update()冒頭で全phase共通に適用される）には登録しない。実機確認で発覚:
+   以前spawnParticleで共有particlesに登録していたところ、update()冒頭の
+   汎用物理（重力+0.22・収縮×0.97）と_updateBossVictory独自の物理
+   （浮力-0.01）が毎フレーム二重適用され、正味+0.21/frameの下向き加速度に
+   なって「上昇する湯気」ではなく「跳ねてすぐ落ちる火の粉」の動きになって
+   いた（約13フレームで上昇が失速し落下に転じることを実測で確認）。 */
+let _victorySteam = [];
+let _steamSprite = null; // 湯気用の柔らかい放射状グラデーションスプライト（初回使用時に生成）
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
@@ -6026,6 +6037,79 @@ function drawKingCookGauge() {
   ctx.restore();
 }
 
+/* 湯気スプライト（柔らかい放射状グラデーションの円）を1回だけ生成する。
+   shadowBlurは使わず（プロジェクト規約: GPUブラーパス削減のため全廃済み）、
+   グラデーション自体で縁をぼかすことでソリッドな円に見えないようにする */
+function _buildSteamSprite() {
+  if (_steamSprite || typeof OffscreenCanvas === 'undefined') return;
+  const r = 32;
+  const oc = new OffscreenCanvas(r * 2 * _dpr, r * 2 * _dpr);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(r, r);
+  const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
+  grd.addColorStop(0,    'rgba(255,250,240,0.55)');
+  grd.addColorStop(0.55, 'rgba(255,250,240,0.24)');
+  grd.addColorStop(1,    'rgba(255,250,240,0)');
+  c.fillStyle = grd;
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
+  _steamSprite = { oc, r };
+}
+
+/* 湯気を1本、キング本体の輪郭（上半分の弧）付近から立ち上らせる。
+   本体楕円のジオメトリは_buildBossOC/_drawGyozaBodyと同じ比率
+   （中心Y=+s*0.08、半径rx=s*0.58・ry=s*0.48、REF=42基準をkk=s/REFで
+   拡大）を、キングの現在の表示位置・スケール（dbx/dby/dscale）で
+   ワールド座標に変換して使う。輪郭よりわずかに内側（×0.85）から
+   スポーンすることで「表面から立ち上る」質感にする。
+   速度・半径も dscale に比例させ、キングの見た目のサイズに対して
+   常に同じ相対的な大きさ・速さで立ち上るようにする */
+function _spawnVictorySteamWisp() {
+  if (!_king) return;
+  const s = _BOSS_S * _king.dscale;
+  const cx = _king.dbx, cy = _king.dby + s * 0.08;
+  const rx = s * 0.58, ry = s * 0.48;
+  const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.75; // 真上を中心に上半分の弧
+  _victorySteam.push({
+    x: cx + Math.cos(ang) * rx * 0.85,
+    y: cy + Math.sin(ang) * ry * 0.85,
+    vx: (Math.random() - 0.5) * 0.3,
+    vy: -(0.35 + Math.random() * 0.25) * _king.dscale, // 上昇速度（下向き重力は加えない＝湯気は落ちてこない）
+    wobblePhase: Math.random() * Math.PI * 2,
+    wobbleSpd: 0.03 + Math.random() * 0.02,
+    wobbleAmp: 6 + Math.random() * 6,
+    r0: (10 + Math.random() * 6) * _king.dscale,
+    age: 0,
+    maxAge: 90 + Math.random() * 40,
+  });
+}
+
+function _updateVictorySteam() {
+  for (const p of _victorySteam) {
+    p.age++;
+    p.wobblePhase += p.wobbleSpd;
+    p.x += p.vx + Math.sin(p.wobblePhase) * (p.wobbleAmp * 0.03); // 左右にゆらめきながら上昇
+    p.y += p.vy;
+    p.vy -= 0.003; // ごくわずかに加速（浮力が強まっていくイメージ、暴走しない程度）
+  }
+  _victorySteam = _victorySteam.filter(p => p.age < p.maxAge);
+}
+
+function _drawVictorySteam() {
+  if (!_steamSprite || _victorySteam.length === 0) return;
+  ctx.save();
+  for (const p of _victorySteam) {
+    const t = p.age / p.maxAge;
+    const alpha = Math.sin(Math.min(1, t) * Math.PI); // 0→1→0のなだらかな山型（現れて消えていく）
+    if (alpha <= 0.01) continue;
+    const scale = 0.5 + t * 1.3; // 拡散して徐々に大きくなる
+    const rr = p.r0 * scale;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(_steamSprite.oc, p.x - rr, p.y - rr, rr * 2, rr * 2);
+  }
+  ctx.restore();
+}
+
 function _startBossVictory() {
   phase = 'bossVictory';
   _bossVictoryTimer = 0;
@@ -6038,7 +6122,9 @@ function _startBossVictory() {
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
   playSE('kongari_complete');
-  unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績。ユーザー要望）
+  unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績）
+  _buildSteamSprite();
+  _victorySteam = [];
 }
 
 function _updateBossVictory() {
@@ -6047,29 +6133,8 @@ function _updateBossVictory() {
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
   _updateKingCharFlights();
-  /* 湯気の生成位置はキングの表示スケール(dscale)に比例させる（ユーザー報告:
-     「横画面で確認したところ、こんがりキングギヨウザ達成時の湯気がよく
-     見えなくなっている」）。以前はオフセットが_BOSS_S*0.3の固定値で、
-     キングの実際の表示サイズ（_king.dscale。横画面はレイアウト上のスケール
-     が縦画面の1に対し約0.69まで縮む＝availHが狭く、こんがりゲージ・的との
-     兼ね合いでキング表示領域が横画面のほうが窮屈なため）を無視していた。
-     縦画面(dscale=1)では偶然コインヘッダーから十分離れて見えていたが、
-     横画面ではdscale分縮んでいないぶん相対的に高すぎる位置になり、
-     コインヘッダーの半透明パネル（drawCoinHeaderが後から描画され上に
-     重なる、_king.by - _BOSS_S*0.3=100 に対しヘッダー下端が109で
-     わずか1px差）に生成直後から重なって隠れていた。dbx/dby/dscaleを
-     使うことで、キングの実際の見た目のサイズ・位置に対して常に同じ
-     相対位置（頭上よりやや下、ヘッダーからは常に安全な距離）から
-     立ち上るようになる */
-  if (_bossVictoryTimer % 6 === 0 && _king) {
-    spawnParticle(
-      _king.dbx + (Math.random() - 0.5) * _BOSS_S * 0.7 * _king.dscale,
-      _king.dby - _BOSS_S * 0.3 * _king.dscale,
-      (Math.random() - 0.5) * 0.6, -1.2 - Math.random() * 0.8,
-      'rgba(255,240,220,0.6)', 60 + Math.random() * 30, 4 + Math.random() * 4);
-  }
-  for (const p of particles) { p.x += p.vx; p.y += p.vy; p.vy -= 0.01; p.life--; }
-  swapRemove(particles, _predParticle, _deadify);
+  if (_bossVictoryTimer % 5 === 0 && _king) _spawnVictorySteamWisp();
+  _updateVictorySteam();
 }
 
 function drawBossVictory() {
@@ -6083,6 +6148,7 @@ function drawBossVictory() {
     ctx.restore();
     drawKingCharFlights();
   }
+  _drawVictorySteam();
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   /* 文言はボスの裾（拡大アニメ中は dscale に連動して動く）のすぐ下に置く。
