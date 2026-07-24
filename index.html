@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.94';
+const VERSION = 'v4.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6246,7 +6246,19 @@ function _startTrueEnding(replay) {
   _trueEndingIsReplay = replay;
   if (replay) {
     _trueEndingReturnPhase = phase;
-    _stopBossBGMForVictory(); // 現在鳴っているBGMを短時間でフェードして止める（ボス専用実装だが汎用的に使える）
+    /* 実機報告で発覚: _stopBossBGMForVictory（120msフェード+150ms後に破棄）は
+       ボス勝利演出の余韻を意図した緩やかな停止だが、_playTrueEndingThemeは
+       50ms後には最初の音を鳴らし始めるため、フェード中盤（ゲームBGMがまだ
+       46〜73%の音量で鳴っている区間）とテーマ曲の出だしが数十ms重なって
+       「BGMが混ざる」ように聞こえていた。実績パネルからの手動リプレイは
+       ユーザーの能動的な操作であり緩やかな余韻を残す必然性がないため、
+       フェードを挟まず即座に無音化してから鳴らす（_destroyBGMSourceを直接
+       呼ぶ。ボス勝利側の演出上の余韻フェードとは意図的に区別する） */
+    if (bgmGain && audioCtx) {
+      bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    }
+    _destroyBGMSource();
   }
   phase = 'trueEnding';
   _trueEnding = { act: 1, timer: 0, rollY: 0, rollItems: null, rollTotalH: 0, showContinue: false };
