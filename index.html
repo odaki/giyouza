@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.92';
+const VERSION = 'v4.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6131,12 +6131,17 @@ function _startBossVictory() {
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
   playSE('kongari_complete');
-  /* kongariは他の全実績を達成しないと解除できない設計（_allAchExceptKongariDone
-     参照）のため、この判定は必ず「実績コンプリートの瞬間」と一致する。
-     unlockAchで実際に解除される前に判定することで「今回が初回か」を確定させ、
-     bossVictoryのCONTINUEタップ時に真エンディングへ進むかどうかに使う
-     （_startTrueEnding参照） */
-  _pendingTrueEnding = !unlockedAch[KONGARI_ACH_ID];
+  /* 実機報告で発覚: 「実績解除が今回初めてか」（!unlockedAch[KONGARI_ACH_ID]）
+     で判定していたが、こんがり実績自体は真エンディング実装より前の別セッション
+     で既に解除済みのプレイヤーが実在し、その場合は常にfalseになって
+     _kingBattleEnd()（通常復帰）へ流れてしまい、真エンディングへ一切
+     到達できなかった（スローハンドバナー等、通常モードの演出が一瞬見えて
+     すぐ戻る、という報告と一致する）。
+     判定すべきは「実績が今回初めて解除されたか」ではなく「真エンディングを
+     まだ見ていないか」であり、これは実績の解除タイミングとは独立している
+     （実績システムはこの機能より前から存在し得る）。trueEndingSeenは
+     まさにこの判定のために用意したフラグなので、そちらを使う */
+  _pendingTrueEnding = !trueEndingSeen;
   unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績）
   _buildSteamSprite();
   _victorySteam = [];
