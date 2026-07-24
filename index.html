@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.98';
+const VERSION = 'v4.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4982,6 +4982,14 @@ const BOSS_BATTLE_PHASES = new Set(
   ['boss', 'bossShatter', 'bossVictory', 'trueEnding', 'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
 function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 
+/* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
+   boss/bossShatter/bossDefeat系はstopBGMTapeでソースを極低速のまま生かして
+   いるため一時停止からの復帰でそのまま再開できるが、bossVictory（勝利
+   ファンファーレ用に_stopBossBGMForVictoryで破棄）とtrueEnding（専用の
+   オシレーターテーマのみでbgmSourceを使わない）はソースが存在しない前提の
+   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない */
+const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'trueEnding']);
+
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 function _kingBattleEnd() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
@@ -8855,6 +8863,14 @@ function togglePause() {
         } catch(_e) {}
         applyMuteGain();
         _beatPulseCacheFrame = -1;
+        /* bossVictory（勝利ファンファーレでbgmSourceを破棄済み）・trueEnding
+           （専用オシレーターテーマのみでbgmSource自体を使わない）は、
+           ポーズ解除してもBGMループを再開してはいけないフェーズ。
+           以前はここがphaseを見ずに常に_bgmIsBossの値だけでバッファを選んで
+           再生していたため、これらのフェーズ中にポーズ→解除すると
+           （直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
+           鳴り出してしまっていた（NO_BGM_SOURCE_PHASES参照） */
+        if (NO_BGM_SOURCE_PHASES.has(phase)) return;
         /* ポーズ時に鳴っていたのがボスBGM（暗黒版バッファ）だった場合は、
            再開後もボス用バッファを使い回す（_bgmIsBoss参照）。
            これを省略すると _createBGMSource() のデフォルト引数（通常バッファ）が
@@ -8867,7 +8883,7 @@ function togglePause() {
         if (!_resumeBgmBuf) { return; }
         /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
         setTimeout(() => {
-          if (isPaused) return;
+          if (isPaused || NO_BGM_SOURCE_PHASES.has(phase)) return;
           _destroyBGMSource();
           const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
           const offset  = _pauseBgmPos % loopDur;
