@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.95';
+const VERSION = 'v4.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -991,6 +991,9 @@ const MUTE_BTN    = { x: BTN_X, y: BTN_TOP,                          w: BTN_SIZE
 const FS_BTN_RECT = { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP),   w: BTN_SIZE, h: BTN_SIZE };
 const ACH_TROPHY  = { x: BTN_RIGHT, y: BTN_TOP,                        w: BTN_SIZE, h: BTN_SIZE }; // 左上
 const PAUSE_BTN   = { x: BTN_RIGHT, y: BTN_TOP + BTN_SIZE + BTN_GAP,  w: BTN_SIZE, h: BTN_SIZE }; // 左上・トロフィー下
+/* 真エンディング再生ボタン（トロフィーの右隣・startup画面限定）。
+   PAUSE_BTNはstartup中は非表示のため、この行のこの位置は常に空いている */
+const TRUE_ENDING_BTN = { x: BTN_RIGHT + BTN_SIZE + BTN_GAP, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE };
 
 /* 全画面ボタン: Canvas 描画用（HTML button 廃止）
    Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
@@ -1024,6 +1027,7 @@ const P_BET_INC_BTN = IS_PORTRAIT ? { x:P_BAR_X+P_BAR_W-P_BAR_H+1, y:P_BAR_Y+1, 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
 let _pendingInitGame = false; // touchstart で START ボタンを検出し touchend で initGame() するためのフラグ
+let _pendingTrueEndingReplay = false; // touchstart で真エンディング再生ボタンを検出し touchend で開始するためのフラグ
 let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
 let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版）ループバッファ（tier0、既存コード互換用）
@@ -6219,9 +6223,11 @@ function drawBossVictory() {
    「こんがり」実績は他の全実績を達成しないと解除できない設計（_allAchExceptKongariDone
    参照）のため、実質的に「実績コンプリートの祝賀」演出として位置づける。
    初回のこんがり達成時のみ自動再生し（_pendingTrueEnding、_startBossVictory・
-   handleGameClickのbossVictory分岐参照）、2回目以降は実績パネルの再生ボタン
-   （drawAchOverlay・_trueEndingBtnRect参照）からいつでも見返せるようにする
-   （replay=true）。3幕構成、いつでもタップでスキップ可（act3の締めくくりのみ
+   handleGameClickのbossVictory分岐参照）、2回目以降はタイトル画面のボタン
+   （TRUE_ENDING_BTN、トロフィーの右隣）からいつでも見返せるようにする
+   （replay=true）。エンディングはゲーム途中で見るものではなくスタートと
+   並列の選択肢という位置づけのため、あえて実績パネルの中には置かない。
+   3幕構成、いつでもタップでスキップ可（act3の締めくくりのみ
    最短表示後にCONTINUE待ち、既存のバッジ演出と同じ操作感）。 */
 const _TRUE_ENDING_OPEN_LINES = [
   '数えきれないほどの トライの果てに――',
@@ -6425,8 +6431,10 @@ function drawTrueEnding() {
 }
 
 /* 真エンディング終了処理。自動再生（本編勝利）なら通常の勝利後処理へ、
-   リプレイなら元のphaseへ復帰してBGMを再開するだけに留める（ゲーム進行の
-   状態は一切変えない） */
+   リプレイなら元のphaseへ復帰するだけに留める（ゲーム進行の状態は一切変えない）。
+   startup画面からのリプレイはinitGame()前と同じ「無音」状態に戻すのが正しい
+   （startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()すると
+   その前提を崩してしまう）。ゲーム内リプレイの場合のみBGMを再開する。 */
 function _finishTrueEnding() {
   trueEndingSeen = true;
   lsSaveStats();
@@ -6435,6 +6443,7 @@ function _finishTrueEnding() {
   _trueEnding = null;
   if (wasReplay) {
     phase = returnPhase;
+    if (returnPhase === 'startup') return;
     if (audioCtx) audioCtx.resume().catch(() => {});
     startBGM();
   } else {
@@ -7057,6 +7066,20 @@ function draw() {
   ctx.quadraticCurveTo(-12.5, -5, -6, -3);
   ctx.stroke();
   ctx.restore();
+
+  /* ── 真エンディング再生ボタン（トロフィーの右隣・startup画面かつ視聴済みのみ） ──
+     エンディング演出はゲーム途中で見るものではなく、スタートと並列の選択肢という
+     位置づけにしたため、実績パネルの中ではなくタイトル画面のボタン列に置く */
+  if (phase === 'startup' && trueEndingSeen) {
+    ctx.save();
+    _drawBtnBg(TRUE_ENDING_BTN, false);
+    ctx.translate(TRUE_ENDING_BTN.x + TRUE_ENDING_BTN.w / 2, TRUE_ENDING_BTN.y + TRUE_ENDING_BTN.h / 2);
+    ctx.fillStyle = '#f5d020';
+    ctx.beginPath();
+    ctx.moveTo(-5, -8); ctx.lineTo(-5, 8); ctx.lineTo(9, 0);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
 
   /* ── 全画面ボタン（Fullscreen API 対応環境のみ・常時最前面） ── */
   if (FS_SUPPORTED) {
@@ -8502,8 +8525,7 @@ function drawAchBanner() {
    PC版 : 2カラム                                              */
 
 /* 実績パネルの位置・寸法。IS_PORTRAIT/W/Hのみに依存し実行中不変のため、
-   drawAchOverlayとクリックハンドラ（_trueEndingBtnRect）の両方から同じ
-   ジオメトリを参照できるよう関数化した（座標式の重複を防ぐ） */
+   関数化しておく（座標式の重複を防ぐ） */
 function _achPanelRect() {
   /* 縦画面: アイコン右端(46) + 12px = 58 → パネル左端
              右ボタン左端(374) - 12px = 362 → パネル右端
@@ -8514,14 +8536,6 @@ function _achPanelRect() {
     pw: IS_PORTRAIT ? 304       : W - 120,
     ph: IS_PORTRAIT ? H - 32    : H - 60,
   };
-}
-
-/* 「真エンディングを再生」ボタン（実績コンプリート後のみパネル左下に表示）。
-   実績パネルの解除数表示（右下）と対になる位置に置く */
-function _trueEndingBtnRect() {
-  const { px, py, ph } = _achPanelRect();
-  const bh = IS_PORTRAIT ? 22 : 24;
-  return { x: px + 10, y: py + ph - bh - 4, w: IS_PORTRAIT ? 150 : 170, h: bh };
 }
 
 function drawAchOverlay() {
@@ -8643,32 +8657,7 @@ function drawAchOverlay() {
   ctx.fillStyle='rgba(245,208,32,0.45)';
   ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-12, py+ph-6);
 
-  /* 真エンディング再生ボタン（初回視聴済みの場合のみ、パネル左下） */
-  if (trueEndingSeen) {
-    const r = _trueEndingBtnRect();
-    roundRect(r.x, r.y, r.w, r.h, 6);
-    ctx.fillStyle = 'rgba(180,130,0,0.55)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(245,208,32,0.6)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.font = `bold ${IS_PORTRAIT ? 11 : 12}px 'Hiragino Mincho ProN',serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.fillText('🎬 真エンディングを再生', r.x + r.w / 2, r.y + r.h / 2 + 1);
-  }
-
   ctx.restore();
-}
-
-/* 実績パネル表示中のタップ処理。パネル内の「真エンディングを再生」ボタンに
-   当たっていればそれを実行し、それ以外の場所ならパネルを閉じる。
-   6箇所（mousedown/touchstart × 通常/ポーズ中/startup等）でパネルを閉じる
-   だけの処理が重複していたため、ボタン追加に合わせて共通ヘルパーへ集約した */
-function _handleAchPanelTap(cx, cy) {
-  if (trueEndingSeen && hitTest(_trueEndingBtnRect(), cx, cy)) {
-    showAchievements = false;
-    _startTrueEnding(true);
-    return;
-  }
-  showAchievements = false;
 }
 
 /* ════════════════ Startup Screen ════════════════ */
@@ -9160,6 +9149,7 @@ canvas.addEventListener('mousedown', e=>{
   if (FS_SUPPORTED && hitTest(FS_BTN_RECT, cx, cy)) { toggleFullscreen(); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; return; }
+    if (trueEndingSeen && hitTest(TRUE_ENDING_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); _startTrueEnding(true); return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
     if (showAchievements) { showAchievements = false; return; }
     if (hitTest(STARTUP_BTN, cx, cy) && Date.now() >= _startupGuardUntil) { if (!audioCtx) getAudioCtx(); initGame(); return; }
@@ -9170,11 +9160,11 @@ canvas.addEventListener('mousedown', e=>{
     /* PAUSE中はゲームループが止まっているため操作後に draw() を明示的に呼ぶ（mousedown）
        touchstart ハンドラはゲームループが動いているため draw() 不要（非対称だが意図的） */
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; draw(); return; }
-    if (showAchievements) { _handleAchPanelTap(cx, cy); draw(); return; }
+    if (showAchievements) { showAchievements = false; draw(); return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
   }
-  if (showAchievements) { _handleAchPanelTap(cx, cy); return; }
+  if (showAchievements) { showAchievements = false; return; }
   if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (hitTest(MUTE_BTN, cx, cy)) {
     /* AudioContextがなければ初期化してからミュート切り替え */
@@ -9217,6 +9207,11 @@ document.addEventListener('touchstart', e=>{
 
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; return; }
+    if (trueEndingSeen && hitTest(TRUE_ENDING_BTN, pt.x, pt.y)) {
+      /* STARTボタンと同様、resume()完了を待ってからtouchendで再生開始する */
+      _pendingTrueEndingReplay = true;
+      return;
+    }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
     if (showAchievements) { showAchievements = false; return; }
     if (hitTest(STARTUP_BTN, pt.x, pt.y) && Date.now() >= _startupGuardUntil) {
@@ -9232,12 +9227,12 @@ document.addEventListener('touchstart', e=>{
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
   if (isPaused) {
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; draw(); return; }
-    if (showAchievements) { _handleAchPanelTap(pt.x, pt.y); draw(); return; }
+    if (showAchievements) { showAchievements = false; draw(); return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
   }
   /* 実績オーバーレイ中 */
-  if (showAchievements) { _handleAchPanelTap(pt.x, pt.y); return; }
+  if (showAchievements) { showAchievements = false; return; }
   /* トロフィーボタン */
   if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
 
@@ -9268,6 +9263,13 @@ document.addEventListener('touchstart', e=>{
    AudioContext を確実に running にしてからジングルを開始できる。
    touchend も iOS ユーザーアクティベーションとして認定される。 */
 document.addEventListener('touchend', e => {
+  if (_pendingTrueEndingReplay) {
+    _pendingTrueEndingReplay = false;
+    e.preventDefault();
+    if (!audioCtx) getAudioCtx();
+    _startTrueEnding(true);
+    return;
+  }
   if (!_pendingInitGame) return;
   _pendingInitGame = false;
   e.preventDefault();
