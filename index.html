@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.96';
+const VERSION = 'v4.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7074,10 +7074,19 @@ function draw() {
     ctx.save();
     _drawBtnBg(TRUE_ENDING_BTN, false);
     ctx.translate(TRUE_ENDING_BTN.x + TRUE_ENDING_BTN.w / 2, TRUE_ENDING_BTN.y + TRUE_ENDING_BTN.h / 2);
+    /* 祝賀メダル（円形ロゼット＋リボン垂れ）アイコン。単色シルエット。
+       ポーズ解除の再生三角と紛らわしいという指摘を受け、めでたさが伝わる
+       別モチーフに差し替えた */
     ctx.fillStyle = '#f5d020';
     ctx.beginPath();
-    ctx.moveTo(-5, -8); ctx.lineTo(-5, 8); ctx.lineTo(9, 0);
+    ctx.moveTo(-4, -1); ctx.lineTo(-0.5, -1); ctx.lineTo(-2.5, 9);
     ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(4, -1); ctx.lineTo(0.5, -1); ctx.lineTo(2.5, 9);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, -4, 5.5, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 
