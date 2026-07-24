@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.93';
+const VERSION = 'v4.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -796,6 +796,13 @@ const HIT_TABLE = [
 let coins, bet, betLocked, isGameOver;
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
 let isSlowSpin   = false;   // 低確率: 回転速度半減イベント
+/* スローハンドバッジの表示ラッチ（drawSlowHandBadge参照）。isSlowSpinが
+   false→trueになった瞬間だけ立て、grayRateCurが1.0近くまで戻りきったら
+   降ろす。grayRateCur自体は他の演出（ボスBGMからの復帰時のフォールバック等）
+   でも下がりうるため、「isSlowSpinを経由した本物の発動」だけを覚えておく
+   目的（update()の常時更新セクションで管理） */
+let _slowHandBadgeArmed = false;
+let _prevIsSlowSpinForBadge = false;
 let missPopups   = []; // ハズレポップアップ（複数同時・トライ横断フェードアウト）
 let payoutPopups = []; // 獲得ポップアップ（複数同時・トライ横断フェードアウト）
 /* ── ビートシンク ── */
@@ -3189,6 +3196,13 @@ function update() {
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
   swapRemove(missPopups,   _predTimer);
   swapRemove(payoutPopups, _predTimer);
+  /* スローハンドバッジのラッチ更新（drawSlowHandBadge参照）。isSlowSpinが
+     false→trueになった瞬間だけ武装し、grayRateCurが十分1.0に戻ったら
+     武装解除する。phaseをまたいで常時更新する必要がある（早期returnの
+     多い各phase分岐に置くと武装解除のタイミングを取りこぼすため） */
+  if (isSlowSpin && !_prevIsSlowSpinForBadge) _slowHandBadgeArmed = true;
+  _prevIsSlowSpinForBadge = isSlowSpin;
+  if (_slowHandBadgeArmed && !isSlowSpin && grayRateCur > 0.995) _slowHandBadgeArmed = false;
   /* キングギヨウザ予兆: 蓄積80%超のアイドル中、まれに霊が画面を横切る。
      こんがり以外の実績が未達成のうちは、まだ出現できないため予兆も出さない
      （水平展開: _maybeStartBossOmenと同じ条件を予兆側にも適用） */
@@ -4895,6 +4909,13 @@ function _startBossOmen() {
      ここが手薄だったため、当たり演出の途中でキングギヨウザが発動すると
      その演出がキングギヨウザ画面の下に透けて残っていた） */
   _clearTrialFxState();
+  /* isSlowSpin等はトライ限定の演出だが_clearTrialFxStateの対象外だったため、
+     スローハンド中にキング戦へ突入すると発動状態・ランプ終了時刻が戦闘中
+     ずっと残留していた（実機報告の調査で発覚した水平展開漏れ。他のトライ
+     限定演出と同じ扱いにする） */
+  isSlowSpin = false;
+  slowRampEndTime = 0;
+  slowHandLockUntil = 0;
   _buildBossOC();
   _omen = { step: 0, timer: 0, items: [], flash: 0 };
   phase = 'bossOmen';
@@ -4987,6 +5008,16 @@ function _kingBattleEnd() {
     return;
   }
   _restartToTapestart();
+  /* 実機報告で発覚: _restartToTapestart→init(fromGameOver=true)は通常の
+     ゲームオーバー復帰と同じ経路を共有しており、そちらの仕様（"ゲームオーバー
+     リカバリー後もBET対応速度へ"）に従って無条件でスローハンドの抽選を行う。
+     このためキング戦からの復帰（勝敗問わず）直後に、無関係な抽選で
+     スローハンドが発動しバッジが表示されることがあった。キングギヨウザ戦
+     という特別な文脈からの復帰直後に、無関係な確率イベントで割り込まれるのは
+     不適切なため、キング戦復帰では常に通常速度で始まるよう明示的に抑制する
+     （通常のgameOverResetにはこの抑制を入れない＝既存仕様を維持） */
+  isSlowSpin = false;
+  _slowSpinPending = null;
 }
 
 /* こんがりしっぱい（全損には至らない敗北）から通常モードへ戻る前のつなぎ演出。
@@ -8159,13 +8190,35 @@ function drawSlowHandBadge() {
   if (phase === 'startup') return;
   if (phase === 'tapestart') return; // ゲームオーバー復帰アニメーション中は非表示
   /* ボス関連フェーズはいずれもスローハンドと無関係にgrayRateTargetを動かす
-     （予告のテープストップ、こんがりしっぱい時のテープ停止など）。
-     grayRateCurが下がる＝スローハンドではないため、ボス関連フェーズは
-     まとめて対象外にする（水平展開: bossOmenのみ除外していたのを
-     こんがりしっぱいのテープ停止追加時に他のボスフェーズへ広げ忘れていた。
-     現在は_isBossBattlePhase()で一元化し、bossOmenだけ個別に足す） */
+     （予告のテープストップ、こんがりしっぱい時のテープ停止など）ため、
+     まとめて対象外にする（_isBossBattlePhase()で一元化、bossOmenは個別に足す）。
+     これはisSlowSpinガード（下記）に対する保険としてそのまま残す */
   if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (isGameOver) return;
+  /* 実機報告で発覚: grayRateCurは複数の演出（ボス関連フェーズだけでなく、
+     startBGMTapeのフォールバック分岐＝ボスBGMから通常BGMへ戻る際に
+     grayRateCurを0.001へ明示的にリセットしてから1.4秒かけて1.0へ回復させる、
+     等）でも下がりうる。キング戦は_bgmIsBoss=trueでBGM再生していたため、
+     _kingBattleEnd→_restartToTapestart→startBGMTapeが必ずこのフォールバック
+     分岐を通り、isSlowSpin=falseのままgrayRateCurが一瞬0付近まで落ちて
+     idle移行後もまだ回復しきっていない状態が残る（tapestart→idleの遷移条件
+     はBGM再生速度基準でありgrayRateCurの回復とは別の時定数のため）。
+     過去にも同種の誤表示（「グレースケール≠スローハンド」、bossDefeat確定時
+     のstopBGMTape由来）を一度修正しているが、その時はphase除外の追加という
+     対症療法だったため、後から追加された今回の要因（startBGMTapeのフォール
+     バック分岐）を見落とした。grayRateCurの下降要因を全て把握してその都度
+     除外を追加するのは水平展開が漏れ続ける構造のため、判定の主軸を
+     isSlowSpin自体に変える。ただし単純に「isSlowSpinがfalseなら常に非表示」
+     にすると、大当たり/中当たりでスローハンドを早期解除する際の
+     「isSlowSpin=falseにした後もgrayRateCurが1.0へ戻るまでバッジが滑らかに
+     フェードアウトする」という既存の意図的な演出（_kingReelShoot付近の
+     コメント「バッジも連動してフェードアウト」）まで壊してしまう（即座に
+     消える退行になる）。そのため_slowHandBadgeArmed（発動の瞬間だけ立てて
+     grayRateCurが1.0近くまで戻りきったら降ろすラッチ、update()側で管理）を
+     判定に使う。これにより既存のフェードアウト演出は維持しつつ、
+     isSlowSpinを一度も経由しないgrayRateCur変動（今回のバグの原因）では
+     ラッチが立たずバッジは一切表示されない */
+  if (!_slowHandBadgeArmed) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
   if (alpha < 0.01) return;
