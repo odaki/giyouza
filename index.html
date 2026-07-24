@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.97';
+const VERSION = 'v4.98';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7074,18 +7074,28 @@ function draw() {
     ctx.save();
     _drawBtnBg(TRUE_ENDING_BTN, false);
     ctx.translate(TRUE_ENDING_BTN.x + TRUE_ENDING_BTN.w / 2, TRUE_ENDING_BTN.y + TRUE_ENDING_BTN.h / 2);
-    /* 祝賀メダル（円形ロゼット＋リボン垂れ）アイコン。単色シルエット。
-       ポーズ解除の再生三角と紛らわしいという指摘を受け、めでたさが伝わる
-       別モチーフに差し替えた */
+    /* 祝賀メダル（円形ロゼット＋燕尾リボン）アイコン。単色シルエット。
+       ポーズ解除の再生三角と紛らわしいという指摘を受けて差し替えたが、
+       初版は細く小さすぎて遠目にメダルと判別できなかったため、
+       ボタン全体を使い切るサイズ・太いリボン幅・燕尾ノッチ付きで再設計した */
     ctx.fillStyle = '#f5d020';
     ctx.beginPath();
-    ctx.moveTo(-4, -1); ctx.lineTo(-0.5, -1); ctx.lineTo(-2.5, 9);
+    ctx.moveTo(-4.5, -1); ctx.lineTo(-0.6, -1); ctx.lineTo(-0.6, 10);
+    ctx.lineTo(-2.5, 7.2); ctx.lineTo(-4.5, 10);
     ctx.closePath(); ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(4, -1); ctx.lineTo(0.5, -1); ctx.lineTo(2.5, 9);
+    ctx.moveTo(4.5, -1); ctx.lineTo(0.6, -1); ctx.lineTo(0.6, 10);
+    ctx.lineTo(2.5, 7.2); ctx.lineTo(4.5, 10);
     ctx.closePath(); ctx.fill();
+    /* メダル円の縁に沿って薄い暗色の隙間を挟み、リボン(奥)とメダル(手前)が
+       重なっているように見せる（同色ベタ塗りだと繋ぎ目が消え一体化して見えるため） */
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.beginPath();
-    ctx.arc(0, -4, 5.5, 0, Math.PI * 2);
+    ctx.arc(0, -4, 8.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f5d020';
+    ctx.beginPath();
+    ctx.arc(0, -4, 7, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
