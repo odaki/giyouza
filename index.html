@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.91';
+const VERSION = 'v4.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -901,6 +901,7 @@ let jackpotCount = 0; // 大当たり累計回数
 let kingGyozaMeter = 0; // 画面外へ退場した落下ギヨウザ累計（キングギヨウザ蓄積・game_stats永続化）
 let _trialKingGain = 0; // 現在のトライでking値に加算した量（KING_METER_TRIAL_CAPの上限判定用、initで0リセット）
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
+let trueEndingSeen = false; // 真エンディングを一度視聴済みか（初回自動再生の可否・実績パネルの再生ボタン表示可否に使う）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
 let isPaused = false;
@@ -2404,13 +2405,14 @@ function lsLoadStats() {
       if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
       if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
       if (typeof o.kingGyozaMeter === 'number') kingGyozaMeter = o.kingGyozaMeter;
+      if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
     }
   } catch(e) {}
   /* デバッグ上書きは保存データ有無に関わらず最後に適用（早期リターン経路を作らない） */
   if (_KING_DEBUG !== null) kingGyozaMeter = _KING_DEBUG;
 }
 function lsSaveStats() {
-  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter });
+  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, trueEndingSeen });
   _idle(() => { try { localStorage.setItem(LS_STATS, s); } catch(e) {} });
 }
 function unlockAch(id) {
@@ -3314,6 +3316,10 @@ function update() {
   }
   if (phase === 'bossVictory') {
     _updateBossVictory();
+    return;
+  }
+  if (phase === 'trueEnding') {
+    _updateTrueEnding();
     return;
   }
   if (phase === 'bossDefeat') {
@@ -4948,7 +4954,7 @@ function _updateBossOmen() {
    していたため、新フェーズ追加時（bossShatter等）の広げ忘れが実バグになった
    （drawSlowHandBadgeのコメント参照）。一元化により全ガードへ同時反映される */
 const BOSS_BATTLE_PHASES = new Set(
-  ['boss', 'bossShatter', 'bossVictory', 'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
+  ['boss', 'bossShatter', 'bossVictory', 'trueEnding', 'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
 function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
@@ -5315,6 +5321,10 @@ const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場�
    いた（約13フレームで上昇が失速し落下に転じることを実測で確認）。 */
 let _victorySteam = [];
 let _steamSprite = null; // 湯気用の柔らかい放射状グラデーションスプライト（初回使用時に生成）
+/* 今回のこんがり達成が初回か（_startBossVictoryで確定）。trueを引き継いで
+   bossVictoryのCONTINUEタップ時に真エンディングへ進むかどうかを決める
+   （_startTrueEnding参照） */
+let _pendingTrueEnding = false;
 let _bossVictoryTimer = 0;
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
@@ -6115,13 +6125,18 @@ function _startBossVictory() {
   _bossVictoryTimer = 0;
   if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
   launchFireworks();
-  /* ユーザー要望: 「こんがりぎようざ達成時に、BGMはそこで止めて、達成感の
-     ある効果音を鳴らしてください」。従来は通常モードのjackpot（stopBGM+
-     2秒後に自動再開）を流用しており、勝利演出の最中にボスBGMが復活して
-     しまっていた。専用のBGM停止＋専用ファンファーレに差し替える
+  /* BGMをここで止め、達成感のある専用ファンファーレを鳴らす。従来は通常モードの
+     jackpot（stopBGM+2秒後に自動再開）を流用しており、勝利演出の最中にボスBGM
+     が復活してしまっていた。専用のBGM停止＋専用ファンファーレに差し替える
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
   playSE('kongari_complete');
+  /* kongariは他の全実績を達成しないと解除できない設計（_allAchExceptKongariDone
+     参照）のため、この判定は必ず「実績コンプリートの瞬間」と一致する。
+     unlockAchで実際に解除される前に判定することで「今回が初回か」を確定させ、
+     bossVictoryのCONTINUEタップ時に真エンディングへ進むかどうかに使う
+     （_startTrueEnding参照） */
+  _pendingTrueEnding = !unlockedAch[KONGARI_ACH_ID];
   unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績）
   _buildSteamSprite();
   _victorySteam = [];
@@ -6159,14 +6174,224 @@ function drawBossVictory() {
     : (IS_PORTRAIT ? 90 : 70);
   outText('こんがり キングギヨウザ！', W / 2, titleY, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
   if (_bossVictoryTimer > 90) {
-    ctx.globalAlpha = 0.5 + 0.4 * Math.sin(_bossVictoryTimer * 0.08);
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
-    outText('（真エンディングは開発中）', W / 2, H - 60,
-      '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
-    ctx.globalAlpha = 1;
     _drawBottomPillBadge('CONTINUE');
   }
   ctx.restore();
+}
+
+/* ════════════════ 真エンディング ════════════════
+   「こんがり」実績は他の全実績を達成しないと解除できない設計（_allAchExceptKongariDone
+   参照）のため、実質的に「実績コンプリートの祝賀」演出として位置づける。
+   初回のこんがり達成時のみ自動再生し（_pendingTrueEnding、_startBossVictory・
+   handleGameClickのbossVictory分岐参照）、2回目以降は実績パネルの再生ボタン
+   （drawAchOverlay・_trueEndingBtnRect参照）からいつでも見返せるようにする
+   （replay=true）。3幕構成、いつでもタップでスキップ可（act3の締めくくりのみ
+   最短表示後にCONTINUE待ち、既存のバッジ演出と同じ操作感）。 */
+const _TRUE_ENDING_OPEN_LINES = [
+  '数えきれないほどの トライの果てに――',
+  'ギヨウザは、もっとも こんがりとした 姿へ たどりついた。',
+];
+const _TRUE_ENDING_CLOSE_LINES = [
+  '鉄板の上で 幾度となく 焼かれ、跳ね返され。',
+  'それでも ギヨウザは、焼かれるたびに 笑っていた。',
+  'ここまで 見届けてくれて、ありがとう。',
+];
+const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
+const _TRUE_ENDING_ROLL_SPEED = 2.2; // px/frame（実績19+統計4行、画面高さぶんの余白込みで概ね10秒程度）
+const _TRUE_ENDING_ACT3_MIN_TIMER = 130; // 締めの3行が出そろってからCONTINUEを出すまでの最短フレーム数
+
+let _trueEnding = null; // { act, timer, rollY, rollItems, rollTotalH, showContinue }
+let _trueEndingIsReplay = false; // 実績パネルからの単体再生か（true時はゲーム進行に影響しない）
+let _trueEndingReturnPhase = 'tapestart'; // リプレイ終了後に戻るphase
+let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
+
+/* こんがり達成直後（自動）・実績パネル（手動リプレイ）どちらからもここから入る */
+function _startTrueEnding(replay) {
+  _trueEndingIsReplay = replay;
+  if (replay) {
+    _trueEndingReturnPhase = phase;
+    _stopBossBGMForVictory(); // 現在鳴っているBGMを短時間でフェードして止める（ボス専用実装だが汎用的に使える）
+  }
+  phase = 'trueEnding';
+  _trueEnding = { act: 1, timer: 0, rollY: 0, rollItems: null, rollTotalH: 0, showContinue: false };
+  _playTrueEndingTheme();
+}
+
+function _advanceTrueEndingAct(n) {
+  _trueEnding.act = n;
+  _trueEnding.timer = 0;
+  if (n === 3) _stopTrueEndingTheme(); // 締めの幕へ入ったらテーマ曲をフェードアウト
+}
+
+/* 実績コンプリートの祝賀テーマ曲。通常BGM(152bpm)より落ち着いた100bpm相当、
+   Cメジャーペンタトニックを維持した穏やかなアルペジオ+ベース。ループ再生
+   ではなく一回限りのライブスケジューリング（_playKongariCompleteFanfareと
+   同じ方式）。専用gainノードに通すことで、演出がスキップされた場合も
+   このノードのゲインを落とすだけで即座に打ち切れる（個々のオシレーターを
+   逐一追跡・停止する必要がない） */
+const _TRUE_ENDING_BEAT = 0.6;
+const _TRUE_ENDING_MEL = [
+  ['E',5,0.20], null, ['G',5,0.20], null, ['A',5,0.22], null, ['G',5,0.18], null,
+  ['E',5,0.18], null, ['D',5,0.18], null, ['C',5,0.24], null, null, null,
+];
+const _TRUE_ENDING_BASS = [
+  ['C',3,0.16], null, null, null, ['G',3,0.14], null, null, null,
+  ['A',3,0.14], null, null, null, ['F',3,0.14], null, null, null,
+];
+function _playTrueEndingTheme() {
+  if (!audioCtx) return;
+  _trueEndingGain = audioCtx.createGain();
+  _trueEndingGain.gain.value = 1;
+  _trueEndingGain.connect(masterGain);
+  const dest = _trueEndingGain;
+  const t0 = audioCtx.currentTime + 0.05;
+  const stepDur = _TRUE_ENDING_BEAT * 0.5;
+  const phraseLen = _TRUE_ENDING_MEL.length * stepDur;
+  const REPEATS = 5; // 約5フレーズ(≈24秒)。演出(act1+act2)の実測時間より長めに確保し、act3開始時にフェードで打ち切る
+  for (let r = 0; r < REPEATS; r++) {
+    for (let s = 0; s < _TRUE_ENDING_MEL.length; s++) {
+      const t = t0 + r * phraseLen + s * stepDur;
+      const mel = _TRUE_ENDING_MEL[s];
+      if (mel) playOsc(audioCtx, 'triangle', noteHz(mel[0], mel[1]), t, stepDur * 1.6, mel[2], 0.25, null, null, dest);
+      const bas = _TRUE_ENDING_BASS[s];
+      if (bas) playOsc(audioCtx, 'sine', noteHz(bas[0], bas[1]), t, stepDur * 3, bas[2], 0.3, null, null, dest);
+    }
+  }
+}
+function _stopTrueEndingTheme() {
+  const g = _trueEndingGain;
+  if (!g || !audioCtx) return;
+  const t = audioCtx.currentTime;
+  g.gain.cancelScheduledValues(t);
+  g.gain.setValueAtTime(g.gain.value, t);
+  g.gain.linearRampToValueAtTime(0, t + 0.3);
+  _trueEndingGain = null;
+}
+
+function _updateTrueEnding() {
+  const o = _trueEnding;
+  if (!o) { phase = 'idle'; return; }
+  o.timer++;
+  if (o.act === 1) {
+    if (_king) _easeKingXform(); // 引き継いだキングの呼吸などを続ける（自然な余韻）
+    if (o.timer > _TRUE_ENDING_OPEN_LINES.length * _OMEN_LINE_FRAMES + 40) _advanceTrueEndingAct(2);
+  } else if (o.act === 2) {
+    if (!o.rollItems) _buildTrueEndingRoll();
+    o.rollY += _TRUE_ENDING_ROLL_SPEED;
+    if (o.rollY > o.rollTotalH) _advanceTrueEndingAct(3);
+  } else if (o.act === 3) {
+    if (!o.showContinue && o.timer > _TRUE_ENDING_CLOSE_LINES.length * _OMEN_LINE_FRAMES + _TRUE_ENDING_ACT3_MIN_TIMER) {
+      o.showContinue = true;
+    }
+  }
+}
+
+/* 実績19個+累計統計4行を1本のロール配列にまとめる（累計データもスクロール
+   対象にする。固定表示にはしない） */
+function _buildTrueEndingRoll() {
+  const rows = ACHIEVEMENTS.map(a => ({ icon: a.icon, text: a.name }));
+  rows.push({ icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` });
+  rows.push({ icon: '🏹', text: `総矢数 ${fmt(shotCount)}` });
+  rows.push({ icon: '🎊', text: `大当たり回数 ${fmt(jackpotCount)}` });
+  rows.push({ icon: '👑', text: `ベストギヨウザ ${fmt(bestCoins)}` });
+  _trueEnding.rollItems = rows;
+  _trueEnding.rollTotalH = rows.length * _TRUE_ENDING_ROLL_ROW_H;
+}
+
+/* 台詞演出（誕生予告・敗北アウトロと同じ「過去行は薄く残して積む」手法）を
+   任意の行配列・任意の中心Yで使えるよう一般化したもの */
+function _drawTrueEndingLines(lines, timer, centerY) {
+  if (timer < 0) return;
+  const step = Math.floor(timer / _OMEN_LINE_FRAMES) + 1;
+  const stepTimer = timer % _OMEN_LINE_FRAMES;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const fsL = IS_PORTRAIT ? 22 : 26;
+  const lineDy = fsL * 2.2;
+  const lineY0 = centerY - (lines.length - 1) * lineDy / 2;
+  ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
+  for (let i = 0; i < step && i < lines.length; i++) {
+    const isCur = (i === step - 1);
+    ctx.globalAlpha = isCur ? Math.min(1, stepTimer / 20) : 0.5;
+    outText(lines[i], W / 2, lineY0 + i * lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function _drawTrueEndingRoll(o) {
+  const startY = H + 40; // 画面外下からスタート
+  for (let i = 0; i < o.rollItems.length; i++) {
+    const y = startY - o.rollY + i * _TRUE_ENDING_ROLL_ROW_H;
+    if (y < -30 || y > H + 30) continue;
+    const edgeFade = Math.min(1, Math.min(y, H - y) / 60); // 画面端に近いほど薄くフェード
+    if (edgeFade <= 0) continue;
+    ctx.globalAlpha = edgeFade;
+    ctx.textBaseline = 'middle';
+    ctx.font = `18px serif`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(o.rollItems[i].icon, W / 2 - 70, y);
+    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = Y;
+    ctx.textAlign = 'left';
+    ctx.fillText(o.rollItems[i].text, W / 2 - 50, y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${IS_PORTRAIT ? 17 : 20}px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = Y;
+  ctx.fillText('実績 19 / 19 コンプリート', W / 2, IS_PORTRAIT ? 30 : 36);
+}
+
+function drawTrueEnding() {
+  if (phase !== 'trueEnding' || !_trueEnding) return;
+  const o = _trueEnding;
+  ctx.save();
+  if (o.act === 1) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+    if (_king) {
+      ctx.save();
+      ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+      ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+      ctx.restore();
+    }
+    _drawTrueEndingLines(_TRUE_ENDING_OPEN_LINES, o.timer, H / 2);
+  } else if (o.act === 2) {
+    ctx.fillStyle = 'rgba(2,4,8,0.88)'; ctx.fillRect(0, 0, W, H);
+    _drawTrueEndingRoll(o);
+  } else if (o.act === 3) {
+    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, o.timer / 20)})`; ctx.fillRect(0, 0, W, H);
+    if (o.timer > 15) {
+      ctx.globalAlpha = Math.min(1, (o.timer - 15) / 25);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `900 ${IS_PORTRAIT ? 32 : 42}px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = Y;
+      ctx.shadowColor = 'rgba(245,208,32,0.7)'; ctx.shadowBlur = 16;
+      ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.28);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
+    _drawTrueEndingLines(_TRUE_ENDING_CLOSE_LINES, o.timer - 30, H * 0.58);
+    if (o.showContinue) _drawBottomPillBadge('CONTINUE');
+  }
+  ctx.restore();
+}
+
+/* 真エンディング終了処理。自動再生（本編勝利）なら通常の勝利後処理へ、
+   リプレイなら元のphaseへ復帰してBGMを再開するだけに留める（ゲーム進行の
+   状態は一切変えない） */
+function _finishTrueEnding() {
+  trueEndingSeen = true;
+  lsSaveStats();
+  const wasReplay = _trueEndingIsReplay;
+  const returnPhase = _trueEndingReturnPhase;
+  _trueEnding = null;
+  if (wasReplay) {
+    phase = returnPhase;
+    if (audioCtx) audioCtx.resume().catch(() => {});
+    startBGM();
+  } else {
+    _kingBattleEnd();
+  }
 }
 
 /* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
@@ -6705,6 +6930,7 @@ function draw() {
   drawBossOmen();
   drawBossBattle();
   drawBossVictory();
+  drawTrueEnding();
   drawBossDefeat();
   drawBossDefeatShrink();
   drawBossDefeatOutro();
@@ -8205,17 +8431,34 @@ function drawAchBanner() {
    縦画面: 1カラム・行高44px・クリップ表示（全18件収まる）
    PC版 : 2カラム                                              */
 
+/* 実績パネルの位置・寸法。IS_PORTRAIT/W/Hのみに依存し実行中不変のため、
+   drawAchOverlayとクリックハンドラ（_trueEndingBtnRect）の両方から同じ
+   ジオメトリを参照できるよう関数化した（座標式の重複を防ぐ） */
+function _achPanelRect() {
+  /* 縦画面: アイコン右端(46) + 12px = 58 → パネル左端
+             右ボタン左端(374) - 12px = 362 → パネル右端
+             pw = 362 - 58 = 304                                */
+  return {
+    px: IS_PORTRAIT ? 58        : 60,
+    py: IS_PORTRAIT ? 16        : 30,
+    pw: IS_PORTRAIT ? 304       : W - 120,
+    ph: IS_PORTRAIT ? H - 32    : H - 60,
+  };
+}
+
+/* 「真エンディングを再生」ボタン（実績コンプリート後のみパネル左下に表示）。
+   実績パネルの解除数表示（右下）と対になる位置に置く */
+function _trueEndingBtnRect() {
+  const { px, py, ph } = _achPanelRect();
+  const bh = IS_PORTRAIT ? 22 : 24;
+  return { x: px + 10, y: py + ph - bh - 4, w: IS_PORTRAIT ? 150 : 170, h: bh };
+}
+
 function drawAchOverlay() {
   if (!showAchievements) return;
 
   /* ── パネルサイズをレイアウトに合わせて決定 ── */
-  /* 縦画面: アイコン右端(46) + 12px = 58 → パネル左端
-             右ボタン左端(374) - 12px = 362 → パネル右端
-             pw = 362 - 58 = 304                                */
-  const px = IS_PORTRAIT ? 58        : 60;
-  const py = IS_PORTRAIT ? 16        : 30;
-  const pw = IS_PORTRAIT ? 304       : W - 120;
-  const ph = IS_PORTRAIT ? H - 32    : H - 60;
+  const { px, py, pw, ph } = _achPanelRect();
 
   ctx.save();
   /* 暗幕 */
@@ -8330,9 +8573,33 @@ function drawAchOverlay() {
   ctx.fillStyle='rgba(245,208,32,0.45)';
   ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-12, py+ph-6);
 
+  /* 真エンディング再生ボタン（初回視聴済みの場合のみ、パネル左下） */
+  if (trueEndingSeen) {
+    const r = _trueEndingBtnRect();
+    roundRect(r.x, r.y, r.w, r.h, 6);
+    ctx.fillStyle = 'rgba(180,130,0,0.55)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(245,208,32,0.6)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.font = `bold ${IS_PORTRAIT ? 11 : 12}px 'Hiragino Mincho ProN',serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('🎬 真エンディングを再生', r.x + r.w / 2, r.y + r.h / 2 + 1);
+  }
+
   ctx.restore();
 }
 
+/* 実績パネル表示中のタップ処理。パネル内の「真エンディングを再生」ボタンに
+   当たっていればそれを実行し、それ以外の場所ならパネルを閉じる。
+   6箇所（mousedown/touchstart × 通常/ポーズ中/startup等）でパネルを閉じる
+   だけの処理が重複していたため、ボタン追加に合わせて共通ヘルパーへ集約した */
+function _handleAchPanelTap(cx, cy) {
+  if (trueEndingSeen && hitTest(_trueEndingBtnRect(), cx, cy)) {
+    showAchievements = false;
+    _startTrueEnding(true);
+    return;
+  }
+  showAchievements = false;
+}
 
 /* ════════════════ Startup Screen ════════════════ */
 let startupTimer = 0;
@@ -8644,7 +8911,20 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossVictory') {
-    if (_bossVictoryTimer > 90) _kingBattleEnd();
+    if (_bossVictoryTimer > 90) {
+      /* 実績コンプリートの初回のみ真エンディングへ進む。2回目以降は
+         従来どおり即座に通常モードへ復帰する（周回プレイのテンポを尊重、
+         真エンディングは実績パネルからいつでも見返せる） */
+      if (_pendingTrueEnding) { _pendingTrueEnding = false; _startTrueEnding(false); }
+      else _kingBattleEnd();
+    }
+    return;
+  }
+  if (phase === 'trueEnding') {
+    /* いつでもタップでスキップ可（幕1・幕2は即座に締めの幕3へ）。
+       幕3自体は締めの3行が出そろってからCONTINUE待ちにする（他のバッジ演出と同じ操作感） */
+    if (_trueEnding.act < 3) _advanceTrueEndingAct(3);
+    else if (_trueEnding.showContinue) _finishTrueEnding();
     return;
   }
   if (phase === 'bossDefeat') {
@@ -8820,11 +9100,11 @@ canvas.addEventListener('mousedown', e=>{
     /* PAUSE中はゲームループが止まっているため操作後に draw() を明示的に呼ぶ（mousedown）
        touchstart ハンドラはゲームループが動いているため draw() 不要（非対称だが意図的） */
     if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; draw(); return; }
-    if (showAchievements) { showAchievements = false; draw(); return; }
+    if (showAchievements) { _handleAchPanelTap(cx, cy); draw(); return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
   }
-  if (showAchievements) { showAchievements = false; return; }
+  if (showAchievements) { _handleAchPanelTap(cx, cy); return; }
   if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (hitTest(MUTE_BTN, cx, cy)) {
     /* AudioContextがなければ初期化してからミュート切り替え */
@@ -8882,12 +9162,12 @@ document.addEventListener('touchstart', e=>{
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
   if (isPaused) {
     if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; draw(); return; }
-    if (showAchievements) { showAchievements = false; draw(); return; }
+    if (showAchievements) { _handleAchPanelTap(pt.x, pt.y); draw(); return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
   }
   /* 実績オーバーレイ中 */
-  if (showAchievements) { showAchievements = false; return; }
+  if (showAchievements) { _handleAchPanelTap(pt.x, pt.y); return; }
   /* トロフィーボタン */
   if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
 
