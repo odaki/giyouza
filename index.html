@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.03';
+const VERSION = 'v5.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6289,6 +6289,29 @@ let _trueEndingIsReplay = false; // 実績パネルからの単体再生か（tr
 let _trueEndingReturnPhase = 'tapestart'; // リプレイ終了後に戻るphase
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
 
+/* セリフ1文を指定フォント・幅に収まるよう折り返す。セリフの原文には
+   フレーズの区切りに半角/全角スペースが入っているため、それを語境界として
+   貪欲法で行に詰める（決め打ちの改行位置を持たず、画面幅から動的に決める）。
+   縦画面（W=420）は横画面（W=1060）よりずっと狭く、同じ1行表示だと
+   セリフが画面外へはみ出していた（実機指摘）ため導入した */
+function _wrapTrueEndingLine(text, font, maxWidth) {
+  ctx.font = font;
+  const words = text.split(/[ 　]+/).filter(w => w.length > 0);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const trial = cur ? cur + ' ' + w : w;
+    if (cur && ctx.measureText(trial).width > maxWidth) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = trial;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
 /* 開幕セリフ→実績ロール→まとめ（累計データ）→締めセリフを1本の縦スクロール
    座標に並べる。screenY = H*0.5 + row.y+row.h/2 - scrollY という共通の式で
    位置を出す（scrollY=0の時、先頭の開幕セリフがH*0.5に来る＝旧act1の見た目を継承） */
@@ -6300,10 +6323,16 @@ function _buildTrueEndingContent() {
   const spacerAfterOpen     = H * _TRUE_ENDING_SPACER_AFTER_OPEN_RATIO;
   const spacerBeforeSummary = H * _TRUE_ENDING_SPACER_BEFORE_SUMMARY_RATIO;
   const spacerBeforeClose   = H * _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO;
+  const maxTextWidth = W - 48; // 左右マージン24pxずつ
+
+  const openFont  = `bold ${fsOpen}px 'Hiragino Mincho ProN',serif`;
+  const closeFont = `bold ${fsClose}px 'Hiragino Mincho ProN',serif`;
+  const openDisplayLines  = _TRUE_ENDING_OPEN_LINES.flatMap(t => _wrapTrueEndingLine(t, openFont, maxTextWidth));
+  const closeDisplayLines = _TRUE_ENDING_CLOSE_LINES.flatMap(t => _wrapTrueEndingLine(t, closeFont, maxTextWidth));
 
   const rows = [];
   let y = 0;
-  for (const text of _TRUE_ENDING_OPEN_LINES) {
+  for (const text of openDisplayLines) {
     rows.push({ type: 'open', text, y, h: openDy, fs: fsOpen });
     y += openDy;
   }
@@ -6329,11 +6358,11 @@ function _buildTrueEndingContent() {
   y += spacerBeforeClose;
 
   const closeStartIdx = rows.length;
-  for (const text of _TRUE_ENDING_CLOSE_LINES) {
+  for (const text of closeDisplayLines) {
     rows.push({ type: 'close', text, y, h: closeDy, fs: fsClose });
     y += closeDy;
   }
-  return { rows, closeStartIdx };
+  return { rows, closeStartIdx, closeRowCount: closeDisplayLines.length };
 }
 
 /* こんがり達成直後（自動）・実績パネル（手動リプレイ）どちらからもここから入る */
@@ -6357,10 +6386,11 @@ function _startTrueEnding(replay) {
   }
   phase = 'trueEnding';
   const content = _buildTrueEndingContent();
-  /* 締めセリフ3行の中央行（closeStartIdx+1）が静止時に画面のどこへ来るかを
-     逆算し、そこをスクロールの終点にする。速度が一定なので終点さえ決めれば
-     自然にそこで止まる（間隔・行間の調整で「止まる位置の見え方」を作り込む） */
-  const midClose = content.rows[content.closeStartIdx + 1];
+  /* 締めセリフの中央行が静止時に画面のどこへ来るかを逆算し、そこをスクロールの
+     終点にする。速度が一定なので終点さえ決めれば自然にそこで止まる
+     （間隔・行間の調整で「止まる位置の見え方」を作り込む）。行数は縦画面の
+     折り返しで画面幅ごとに変わるため、常に実際の行数から中央行を求める */
+  const midClose = content.rows[content.closeStartIdx + Math.floor(content.closeRowCount / 2)];
   const targetScrollY = H * 0.5 + (midClose.y + midClose.h / 2) - H * _TRUE_ENDING_CLOSE_REST_Y_RATIO;
   _trueEnding = {
     stage: 'scroll', timer: 0,
