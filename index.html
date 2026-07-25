@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.00';
+const VERSION = 'v5.01';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6252,7 +6252,9 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
    見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
    セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した */
 const _TRUE_ENDING_SCROLL_SPEED = 1.8; // px/frame
+const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示しておく時間（締めセリフの静止表示と対にする）
 const _TRUE_ENDING_SPACER_AFTER_OPEN  = 170; // 開幕セリフ〜実績ロールの間隔
+const _TRUE_ENDING_SPACER_BEFORE_SUMMARY = 130; // 実績本編〜まとめ（累計データ）の間隔
 const _TRUE_ENDING_SPACER_BEFORE_CLOSE = 190; // 実績ロール〜締めセリフの間隔（スクロール開始タイミングの調整用）
 const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フォントサイズ×この値。開幕より少し詰める）
 const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった時、中央行を画面のどこに置くか(H比)
@@ -6261,7 +6263,7 @@ const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
 const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 50;
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 110; // タイトル表示からCONTINUE受付までの最短フレーム数
 
-/* { stage, timer, scrollY, targetScrollY, content:{rows,rollStartY,rollEndY},
+/* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
    stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold' */
 let _trueEnding = null;
@@ -6269,9 +6271,9 @@ let _trueEndingIsReplay = false; // 実績パネルからの単体再生か（tr
 let _trueEndingReturnPhase = 'tapestart'; // リプレイ終了後に戻るphase
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
 
-/* 開幕セリフ→実績ロール→締めセリフを1本の縦スクロール座標に並べる。
-   screenY = H*0.5 + row.y+row.h/2 - scrollY という共通の式で位置を出す
-   （scrollY=0の時、先頭の開幕セリフがH*0.5に来る＝旧act1の見た目を継承） */
+/* 開幕セリフ→実績ロール→まとめ（累計データ）→締めセリフを1本の縦スクロール
+   座標に並べる。screenY = H*0.5 + row.y+row.h/2 - scrollY という共通の式で
+   位置を出す（scrollY=0の時、先頭の開幕セリフがH*0.5に来る＝旧act1の見た目を継承） */
 function _buildTrueEndingContent() {
   const fsOpen  = IS_PORTRAIT ? 22 : 26;
   const openDy  = fsOpen * 2.2;
@@ -6286,18 +6288,23 @@ function _buildTrueEndingContent() {
   }
   y += _TRUE_ENDING_SPACER_AFTER_OPEN;
 
-  const rollStartY = y;
-  const rollList = ACHIEVEMENTS.map(a => ({ icon: a.icon, text: a.name })).concat([
+  for (const a of ACHIEVEMENTS) {
+    rows.push({ type: 'roll', icon: a.icon, text: a.name, y, h: _TRUE_ENDING_ROLL_ROW_H });
+    y += _TRUE_ENDING_ROLL_ROW_H;
+  }
+  /* 実績本編とまとめ（累計データ）の間は数行分あけ、まとめとして独立して
+     見えるようにする（実績の続きとして流れ込むと埋没してしまうため） */
+  y += _TRUE_ENDING_SPACER_BEFORE_SUMMARY;
+  const summaryStats = [
     { icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` },
     { icon: '🏹', text: `総矢数 ${fmt(shotCount)}` },
     { icon: '🎊', text: `大当たり回数 ${fmt(jackpotCount)}` },
     { icon: '👑', text: `ベストギヨウザ ${fmt(bestCoins)}` },
-  ]);
-  for (const item of rollList) {
+  ];
+  for (const item of summaryStats) {
     rows.push({ type: 'roll', icon: item.icon, text: item.text, y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
-  const rollEndY = y;
   y += _TRUE_ENDING_SPACER_BEFORE_CLOSE;
 
   const closeStartIdx = rows.length;
@@ -6305,7 +6312,7 @@ function _buildTrueEndingContent() {
     rows.push({ type: 'close', text, y, h: closeDy, fs: fsClose });
     y += closeDy;
   }
-  return { rows, rollStartY, rollEndY, closeStartIdx };
+  return { rows, closeStartIdx };
 }
 
 /* こんがり達成直後（自動）・実績パネル（手動リプレイ）どちらからもここから入る */
@@ -6402,7 +6409,11 @@ function _updateTrueEnding() {
   if (_king) _easeKingXform(); // 引き継いだキングの呼吸などを続ける（自然な余韻）
   o.timer++;
   if (o.stage === 'scroll') {
-    o.scrollY = Math.min(o.scrollY + _TRUE_ENDING_SCROLL_SPEED, o.targetScrollY);
+    /* 開幕セリフは締めセリフと同じく「静止表示→一定時間後にスクロール開始」に
+       揃える（開幕だけいきなり流れ始めるのは締めとの見せ方の対称性を欠くため） */
+    if (o.timer > _TRUE_ENDING_OPEN_HOLD_FRAMES) {
+      o.scrollY = Math.min(o.scrollY + _TRUE_ENDING_SCROLL_SPEED, o.targetScrollY);
+    }
     if (o.scrollY >= o.targetScrollY) _trueEndingEnterStage('closeLinesRest');
   } else if (o.stage === 'closeLinesRest') {
     if (o.timer > _TRUE_ENDING_CLOSE_LINGER_FRAMES) _trueEndingEnterStage('closeLinesFadeOut');
@@ -6422,7 +6433,6 @@ function _updateTrueEnding() {
    締めセリフだけはcloseAlphaを追加で掛けて、静止後のフェードアウトを表現する */
 function _drawTrueEndingRows(o) {
   const rows = o.content.rows;
-  let rollCaptionAlpha = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const screenY = H * 0.5 + (row.y + row.h / 2) - o.scrollY;
@@ -6431,7 +6441,6 @@ function _drawTrueEndingRows(o) {
     if (edgeFade <= 0) continue;
     if (row.type === 'close') edgeFade *= o.closeAlpha;
     if (edgeFade <= 0) continue;
-    if (row.type === 'roll') rollCaptionAlpha = Math.max(rollCaptionAlpha, edgeFade);
     ctx.globalAlpha = edgeFade;
     if (row.type === 'roll') {
       ctx.textBaseline = 'middle';
@@ -6450,14 +6459,6 @@ function _drawTrueEndingRows(o) {
     }
   }
   ctx.globalAlpha = 1;
-  if (rollCaptionAlpha > 0) {
-    ctx.globalAlpha = rollCaptionAlpha;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `bold ${IS_PORTRAIT ? 17 : 20}px 'Hiragino Mincho ProN',serif`;
-    ctx.fillStyle = Y;
-    ctx.fillText('実績 19 / 19 コンプリート', W / 2, IS_PORTRAIT ? 30 : 36);
-    ctx.globalAlpha = 1;
-  }
 }
 
 /* キングの表示は「開幕セリフが画面上にある間」だけにしたい（旧act1相当）。
