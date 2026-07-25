@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.15';
+const VERSION = 'v5.16';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6717,9 +6717,10 @@ function drawTrueEnding() {
       ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 48 : 62));
       ctx.globalAlpha = 1;
     }
-    /* ここから先はゲームの続きに戻るわけではない（常にstartupへ戻る）ため、
-       他のバッジ演出と違いCONTINUEではなくFIN.と表示する（ユーザー要望） */
-    if (o.stage === 'titleHold' && o.canExit) _drawBottomPillBadge('FIN.');
+    /* あえてバッジは表示しない（ユーザー要望）。canExit成立後はタップ/
+       クリック/キー入力（handleGameClick、'trueEnding'分岐参照）で
+       いつでも終了できるが、余韻を楽しんでもらうため案内は出さず、
+       静かに佇む演出のままにする */
   } else {
     if (_king) {
       const kingAlpha = _trueEndingKingAlpha(o);
