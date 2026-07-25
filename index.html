@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.04';
+const VERSION = 'v5.05';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1399,6 +1399,21 @@ function _seDest(ctx, dest) {
   return dest ?? (ctx === audioCtx ? masterGain : ctx.destination) ?? ctx.destination;
 }
 
+/* ワンショット系ノードは.stop()後も明示的にdisconnect()しないとオーディオ
+   グラフに残り続ける。実機報告（Safari縦画面）: 「キングギヨウザ戦の後半
+   くらいからBGMがブツ切れになり、エンディングでも直らない」を調査した
+   結果、playOsc/playNoise/_playSlideOsc/_acidChain等のワンショットSE
+   ヘルパーが軒並みnew Node()→start()→stop()のみでdisconnect()を一切
+   呼んでおらず、矢を射るたび・キング戦の命中音・ジングルの音符ごとに
+   ノードが積み上がっていたことが原因と判明した（OfflineAudioContext側の
+   BGM事前レンダリングは1回限りで対象外）。stop()予定時刻のsetTimeoutで
+   まとめて切断する共通ヘルパーで一元的に解消する（onendedはOfflineAudio
+   Context・一部WebKitで発火が不安定なため使わず、確実なタイマー方式にする） */
+function _disconnectAfter(ctx, atTime, ...nodes) {
+  const delayMs = Math.max(0, (atTime - ctx.currentTime) * 1000) + 50;
+  setTimeout(() => { for (const n of nodes) { try { n.disconnect(); } catch(e) {} } }, delayMs);
+}
+
 function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, dest) {
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -1406,9 +1421,10 @@ function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, 
   osc.type = type;
   osc.frequency.setValueAtTime(freq, startT);
   /* ビブラート: LFO で周波数変調（薄くかけるため delay 後にフェードイン） */
+  let lfo = null, lfoGain = null;
   if (vibrato) {
-    const lfo     = ctx.createOscillator();
-    const lfoGain = ctx.createGain();
+    lfo     = ctx.createOscillator();
+    lfoGain = ctx.createGain();
     lfo.connect(lfoGain);
     lfoGain.connect(osc.frequency);
     lfo.type = 'sine';
@@ -1419,15 +1435,22 @@ function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, 
     lfo.stop(startT + dur + (decay ?? 0.08) + 0.1);
   }
   gain.gain.setValueAtTime(vol, startT);
+  let stopAt;
   if (slurTarget != null) {
     gain.gain.exponentialRampToValueAtTime(Math.max(slurTarget, 0.001), startT + dur);
     gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur + (decay ?? 0.02));
+    stopAt = startT + dur + (decay ?? 0.02) + 0.02;
     osc.start(startT);
-    osc.stop(startT + dur + (decay ?? 0.02) + 0.02);
+    osc.stop(stopAt);
   } else {
     gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur + (decay ?? 0.08));
+    stopAt = startT + dur + (decay ?? 0.08) + 0.02;
     osc.start(startT);
-    osc.stop(startT + dur + (decay ?? 0.08) + 0.02);
+    osc.stop(stopAt);
+  }
+  if (ctx === audioCtx) {
+    _disconnectAfter(ctx, stopAt, osc, gain);
+    if (lfo) _disconnectAfter(ctx, startT + dur + (decay ?? 0.08) + 0.1, lfo, lfoGain);
   }
 }
 
@@ -1454,7 +1477,9 @@ function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
   gain.gain.exponentialRampToValueAtTime(0.0001, startT + dur);
   src.connect(hp); hp.connect(gain);
   gain.connect(_seDest(ctx, dest));
-  src.start(startT); src.stop(startT + dur + 0.05);
+  const stopAt = startT + dur + 0.05;
+  src.start(startT); src.stop(stopAt);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, gain);
 }
 
 /* ── BGM: 中華風ペンタトニック・パチンコループ ── */
@@ -1529,6 +1554,7 @@ function _playSlideOsc(ctx, dest, t, type, f0, f1, slideDur, env, stopAt) {
     else                     gain.gain.exponentialRampToValueAtTime(v, t + dt);
   }
   osc.start(t); osc.stop(t + stopAt);
+  if (ctx === audioCtx) _disconnectAfter(ctx, t + stopAt, osc, gain);
 }
 
 /* バスドラム（ピッチダウン式キック）。ボス版のバランス調整のため音量を
@@ -1569,10 +1595,11 @@ function _acidChain(ctx, dest, distAmount) {
   const osc    = ctx.createOscillator();
   const filter = ctx.createBiquadFilter();
   const gain   = ctx.createGain();
+  let shaper   = null;
   osc.type    = 'sawtooth'; // 3音色とも倍音豊富な波形をフィルターで削って形作る
   filter.type = 'lowpass';
   if (distAmount != null) {
-    const shaper = ctx.createWaveShaper();
+    shaper = ctx.createWaveShaper();
     shaper.curve = _acidDistortionCurve(distAmount);
     shaper.oversample = '4x';
     osc.connect(filter); filter.connect(shaper); shaper.connect(gain);
@@ -1580,7 +1607,7 @@ function _acidChain(ctx, dest, distAmount) {
     osc.connect(filter); filter.connect(gain);
   }
   gain.connect(dest);
-  return { osc, filter, gain };
+  return { osc, filter, gain, shaper };
 }
 
 /* 地鳴り風の超低音（ボス戦BGM専用・ループ頭に1回）。
@@ -1601,7 +1628,7 @@ function _acidChain(ctx, dest, distAmount) {
    従来と完全に同一の値になる */
 function _playGroundRumble(ctx, t, dest, mellow = 0) {
   const distAmount = 4 - mellow * 3.2; // 4→0.8: ソフトクリップの歪み量を弱める
-  const { osc, filter, gain } = _acidChain(ctx, dest, distAmount);
+  const { osc, filter, gain, shaper } = _acidChain(ctx, dest, distAmount);
   const topFreq = 130 - mellow * 35; // 130→95: 滑り出しの高さを抑える
   const botFreq = 36  + mellow * 34; // 36→70: 下限を持ち上げて「ズドン」感を弱める
   osc.frequency.setValueAtTime(topFreq, t);
@@ -1628,6 +1655,7 @@ function _playGroundRumble(ctx, t, dest, mellow = 0) {
   gain.gain.linearRampToValueAtTime(0.035 - mellow * 0.008, t + 0.5);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
   osc.start(t); osc.stop(t + 1.15);
+  if (ctx === audioCtx) _disconnectAfter(ctx, t + 1.15, osc, filter, gain, shaper);
 }
 
 /* メロディ用TB-303風アシッド音色（ボス戦BGM専用）。ユーザー要望:
@@ -1651,7 +1679,9 @@ function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
 
   gain.gain.setValueAtTime(vol, t);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
-  osc.start(t); osc.stop(t + dur + 0.07);
+  const stopAt = t + dur + 0.07;
+  osc.start(t); osc.stop(stopAt);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, filter, gain);
 }
 
 /* キングギヨウザ戦のリール射撃音（TB-303アシッド版）。ユーザー要望:
@@ -1663,7 +1693,7 @@ function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
    （ボス戦BGMのkickVol/melAcid等、他の音周りの変更と同じ隔離方針）。 */
 function _playAcidShootHit(ctx, t, dest) {
   const _pluck = (pt, freq, dur, vol) => {
-    const { osc, filter, gain } = _acidChain(ctx, _seDest(ctx, dest), 3);
+    const { osc, filter, gain, shaper } = _acidChain(ctx, _seDest(ctx, dest), 3);
     osc.frequency.setValueAtTime(freq, pt);
     filter.Q.setValueAtTime(16, pt);
     filter.frequency.setValueAtTime(Math.min(6000, freq * 10 + 800), pt);
@@ -1671,7 +1701,9 @@ function _playAcidShootHit(ctx, t, dest) {
     gain.gain.setValueAtTime(0.001, pt);
     gain.gain.exponentialRampToValueAtTime(vol, pt + 0.006);
     gain.gain.exponentialRampToValueAtTime(0.0001, pt + dur);
-    osc.start(pt); osc.stop(pt + dur + 0.02);
+    const stopAt = pt + dur + 0.02;
+    osc.start(pt); osc.stop(stopAt);
+    if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, filter, gain, shaper);
   };
   _pluck(t,         noteHz('E', 4), 0.05,  0.24);
   _pluck(t + 0.025, noteHz('G', 3), 0.045, 0.17);
@@ -1708,7 +1740,9 @@ function _playDoraHit(ctx, t, dest) {
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.linearRampToValueAtTime(vol, t + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + decay);
-    osc.start(t); osc.stop(t + decay + 0.05);
+    const stopAt = t + decay + 0.05;
+    osc.start(t); osc.stop(stopAt);
+    if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
   });
 }
 
@@ -1785,7 +1819,9 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
     gain.gain.setValueAtTime(0.0001, strikeT);
     gain.gain.linearRampToValueAtTime(vol, strikeT + 0.0015); // ほぼ瞬時（叩かれた瞬間から鳴り始める）
     gain.gain.exponentialRampToValueAtTime(0.0001, strikeT + decay);
-    osc.start(strikeT); osc.stop(strikeT + decay + 0.05);
+    const stopAt = strikeT + decay + 0.05;
+    osc.start(strikeT); osc.stop(stopAt);
+    if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
   });
   /* 仕上げのきらめき: チーンの打撃が単独で聞こえるよう、アタックから
      0.6秒後（打撃直後の余韻の途中）に開始する（以前はファンファーレ基準の
@@ -2601,6 +2637,7 @@ function scheduleJingle(onEnd) {
         gg.gain.setValueAtTime(kick, t);
         gg.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
         oo.start(t); oo.stop(t + 0.20);
+        if (ctx === audioCtx) _disconnectAfter(ctx, t + 0.20, oo, gg);
       }
     }
 
@@ -6452,6 +6489,7 @@ function _stopTrueEndingTheme(rampSec = 0.3) {
   g.gain.cancelScheduledValues(t);
   g.gain.setValueAtTime(g.gain.value, t);
   g.gain.linearRampToValueAtTime(0, t + rampSec);
+  _disconnectAfter(audioCtx, t + rampSec, g); // フェード完了後にmasterGainから切断する
   _trueEndingGain = null;
 }
 
