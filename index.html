@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.06';
+const VERSION = 'v5.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6566,11 +6566,21 @@ function _drawTrueEndingRows(o) {
       ctx.font = `18px serif`;
       ctx.textAlign = 'right';
       ctx.fillStyle = '#fff';
-      ctx.fillText(row.icon, W / 2 - 70, screenY);
+      /* アイコン列の右端。「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ
+         文字と隙間なく詰まって見えるとの実機報告があった。この2つは
+         実績一覧中で唯一、絵文字化のためU+FE0F（異体字セレクタ16）が
+         付いたコードポイント（U+1F321/U+1F579）で、他の絵文字は単独
+         コードポイントのみ。VS16付きグリフはプラットフォームによって
+         測定上の送り幅より実際の描画（インク）が右へはみ出すことがあり、
+         右寄せ（textAlign='right'）で厳密に詰めていた隙間20pxを侵食して
+         いたと考えられる。個々のグリフ実測に依存せず確実に隙間を確保
+         するため、アイコン側の右端をさらに左へ・文字側の開始位置を
+         さらに右へ、それぞれ余裕を持たせて計30pxに広げた */
+      ctx.fillText(row.icon, W / 2 - 74, screenY);
       ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
-      ctx.fillText(row.text, W / 2 - 50, screenY);
+      ctx.fillText(row.text, W / 2 - 44, screenY);
     } else {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
