@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.12';
+const VERSION = 'v5.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6673,7 +6673,15 @@ function drawTrueEnding() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = Y;
-    ctx.shadowColor = 'rgba(245,208,32,0.7)'; ctx.shadowBlur = 16;
+    /* macOS Safari実機報告: フェードが一瞬で終わったように見える
+       （クレジット側の同じフェード処理は意図通りに見えている、との対比で
+       判明）。クレジットにはshadowBlurが無く、タイトルだけグロー付き。
+       Safariはglobal AlphaがshadowBlur/shadowColorの描画に正しく効かず、
+       グローがtitleAlphaの値に関わらずほぼフル濃度で描かれてしまう
+       （＝文字の芯は薄くてもグローだけ最初から強く見え、フェードが
+       瞬時に終わったように見える）ことがあるため、globalAlphaに頼らず
+       shadowColor自体のアルファ値へ直接titleAlphaを埋め込む */
+    ctx.shadowColor = `rgba(245,208,32,${0.7 * o.titleAlpha})`; ctx.shadowBlur = 16;
     ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
