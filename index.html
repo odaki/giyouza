@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.10';
+const VERSION = 'v5.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6585,7 +6585,15 @@ function _updateTrueEnding() {
     o.closeAlpha = Math.max(0, 1 - o.timer / _TRUE_ENDING_CLOSE_FADEOUT_FRAMES);
     if (o.timer >= _TRUE_ENDING_CLOSE_FADEOUT_FRAMES) _trueEndingEnterStage('titleFadeIn');
   } else if (o.stage === 'titleFadeIn') {
-    o.titleAlpha = Math.min(1, o.timer / _TRUE_ENDING_TITLE_FADEIN_FRAMES);
+    /* 単純な線形フェード（timer/FRAMES）だと、暗い背景に金色グロー付き文字
+       という組み合わせでは中盤（alpha 0.3〜0.5あたり）で既に肉眼上「ほぼ
+       表示済み」に見えてしまい（実測: alpha0.3でもRGB(95,87,20)と背景から
+       はっきり浮いた色になる）、残り半分のフェードがほとんど知覚できず
+       「フェードインしていない、ただ長く待たされるだけ」に見えるという
+       実機指摘があった。二次イージング（t*t）で序盤の立ち上がりを抑え、
+       輝度の変化がフェード時間いっぱいに知覚できるようにする */
+    const t = Math.min(1, o.timer / _TRUE_ENDING_TITLE_FADEIN_FRAMES);
+    o.titleAlpha = t * t;
     if (o.timer >= _TRUE_ENDING_TITLE_FADEIN_FRAMES) _trueEndingEnterStage('titleHold');
   } else if (o.stage === 'titleHold') {
     if (!o.canExit && o.timer > _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES) o.canExit = true;
