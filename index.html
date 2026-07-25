@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.01';
+const VERSION = 'v5.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6251,14 +6251,19 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
    ロール(rollYスクロール)→締め(固定表示)がそれぞれ別の時間軸・別の
    見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
    セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した */
-const _TRUE_ENDING_SCROLL_SPEED = 1.8; // px/frame
+const _TRUE_ENDING_SCROLL_SPEED = 1.2; // px/frame（旧1.8はやや速く感じるとの指摘で減速）
 const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示しておく時間（締めセリフの静止表示と対にする）
 const _TRUE_ENDING_SPACER_AFTER_OPEN  = 170; // 開幕セリフ〜実績ロールの間隔
-const _TRUE_ENDING_SPACER_BEFORE_SUMMARY = 130; // 実績本編〜まとめ（累計データ）の間隔
-const _TRUE_ENDING_SPACER_BEFORE_CLOSE = 190; // 実績ロール〜締めセリフの間隔（スクロール開始タイミングの調整用）
+/* 実績本編〜まとめ〜締めセリフの間の空白（何も表示されない区間）。
+   ここが広すぎると、減速後の速度では何も動いていないように見え
+   「引っ掛かり」のように感じられてしまう（実機指摘）ため、旧値
+   （130/190）から詰めた。空白自体は「まとめ」の独立性を出すために
+   ゼロにはしない */
+const _TRUE_ENDING_SPACER_BEFORE_SUMMARY = 80; // 実績本編〜まとめ（累計データ）の間隔
+const _TRUE_ENDING_SPACER_BEFORE_CLOSE = 110; // 実績ロール〜締めセリフの間隔（スクロール開始タイミングの調整用）
 const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フォントサイズ×この値。開幕より少し詰める）
 const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった時、中央行を画面のどこに置くか(H比)
-const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 100; // 締めセリフが止まってからフェードアウトを始めるまでの余韻
+const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
 const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
 const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 50;
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 110; // タイトル表示からCONTINUE受付までの最短フレーム数
@@ -6382,7 +6387,8 @@ function _playTrueEndingTheme() {
   const t0 = audioCtx.currentTime + 0.05;
   const stepDur = _TRUE_ENDING_BEAT * 0.5;
   const phraseLen = _TRUE_ENDING_MEL.length * stepDur;
-  const REPEATS = 5; // 約5フレーズ(≈24秒)。演出(act1+act2)の実測時間より長めに確保し、act3開始時にフェードで打ち切る
+  const REPEATS = 7; // 約7フレーズ(≈34秒)。スクロール減速・締めセリフ延長で演出時間が伸びたため、
+                      // 締めセリフのフェードアウト開始（テーマ曲側のフェード起点）まで確実に鳴り続ける長さを確保
   for (let r = 0; r < REPEATS; r++) {
     for (let s = 0; s < _TRUE_ENDING_MEL.length; s++) {
       const t = t0 + r * phraseLen + s * stepDur;
