@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.09';
+const VERSION = 'v5.10';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2282,8 +2282,14 @@ function toggleMute() {
     _resumeAudioCtx(applyMuteGain);
   }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
-     （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償） */
-  if (!audioMuted && phase !== 'startup' && phase !== 'bossOmen' &&
+     （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償）。
+     実機報告で発覚: bossVictory・trueEndingはbgmSourceを持たない前提の
+     フェーズ（NO_BGM_SOURCE_PHASES参照、togglePause側の同種の不具合を
+     修正した際に導入した集合）だが、ここではphase!=='startup'/'bossOmen'
+     しか除外していなかったため、タイトル画面から真エンディングを再生中に
+     MUTE/解除すると「bgmSourceが無い」がそのまま真になり通常BGMが新規に
+     鳴り出し、テーマ曲と二重に聞こえていた */
+  if (!audioMuted && phase !== 'startup' && phase !== 'bossOmen' && !NO_BGM_SOURCE_PHASES.has(phase) &&
       audioCtx && !bgmSource && !jingleScheduler) {
     startBGM(); // 予告中は除外（startBGMはグレースケールを即時解除するため）
   }
