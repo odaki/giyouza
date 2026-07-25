@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.11';
+const VERSION = 'v5.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6392,7 +6392,9 @@ const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった�
 const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
 const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
 const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル表示。重要な瞬間なのでゆっくりフェードインさせる（旧50=0.83sは早すぎるとの指摘で2.5sに延長）
-const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 110; // タイトル表示からCONTINUE受付までの最短フレーム数
+const _TRUE_ENDING_CREDIT_TEXT = 'COPYRIGHT © 2026 Michiyasu ODAKI';
+const _TRUE_ENDING_CREDIT_FADEIN_FRAMES = 90; // タイトルが表示し切った後、クレジットが単独でフェードインする時間
+const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 170; // タイトル表示からCONTINUE受付までの最短フレーム数（クレジットのフェードイン＋一呼吸ぶんを確保）
 
 /* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
@@ -6506,7 +6508,7 @@ function _startTrueEnding(replay) {
   _trueEnding = {
     stage: 'scroll', timer: 0,
     scrollY: 0, targetScrollY, content,
-    closeAlpha: 1, titleAlpha: 0, canExit: false,
+    closeAlpha: 1, titleAlpha: 0, creditAlpha: 0, canExit: false,
   };
   _playTrueEndingTheme();
 }
@@ -6596,6 +6598,12 @@ function _updateTrueEnding() {
     o.titleAlpha = t * t;
     if (o.timer >= _TRUE_ENDING_TITLE_FADEIN_FRAMES) _trueEndingEnterStage('titleHold');
   } else if (o.stage === 'titleHold') {
+    /* タイトルが表示し切った後、クレジットだけを単独でフェードインさせる
+       （ユーザー要望: タイトルの下に適度な間隔をあけてフェード表示、
+       タイトルが完全に出てからクレジットが出てくる、の2点）。
+       タイトルと同じくt*tの二次イージングで知覚できるフェードにする */
+    const ct = Math.min(1, o.timer / _TRUE_ENDING_CREDIT_FADEIN_FRAMES);
+    o.creditAlpha = ct * ct;
     if (!o.canExit && o.timer > _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES) o.canExit = true;
   }
 }
@@ -6669,6 +6677,13 @@ function drawTrueEnding() {
     ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
+    if (o.stage === 'titleHold' && o.creditAlpha > 0) {
+      ctx.globalAlpha = o.creditAlpha;
+      ctx.font = `${IS_PORTRAIT ? 12 : 14}px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = 'rgba(245,208,32,0.75)';
+      ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 48 : 62));
+      ctx.globalAlpha = 1;
+    }
     if (o.stage === 'titleHold' && o.canExit) _drawBottomPillBadge('CONTINUE');
   } else {
     if (_king) {
