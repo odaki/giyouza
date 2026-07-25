@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v4.99';
+const VERSION = 'v5.00';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6247,13 +6247,66 @@ const _TRUE_ENDING_CLOSE_LINES = [
   'ここまで 見届けてくれて、ありがとう。',
 ];
 const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
-const _TRUE_ENDING_ROLL_SPEED = 2.2; // px/frame（実績19+統計4行、画面高さぶんの余白込みで概ね10秒程度）
-const _TRUE_ENDING_ACT3_MIN_TIMER = 130; // 締めの3行が出そろってからCONTINUEを出すまでの最短フレーム数
+/* 演出全体を貫く唯一の速度。以前はセリフ(タイマーで1行ずつ表示)→
+   ロール(rollYスクロール)→締め(固定表示)がそれぞれ別の時間軸・別の
+   見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
+   セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した */
+const _TRUE_ENDING_SCROLL_SPEED = 1.8; // px/frame
+const _TRUE_ENDING_SPACER_AFTER_OPEN  = 170; // 開幕セリフ〜実績ロールの間隔
+const _TRUE_ENDING_SPACER_BEFORE_CLOSE = 190; // 実績ロール〜締めセリフの間隔（スクロール開始タイミングの調整用）
+const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フォントサイズ×この値。開幕より少し詰める）
+const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった時、中央行を画面のどこに置くか(H比)
+const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 100; // 締めセリフが止まってからフェードアウトを始めるまでの余韻
+const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
+const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 50;
+const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 110; // タイトル表示からCONTINUE受付までの最短フレーム数
 
-let _trueEnding = null; // { act, timer, rollY, rollItems, rollTotalH, showContinue }
+/* { stage, timer, scrollY, targetScrollY, content:{rows,rollStartY,rollEndY},
+     closeAlpha, titleAlpha, canExit }
+   stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold' */
+let _trueEnding = null;
 let _trueEndingIsReplay = false; // 実績パネルからの単体再生か（true時はゲーム進行に影響しない）
 let _trueEndingReturnPhase = 'tapestart'; // リプレイ終了後に戻るphase
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
+
+/* 開幕セリフ→実績ロール→締めセリフを1本の縦スクロール座標に並べる。
+   screenY = H*0.5 + row.y+row.h/2 - scrollY という共通の式で位置を出す
+   （scrollY=0の時、先頭の開幕セリフがH*0.5に来る＝旧act1の見た目を継承） */
+function _buildTrueEndingContent() {
+  const fsOpen  = IS_PORTRAIT ? 22 : 26;
+  const openDy  = fsOpen * 2.2;
+  const fsClose = IS_PORTRAIT ? 20 : 24;
+  const closeDy = fsClose * _TRUE_ENDING_CLOSE_LINE_DY_RATIO;
+
+  const rows = [];
+  let y = 0;
+  for (const text of _TRUE_ENDING_OPEN_LINES) {
+    rows.push({ type: 'open', text, y, h: openDy, fs: fsOpen });
+    y += openDy;
+  }
+  y += _TRUE_ENDING_SPACER_AFTER_OPEN;
+
+  const rollStartY = y;
+  const rollList = ACHIEVEMENTS.map(a => ({ icon: a.icon, text: a.name })).concat([
+    { icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` },
+    { icon: '🏹', text: `総矢数 ${fmt(shotCount)}` },
+    { icon: '🎊', text: `大当たり回数 ${fmt(jackpotCount)}` },
+    { icon: '👑', text: `ベストギヨウザ ${fmt(bestCoins)}` },
+  ]);
+  for (const item of rollList) {
+    rows.push({ type: 'roll', icon: item.icon, text: item.text, y, h: _TRUE_ENDING_ROLL_ROW_H });
+    y += _TRUE_ENDING_ROLL_ROW_H;
+  }
+  const rollEndY = y;
+  y += _TRUE_ENDING_SPACER_BEFORE_CLOSE;
+
+  const closeStartIdx = rows.length;
+  for (const text of _TRUE_ENDING_CLOSE_LINES) {
+    rows.push({ type: 'close', text, y, h: closeDy, fs: fsClose });
+    y += closeDy;
+  }
+  return { rows, rollStartY, rollEndY, closeStartIdx };
+}
 
 /* こんがり達成直後（自動）・実績パネル（手動リプレイ）どちらからもここから入る */
 function _startTrueEnding(replay) {
@@ -6275,14 +6328,27 @@ function _startTrueEnding(replay) {
     _destroyBGMSource();
   }
   phase = 'trueEnding';
-  _trueEnding = { act: 1, timer: 0, rollY: 0, rollItems: null, rollTotalH: 0, showContinue: false };
+  const content = _buildTrueEndingContent();
+  /* 締めセリフ3行の中央行（closeStartIdx+1）が静止時に画面のどこへ来るかを
+     逆算し、そこをスクロールの終点にする。速度が一定なので終点さえ決めれば
+     自然にそこで止まる（間隔・行間の調整で「止まる位置の見え方」を作り込む） */
+  const midClose = content.rows[content.closeStartIdx + 1];
+  const targetScrollY = H * 0.5 + (midClose.y + midClose.h / 2) - H * _TRUE_ENDING_CLOSE_REST_Y_RATIO;
+  _trueEnding = {
+    stage: 'scroll', timer: 0,
+    scrollY: 0, targetScrollY, content,
+    closeAlpha: 1, titleAlpha: 0, canExit: false,
+  };
   _playTrueEndingTheme();
 }
 
-function _advanceTrueEndingAct(n) {
-  _trueEnding.act = n;
-  _trueEnding.timer = 0;
-  if (n === 3) _stopTrueEndingTheme(); // 締めの幕へ入ったらテーマ曲をフェードアウト
+function _trueEndingEnterStage(stage) {
+  const o = _trueEnding;
+  o.stage = stage;
+  o.timer = 0;
+  /* 締めセリフのフェードアウトと同時にテーマ曲も一緒にフェードさせ、
+     映像と音を同じタイミングで消す（余韻を残しつつ、の実装） */
+  if (stage === 'closeLinesFadeOut') _stopTrueEndingTheme(_TRUE_ENDING_CLOSE_FADEOUT_FRAMES / 60);
 }
 
 /* 実績コンプリートの祝賀テーマ曲。通常BGM(152bpm)より落ち着いた100bpm相当、
@@ -6320,120 +6386,123 @@ function _playTrueEndingTheme() {
     }
   }
 }
-function _stopTrueEndingTheme() {
+function _stopTrueEndingTheme(rampSec = 0.3) {
   const g = _trueEndingGain;
   if (!g || !audioCtx) return;
   const t = audioCtx.currentTime;
   g.gain.cancelScheduledValues(t);
   g.gain.setValueAtTime(g.gain.value, t);
-  g.gain.linearRampToValueAtTime(0, t + 0.3);
+  g.gain.linearRampToValueAtTime(0, t + rampSec);
   _trueEndingGain = null;
 }
 
 function _updateTrueEnding() {
   const o = _trueEnding;
   if (!o) { phase = 'idle'; return; }
+  if (_king) _easeKingXform(); // 引き継いだキングの呼吸などを続ける（自然な余韻）
   o.timer++;
-  if (o.act === 1) {
-    if (_king) _easeKingXform(); // 引き継いだキングの呼吸などを続ける（自然な余韻）
-    if (o.timer > _TRUE_ENDING_OPEN_LINES.length * _OMEN_LINE_FRAMES + 40) _advanceTrueEndingAct(2);
-  } else if (o.act === 2) {
-    if (!o.rollItems) _buildTrueEndingRoll();
-    o.rollY += _TRUE_ENDING_ROLL_SPEED;
-    if (o.rollY > o.rollTotalH) _advanceTrueEndingAct(3);
-  } else if (o.act === 3) {
-    if (!o.showContinue && o.timer > _TRUE_ENDING_CLOSE_LINES.length * _OMEN_LINE_FRAMES + _TRUE_ENDING_ACT3_MIN_TIMER) {
-      o.showContinue = true;
+  if (o.stage === 'scroll') {
+    o.scrollY = Math.min(o.scrollY + _TRUE_ENDING_SCROLL_SPEED, o.targetScrollY);
+    if (o.scrollY >= o.targetScrollY) _trueEndingEnterStage('closeLinesRest');
+  } else if (o.stage === 'closeLinesRest') {
+    if (o.timer > _TRUE_ENDING_CLOSE_LINGER_FRAMES) _trueEndingEnterStage('closeLinesFadeOut');
+  } else if (o.stage === 'closeLinesFadeOut') {
+    o.closeAlpha = Math.max(0, 1 - o.timer / _TRUE_ENDING_CLOSE_FADEOUT_FRAMES);
+    if (o.timer >= _TRUE_ENDING_CLOSE_FADEOUT_FRAMES) _trueEndingEnterStage('titleFadeIn');
+  } else if (o.stage === 'titleFadeIn') {
+    o.titleAlpha = Math.min(1, o.timer / _TRUE_ENDING_TITLE_FADEIN_FRAMES);
+    if (o.timer >= _TRUE_ENDING_TITLE_FADEIN_FRAMES) _trueEndingEnterStage('titleHold');
+  } else if (o.stage === 'titleHold') {
+    if (!o.canExit && o.timer > _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES) o.canExit = true;
+  }
+}
+
+/* 開幕セリフ・実績ロール・締めセリフを同じスクロール座標・同じ縁フェードで
+   描く統一関数（旧_drawTrueEndingLines・_drawTrueEndingRollを統合）。
+   締めセリフだけはcloseAlphaを追加で掛けて、静止後のフェードアウトを表現する */
+function _drawTrueEndingRows(o) {
+  const rows = o.content.rows;
+  let rollCaptionAlpha = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const screenY = H * 0.5 + (row.y + row.h / 2) - o.scrollY;
+    if (screenY < -40 || screenY > H + 40) continue;
+    let edgeFade = Math.min(1, Math.min(screenY, H - screenY) / 60);
+    if (edgeFade <= 0) continue;
+    if (row.type === 'close') edgeFade *= o.closeAlpha;
+    if (edgeFade <= 0) continue;
+    if (row.type === 'roll') rollCaptionAlpha = Math.max(rollCaptionAlpha, edgeFade);
+    ctx.globalAlpha = edgeFade;
+    if (row.type === 'roll') {
+      ctx.textBaseline = 'middle';
+      ctx.font = `18px serif`;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(row.icon, W / 2 - 70, screenY);
+      ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+      ctx.fillStyle = Y;
+      ctx.textAlign = 'left';
+      ctx.fillText(row.text, W / 2 - 50, screenY);
+    } else {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      outText(row.text, W / 2, screenY, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
     }
   }
-}
-
-/* 実績19個+累計統計4行を1本のロール配列にまとめる（累計データもスクロール
-   対象にする。固定表示にはしない） */
-function _buildTrueEndingRoll() {
-  const rows = ACHIEVEMENTS.map(a => ({ icon: a.icon, text: a.name }));
-  rows.push({ icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` });
-  rows.push({ icon: '🏹', text: `総矢数 ${fmt(shotCount)}` });
-  rows.push({ icon: '🎊', text: `大当たり回数 ${fmt(jackpotCount)}` });
-  rows.push({ icon: '👑', text: `ベストギヨウザ ${fmt(bestCoins)}` });
-  _trueEnding.rollItems = rows;
-  _trueEnding.rollTotalH = rows.length * _TRUE_ENDING_ROLL_ROW_H;
-}
-
-/* 台詞演出（誕生予告・敗北アウトロと同じ「過去行は薄く残して積む」手法）を
-   任意の行配列・任意の中心Yで使えるよう一般化したもの */
-function _drawTrueEndingLines(lines, timer, centerY) {
-  if (timer < 0) return;
-  const step = Math.floor(timer / _OMEN_LINE_FRAMES) + 1;
-  const stepTimer = timer % _OMEN_LINE_FRAMES;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const fsL = IS_PORTRAIT ? 22 : 26;
-  const lineDy = fsL * 2.2;
-  const lineY0 = centerY - (lines.length - 1) * lineDy / 2;
-  ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
-  for (let i = 0; i < step && i < lines.length; i++) {
-    const isCur = (i === step - 1);
-    ctx.globalAlpha = isCur ? Math.min(1, stepTimer / 20) : 0.5;
-    outText(lines[i], W / 2, lineY0 + i * lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
-  }
   ctx.globalAlpha = 1;
-}
-
-function _drawTrueEndingRoll(o) {
-  const startY = H + 40; // 画面外下からスタート
-  for (let i = 0; i < o.rollItems.length; i++) {
-    const y = startY - o.rollY + i * _TRUE_ENDING_ROLL_ROW_H;
-    if (y < -30 || y > H + 30) continue;
-    const edgeFade = Math.min(1, Math.min(y, H - y) / 60); // 画面端に近いほど薄くフェード
-    if (edgeFade <= 0) continue;
-    ctx.globalAlpha = edgeFade;
-    ctx.textBaseline = 'middle';
-    ctx.font = `18px serif`;
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(o.rollItems[i].icon, W / 2 - 70, y);
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+  if (rollCaptionAlpha > 0) {
+    ctx.globalAlpha = rollCaptionAlpha;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `bold ${IS_PORTRAIT ? 17 : 20}px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = Y;
-    ctx.textAlign = 'left';
-    ctx.fillText(o.rollItems[i].text, W / 2 - 50, y);
+    ctx.fillText('実績 19 / 19 コンプリート', W / 2, IS_PORTRAIT ? 30 : 36);
+    ctx.globalAlpha = 1;
   }
-  ctx.globalAlpha = 1;
-  ctx.textAlign = 'center';
-  ctx.font = `bold ${IS_PORTRAIT ? 17 : 20}px 'Hiragino Mincho ProN',serif`;
-  ctx.fillStyle = Y;
-  ctx.fillText('実績 19 / 19 コンプリート', W / 2, IS_PORTRAIT ? 30 : 36);
+}
+
+/* キングの表示は「開幕セリフが画面上にある間」だけにしたい（旧act1相当）。
+   開幕セリフ2行自体の縁フェード値をそのまま流用することで、スクロールで
+   自然に画面外へ去っていくのと同じタイミング・同じ滑らかさでキングも
+   一緒にフェードアウトする（専用タイマーを持たず値を共有するだけで済む） */
+function _trueEndingKingAlpha(o) {
+  const rows = o.content.rows;
+  let a = 0;
+  for (let i = 0; i < 2; i++) { // 開幕セリフは常に先頭2行
+    const screenY = H * 0.5 + (rows[i].y + rows[i].h / 2) - o.scrollY;
+    a = Math.max(a, Math.max(0, Math.min(1, Math.min(screenY, H - screenY) / 60)));
+  }
+  return a;
 }
 
 function drawTrueEnding() {
   if (phase !== 'trueEnding' || !_trueEnding) return;
   const o = _trueEnding;
   ctx.save();
-  if (o.act === 1) {
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(4,6,10,0.86)';
+  ctx.fillRect(0, 0, W, H);
+
+  if (o.stage === 'titleFadeIn' || o.stage === 'titleHold') {
+    ctx.globalAlpha = o.titleAlpha;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px 'Hiragino Mincho ProN',serif`;
+    ctx.fillStyle = Y;
+    ctx.shadowColor = 'rgba(245,208,32,0.7)'; ctx.shadowBlur = 16;
+    ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    if (o.stage === 'titleHold' && o.canExit) _drawBottomPillBadge('CONTINUE');
+  } else {
     if (_king) {
-      ctx.save();
-      ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-      ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-      ctx.restore();
+      const kingAlpha = _trueEndingKingAlpha(o);
+      if (kingAlpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = kingAlpha;
+        ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+        ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+        ctx.restore();
+      }
     }
-    _drawTrueEndingLines(_TRUE_ENDING_OPEN_LINES, o.timer, H / 2);
-  } else if (o.act === 2) {
-    ctx.fillStyle = 'rgba(2,4,8,0.88)'; ctx.fillRect(0, 0, W, H);
-    _drawTrueEndingRoll(o);
-  } else if (o.act === 3) {
-    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, o.timer / 20)})`; ctx.fillRect(0, 0, W, H);
-    if (o.timer > 15) {
-      ctx.globalAlpha = Math.min(1, (o.timer - 15) / 25);
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = `900 ${IS_PORTRAIT ? 32 : 42}px 'Hiragino Mincho ProN',serif`;
-      ctx.fillStyle = Y;
-      ctx.shadowColor = 'rgba(245,208,32,0.7)'; ctx.shadowBlur = 16;
-      ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.28);
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-    }
-    _drawTrueEndingLines(_TRUE_ENDING_CLOSE_LINES, o.timer - 30, H * 0.58);
-    if (o.showContinue) _drawBottomPillBadge('CONTINUE');
+    _drawTrueEndingRows(o);
   }
   ctx.restore();
 }
@@ -9015,10 +9084,16 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'trueEnding') {
-    /* いつでもタップでスキップ可（幕1・幕2は即座に締めの幕3へ）。
-       幕3自体は締めの3行が出そろってからCONTINUE待ちにする（他のバッジ演出と同じ操作感） */
-    if (_trueEnding.act < 3) _advanceTrueEndingAct(3);
-    else if (_trueEnding.showContinue) _finishTrueEnding();
+    /* スクロール中はいつでもタップでスキップ可（締めセリフの静止位置まで
+       一気に進める。速度が一定なのでスキップしても自然に流れた場合と
+       同じ着地位置になる）。締めセリフが静止した後は演出に任せ、
+       タイトル表示中のみCONTINUE操作を受け付ける（他のバッジ演出と同じ操作感） */
+    if (_trueEnding.stage === 'scroll') {
+      _trueEnding.scrollY = _trueEnding.targetScrollY;
+      _trueEndingEnterStage('closeLinesRest');
+    } else if (_trueEnding.stage === 'titleHold' && _trueEnding.canExit) {
+      _startScreenFade(() => _finishTrueEnding());
+    }
     return;
   }
   if (phase === 'bossDefeat') {
