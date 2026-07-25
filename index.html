@@ -213,7 +213,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.02';
+const VERSION = 'v5.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5389,13 +5389,24 @@ function _buildScorchBlotSprite() {
     { r: 19, a: 0.90, col: '50,25,6'  },
     { r: 11, a: 0.85, col: '25,10,2'  },
   ];
+  /* 各点を直線でつなぐと8角形の角が立って見える（実機指摘: 「四角いパッチ
+     のように見える、もっと丸に近かったはず」）ため、点数を増やしたうえで
+     隣接点の中点同士を二次ベジェで結ぶ標準的な「丸めたブロブ」の手法で
+     輪郭を滑らかにする。半径の乱数幅（不定形さ）自体は変更しない */
+  const N = 14;
   for (const ly of layers) {
-    c.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const a  = (i / 8) * Math.PI * 2;
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const a  = (i / N) * Math.PI * 2;
       const rr = ly.r * (0.75 + Math.random() * 0.5);
-      const px = Math.cos(a) * rr, py = Math.sin(a) * rr * 0.85;
-      if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
+      pts.push([Math.cos(a) * rr, Math.sin(a) * rr * 0.85]);
+    }
+    c.beginPath();
+    const midStart = [(pts[N-1][0]+pts[0][0])/2, (pts[N-1][1]+pts[0][1])/2];
+    c.moveTo(midStart[0], midStart[1]);
+    for (let i = 0; i < N; i++) {
+      const p = pts[i], pn = pts[(i+1)%N];
+      c.quadraticCurveTo(p[0], p[1], (p[0]+pn[0])/2, (p[1]+pn[1])/2);
     }
     c.closePath();
     c.fillStyle = `rgba(${ly.col},${ly.a})`;
@@ -6253,14 +6264,16 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
    セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した */
 const _TRUE_ENDING_SCROLL_SPEED = 1.2; // px/frame（旧1.8はやや速く感じるとの指摘で減速）
 const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示しておく時間（締めセリフの静止表示と対にする）
-const _TRUE_ENDING_SPACER_AFTER_OPEN  = 170; // 開幕セリフ〜実績ロールの間隔
-/* 実績本編〜まとめ〜締めセリフの間の空白（何も表示されない区間）。
-   ここが広すぎると、減速後の速度では何も動いていないように見え
-   「引っ掛かり」のように感じられてしまう（実機指摘）ため、旧値
-   （130/190）から詰めた。空白自体は「まとめ」の独立性を出すために
-   ゼロにはしない */
-const _TRUE_ENDING_SPACER_BEFORE_SUMMARY = 80; // 実績本編〜まとめ（累計データ）の間隔
-const _TRUE_ENDING_SPACER_BEFORE_CLOSE = 110; // 実績ロール〜締めセリフの間隔（スクロール開始タイミングの調整用）
+/* 各区間の空白（何も表示されない区間）はH比で定義する。縦画面と横画面で
+   H（IS_PORTRAIT ? 820 : 560）が大きく異なり、同じpx値だと縦画面では
+   相対的に間延びして見え・横画面では逆に窮屈に見えるため、必ずH比で
+   持たせて画面比に依存しない見え方にする（実機指摘: 縦横で最適な間隔が違う）。
+   SPACER_BEFORE_CLOSEは特に、締めセリフが静止した瞬間にまとめ（累計データ）
+   の末尾がまだ画面に残って見えるという指摘を受け、静止位置での重なりが
+   出ない値（縦横それぞれで計算済み・80px前後の余裕を持たせた）まで広げた */
+const _TRUE_ENDING_SPACER_AFTER_OPEN_RATIO  = 0.30; // 開幕セリフ〜実績ロールの間隔
+const _TRUE_ENDING_SPACER_BEFORE_SUMMARY_RATIO = 0.14; // 実績本編〜まとめ（累計データ）の間隔
+const _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO = 0.55; // 実績まとめ〜締めセリフの間隔
 const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フォントサイズ×この値。開幕より少し詰める）
 const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった時、中央行を画面のどこに置くか(H比)
 const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
@@ -6284,6 +6297,9 @@ function _buildTrueEndingContent() {
   const openDy  = fsOpen * 2.2;
   const fsClose = IS_PORTRAIT ? 20 : 24;
   const closeDy = fsClose * _TRUE_ENDING_CLOSE_LINE_DY_RATIO;
+  const spacerAfterOpen     = H * _TRUE_ENDING_SPACER_AFTER_OPEN_RATIO;
+  const spacerBeforeSummary = H * _TRUE_ENDING_SPACER_BEFORE_SUMMARY_RATIO;
+  const spacerBeforeClose   = H * _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO;
 
   const rows = [];
   let y = 0;
@@ -6291,7 +6307,7 @@ function _buildTrueEndingContent() {
     rows.push({ type: 'open', text, y, h: openDy, fs: fsOpen });
     y += openDy;
   }
-  y += _TRUE_ENDING_SPACER_AFTER_OPEN;
+  y += spacerAfterOpen;
 
   for (const a of ACHIEVEMENTS) {
     rows.push({ type: 'roll', icon: a.icon, text: a.name, y, h: _TRUE_ENDING_ROLL_ROW_H });
@@ -6299,7 +6315,7 @@ function _buildTrueEndingContent() {
   }
   /* 実績本編とまとめ（累計データ）の間は数行分あけ、まとめとして独立して
      見えるようにする（実績の続きとして流れ込むと埋没してしまうため） */
-  y += _TRUE_ENDING_SPACER_BEFORE_SUMMARY;
+  y += spacerBeforeSummary;
   const summaryStats = [
     { icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` },
     { icon: '🏹', text: `総矢数 ${fmt(shotCount)}` },
@@ -6310,7 +6326,7 @@ function _buildTrueEndingContent() {
     rows.push({ type: 'roll', icon: item.icon, text: item.text, y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
-  y += _TRUE_ENDING_SPACER_BEFORE_CLOSE;
+  y += spacerBeforeClose;
 
   const closeStartIdx = rows.length;
   for (const text of _TRUE_ENDING_CLOSE_LINES) {
