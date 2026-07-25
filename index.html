@@ -156,8 +156,12 @@ function _runCheatPanelAction(id) {
   if (id === 'allach') {
     /* こんがり以外の実績を全て達成状態にする（キングギヨウザ出現条件のテスト用。
        こんがり自体はキングギヨウザ討伐でのみ解除される最後の実績のため対象外にする
-       ＝_allAchExceptKongariDoneと同じ判定基準） */
-    for (const a of ACHIEVEMENTS) if (a.id !== KONGARI_ACH_ID) unlockAch(a.id);
+       ＝_allAchExceptKongariDoneと同じ判定基準）。
+       最大18件が同一フレームで解除されるため、実績解除音が完全に重なって
+       割れて聞こえるとの実機報告があった。90msずつずらして鳴らすことで、
+       マスターリミッター任せにせず発音側でも重なりを減らす */
+    let i = 0;
+    for (const a of ACHIEVEMENTS) if (a.id !== KONGARI_ACH_ID) { unlockAch(a.id, i * 0.09); i++; }
     return;
   }
   const charMap = { gi: 'ギ', yo: 'ヨ', u: 'ウ', za: 'ザ' };
@@ -213,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.05';
+const VERSION = 'v5.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1248,12 +1252,32 @@ function nextBeatDivTime(divsPerBeat = 4) {
   return bgmPhaseRef + nextDiv * divDur;
 }
 
+/* masterGainの出力先に挟む常時有効のセーフティリミッター。
+   実機報告: cheatpanelのACH一括解除（最大18件）で実績解除音('ach')が
+   同時に18重に重なり、音が割れて（クリッピングして）聞こえた。
+   通常のBGMレンダリング（renderBGMBuffer側のuseLimiter）と同じ問題を
+   ライブ再生側でも起こしうる（同一SEの多重発火に限らず、複数のSEが
+   偶然重なるケース全般が対象）ため、常時経由するリミッターを1つ挟む。
+   普段の1〜2音同時程度ではほぼ無音に近い変化（透過的）で、多重発火時だけ
+   ピークを叩き潰す設定にする（BGM事前レンダリング用の-10dB/ratio20は
+   常時通すには効きすぎるため、ライブ用にやや緩めた値を使う） */
+function _createMasterLimiter(ctx) {
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 16;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.15;
+  limiter.connect(ctx.destination);
+  return limiter;
+}
+
 function getAudioCtx() {
   if (!audioCtx) {
     audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     masterGain = audioCtx.createGain();
     masterGain.gain.value = 1; // lsLoad()前なのでaudioMutedは未確定。applyMuteGain()で後から設定する
-    masterGain.connect(audioCtx.destination);
+    masterGain.connect(_createMasterLimiter(audioCtx));
     bgmGain  = audioCtx.createGain();
     bgmGain.gain.value = 1;
     bgmGain.connect(masterGain); // BGM: bgmGain → masterGain → destination
@@ -1316,7 +1340,7 @@ function _recreateAudioGraph() {
   audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
   masterGain = audioCtx.createGain();
   masterGain.gain.value = audioMuted ? 0 : 1;
-  masterGain.connect(audioCtx.destination);
+  masterGain.connect(_createMasterLimiter(audioCtx));
   bgmGain = audioCtx.createGain();
   bgmGain.gain.value = 1;
   bgmGain.connect(masterGain);
@@ -2462,12 +2486,17 @@ function lsSaveStats() {
   const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, trueEndingSeen });
   _idle(() => { try { localStorage.setItem(LS_STATS, s); } catch(e) {} });
 }
-function unlockAch(id) {
+/* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数
+   （既定0=従来通り即時）。cheatpanelのACH一括解除（最大18件）で同じ
+   'ach'音が完全に同時発生して割れる（クリッピングする）という実機報告
+   があり、マスター出力に常時リミッターを挟んだ（_createMasterLimiter
+   参照）だけでなく、発音そのものも少しずつずらして重なりを減らす */
+function unlockAch(id, seDelay = 0) {
   if (unlockedAch[id]) return;
   unlockedAch[id] = true;
   achBannerQueue.push(id);
   lsSaveAch();
-  playSE('ach'); // 実績解除音
+  playSE('ach', audioCtx ? audioCtx.currentTime + 0.01 + seDelay : undefined); // 実績解除音
 }
 function checkCoinsAch() {
   if (coins >= 1000)  unlockAch('coins_500');
