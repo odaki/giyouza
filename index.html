@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.13';
+const VERSION = 'v5.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6392,9 +6392,19 @@ const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった�
 const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
 const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
 const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル表示。重要な瞬間なのでゆっくりフェードインさせる（旧50=0.83sは早すぎるとの指摘で2.5sに延長）
+/* macOS Safari実機報告: フェード中にshadowBlurのグローを併用すると、
+   globalAlphaがshadowの描画に正しく効かず（shadowColor自体にalphaを
+   埋め込んでも改善せず）、フェードが一瞬で終わったように見えてしまう
+   不具合があった。alpha変化とshadowBlur変化を同時に行うこと自体が
+   Safari側の合成でうまく扱えていないと考えられるため、両者を時間的に
+   分離する設計に変更（ユーザー提案）: フェード中はグロー無しの単純な
+   文字フェードのみ（globalAlpha単体は既にクレジット表示で動作確認済み）、
+   フェードが完了してアルファが1で固定された後にグローだけを別途
+   育てる。「輝きが増していく」印象も強くなる */
+const _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES = 60; // フェード完了後、グローが0→フルに育つ時間
 const _TRUE_ENDING_CREDIT_TEXT = 'COPYRIGHT © 2026 Michiyasu ODAKI';
-const _TRUE_ENDING_CREDIT_FADEIN_FRAMES = 90; // タイトルが表示し切った後、クレジットが単独でフェードインする時間
-const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 170; // タイトル表示からCONTINUE受付までの最短フレーム数（クレジットのフェードイン＋一呼吸ぶんを確保）
+const _TRUE_ENDING_CREDIT_FADEIN_FRAMES = 90; // グローが育ち切った後、クレジットが単独でフェードインする時間
+const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 170; // タイトル表示からCONTINUE受付までの最短フレーム数（グロー成長＋クレジットのフェードイン＋一呼吸ぶんを確保）
 
 /* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
@@ -6508,7 +6518,7 @@ function _startTrueEnding(replay) {
   _trueEnding = {
     stage: 'scroll', timer: 0,
     scrollY: 0, targetScrollY, content,
-    closeAlpha: 1, titleAlpha: 0, creditAlpha: 0, canExit: false,
+    closeAlpha: 1, titleAlpha: 0, titleGlow: 0, creditAlpha: 0, canExit: false,
   };
   _playTrueEndingTheme();
 }
@@ -6598,11 +6608,16 @@ function _updateTrueEnding() {
     o.titleAlpha = t * t;
     if (o.timer >= _TRUE_ENDING_TITLE_FADEIN_FRAMES) _trueEndingEnterStage('titleHold');
   } else if (o.stage === 'titleHold') {
-    /* タイトルが表示し切った後、クレジットだけを単独でフェードインさせる
+    /* フェード完了（alpha=1固定）後、まずグローを0→フルへ育て、
+       それが育ち切ってからクレジットを単独でフェードインさせる
        （ユーザー要望: タイトルの下に適度な間隔をあけてフェード表示、
-       タイトルが完全に出てからクレジットが出てくる、の2点）。
-       タイトルと同じくt*tの二次イージングで知覚できるフェードにする */
-    const ct = Math.min(1, o.timer / _TRUE_ENDING_CREDIT_FADEIN_FRAMES);
+       タイトルが完全に出てからクレジットが出てくる、の2点。加えて
+       グロー成長を分離したことで「輝きが増していく」演出にもなる）。
+       いずれも同じt*tの二次イージングで知覚できるフェードにする */
+    const gt = Math.min(1, o.timer / _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES);
+    o.titleGlow = gt * gt;
+    const creditTimer = Math.max(0, o.timer - _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES);
+    const ct = Math.min(1, creditTimer / _TRUE_ENDING_CREDIT_FADEIN_FRAMES);
     o.creditAlpha = ct * ct;
     if (!o.canExit && o.timer > _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES) o.canExit = true;
   }
@@ -6673,15 +6688,20 @@ function drawTrueEnding() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px 'Hiragino Mincho ProN',serif`;
     ctx.fillStyle = Y;
-    /* macOS Safari実機報告: フェードが一瞬で終わったように見える
-       （クレジット側の同じフェード処理は意図通りに見えている、との対比で
-       判明）。クレジットにはshadowBlurが無く、タイトルだけグロー付き。
-       Safariはglobal AlphaがshadowBlur/shadowColorの描画に正しく効かず、
-       グローがtitleAlphaの値に関わらずほぼフル濃度で描かれてしまう
-       （＝文字の芯は薄くてもグローだけ最初から強く見え、フェードが
-       瞬時に終わったように見える）ことがあるため、globalAlphaに頼らず
-       shadowColor自体のアルファ値へ直接titleAlphaを埋め込む */
-    ctx.shadowColor = `rgba(245,208,32,${0.7 * o.titleAlpha})`; ctx.shadowBlur = 16;
+    /* macOS Safari実機報告: アルファのフェードとshadowBlurのグローを同時に
+       変化させると、globalAlphaにもshadowColor自体へのalpha埋め込みにも
+       関わらずフェードが一瞬で終わったように見える不具合があった
+       （クレジット表示はshadowBlur無しで意図通りに見えている、との対比で
+       判明）。アルファ変化とグロー変化を同時に扱うこと自体がSafari側の
+       合成でうまく扱えないと考えられるため、時間的に分離する: フェード中
+       (titleFadeIn)はグロー無しの単純な文字フェードのみとし、フェードが
+       完了してalphaが1に固定された後（titleHold）にグローだけを別途
+       0→フルへ育てる（o.titleGlow、更新側参照）。輝きが増していく演出にもなる */
+    const glow = o.stage === 'titleHold' ? o.titleGlow : 0;
+    if (glow > 0) {
+      ctx.shadowColor = `rgba(245,208,32,${0.7 * glow})`;
+      ctx.shadowBlur = 16 * glow;
+    }
     ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
