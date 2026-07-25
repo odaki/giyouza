@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.14';
+const VERSION = 'v5.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6404,7 +6404,12 @@ const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル�
 const _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES = 60; // フェード完了後、グローが0→フルに育つ時間
 const _TRUE_ENDING_CREDIT_TEXT = 'COPYRIGHT © 2026 Michiyasu ODAKI';
 const _TRUE_ENDING_CREDIT_FADEIN_FRAMES = 90; // グローが育ち切った後、クレジットが単独でフェードインする時間
-const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 170; // タイトル表示からCONTINUE受付までの最短フレーム数（グロー成長＋クレジットのフェードイン＋一呼吸ぶんを確保）
+const _TRUE_ENDING_FIN_LINGER_FRAMES = 150; // クレジットが出そろってからFIN.を出すまでの余韻（早すぎるとの指摘で延長）
+/* FIN.受付までの最短フレーム数。グロー成長・クレジットのフェードインが
+   終わり切ってから、さらに余韻を置いた後の時間として算出する
+   （マジックナンバーで持たず、各段階の時間から機械的に求める） */
+const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES =
+  _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES + _TRUE_ENDING_CREDIT_FADEIN_FRAMES + _TRUE_ENDING_FIN_LINGER_FRAMES;
 
 /* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
@@ -6712,7 +6717,9 @@ function drawTrueEnding() {
       ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 48 : 62));
       ctx.globalAlpha = 1;
     }
-    if (o.stage === 'titleHold' && o.canExit) _drawBottomPillBadge('CONTINUE');
+    /* ここから先はゲームの続きに戻るわけではない（常にstartupへ戻る）ため、
+       他のバッジ演出と違いCONTINUEではなくFIN.と表示する（ユーザー要望） */
+    if (o.stage === 'titleHold' && o.canExit) _drawBottomPillBadge('FIN.');
   } else {
     if (_king) {
       const kingAlpha = _trueEndingKingAlpha(o);
