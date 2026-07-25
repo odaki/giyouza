@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.08';
+const VERSION = 'v5.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1276,7 +1276,14 @@ function getAudioCtx() {
   if (!audioCtx) {
     audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     masterGain = audioCtx.createGain();
-    masterGain.gain.value = 1; // lsLoad()前なのでaudioMutedは未確定。applyMuteGain()で後から設定する
+    /* 実機報告で発覚: タイトル画面の真エンディング再生ボタンはinitGame()を
+       経由せず直接getAudioCtx()を呼ぶため、従来ここを無条件で1（ミュート
+       未反映）にして「後でapplyMuteGain()が呼ばれる」ことに依存していた
+       設計では、そのボタン経由の初回再生時にミュート設定が一切反映されず
+       常に音が鳴ってしまっていた。lsLoad()はページ読み込み時点で必ず
+       audioMutedより先に完了している（ユーザー操作でしかgetAudioCtx()は
+       呼ばれない）ため、ここで直接audioMutedを反映すれば安全かつ確実 */
+    masterGain.gain.value = audioMuted ? 0 : 1;
     masterGain.connect(_createMasterLimiter(audioCtx));
     bgmGain  = audioCtx.createGain();
     bgmGain.gain.value = 1;
@@ -5057,7 +5064,11 @@ function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'trueEnding']);
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
-function _kingBattleEnd() {
+/* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
+   通常モード復帰（_kingBattleEnd、勝敗問わず・2回目以降の無演出勝利含む）と、
+   真エンディング終了後の復帰（_finishTrueEnding、常にstartupへ戻る）の
+   両方から呼ぶ共通処理として切り出した */
+function _cleanupKingBattleState() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null; _kingLasers = []; _kingCharFlights = [];
   _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
@@ -5066,6 +5077,10 @@ function _kingBattleEnd() {
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
   _defeatOutro = null;
+}
+
+function _kingBattleEnd() {
+  _cleanupKingBattleState();
   /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と
      同じゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップで
      gameOverReset）を経由させる（ユーザー要望: 「所持ギヨウザが0になる場合、
@@ -6333,15 +6348,28 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
    実測幅から逆算せず完全に独立した固定値にすることで、個々のグリフの
    幅ゆれに左右されず確実に隙間を確保する。将来アイコン・文字列それぞれの
    サイズだけを個別に調整したい場合もこの4定数だけを触ればよい */
-const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 84; // アイコンの中心位置
+/* アイコンの見た目サイズは絵文字1文字ぶんで固定なので、textAlign='left'で
+   常に同じ左端に描けば揃う（'center'/'right'は送り幅の半分/全部を左へ
+   シフトする計算が入るため、送り幅の実測がグリフと食い違う環境ではその
+   ぶんズレる。'left'はシフト計算そのものが無いのでこのズレが原理的に
+   起きない。ユーザー指摘により変更） */
+const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 92; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
 const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 44; // 文字列の開始位置（アイコンの実測幅とは無関係）
 const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
+/* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
+   （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
+const _TRUE_ENDING_BEAT = 0.6;
 /* 演出全体を貫く唯一の速度。以前はセリフ(タイマーで1行ずつ表示)→
    ロール(rollYスクロール)→締め(固定表示)がそれぞれ別の時間軸・別の
    見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
-   セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した */
-const _TRUE_ENDING_SCROLL_SPEED = 1.2; // px/frame（旧1.8はやや速く感じるとの指摘で減速）
+   セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した。
+   速度は勘のpx/frame値ではなく、実績ロール1行(_TRUE_ENDING_ROLL_ROW_H)が
+   テーマ曲ちょうど1拍分の時間で流れるように、行の高さと拍の長さから
+   直接算出する（ユーザー要望: スクロールがBGMのテンポと同期して感じられる
+   ように）。結果は1.111...px/frameで、以前の指摘で落ち着かせた1.2に近い
+   速度のまま、テーマ曲のリズムに正確に乗る */
+const _TRUE_ENDING_SCROLL_SPEED = _TRUE_ENDING_ROLL_ROW_H / (_TRUE_ENDING_BEAT * 60);
 const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示しておく時間（締めセリフの静止表示と対にする）
 /* 各区間の空白（何も表示されない区間）はH比で定義する。縦画面と横画面で
    H（IS_PORTRAIT ? 820 : 560）が大きく異なり、同じpx値だと縦画面では
@@ -6357,15 +6385,14 @@ const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フ�
 const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった時、中央行を画面のどこに置くか(H比)
 const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
 const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
-const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 50;
+const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル表示。重要な瞬間なのでゆっくりフェードインさせる（旧50=0.83sは早すぎるとの指摘で2.5sに延長）
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES = 110; // タイトル表示からCONTINUE受付までの最短フレーム数
 
 /* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
    stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold' */
 let _trueEnding = null;
-let _trueEndingIsReplay = false; // 実績パネルからの単体再生か（true時はゲーム進行に影響しない）
-let _trueEndingReturnPhase = 'tapestart'; // リプレイ終了後に戻るphase
+let _trueEndingIsReplay = false; // タイトル画面のボタンからの単体再生か（_finishTrueEndingでのキング戦state後片付けの要否に使う）
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
 
 /* セリフ1文を指定フォント・幅に収まるよう折り返す。セリフの原文には
@@ -6444,11 +6471,10 @@ function _buildTrueEndingContent() {
   return { rows, closeStartIdx, closeRowCount: closeDisplayLines.length };
 }
 
-/* こんがり達成直後（自動）・実績パネル（手動リプレイ）どちらからもここから入る */
+/* こんがり達成直後（自動）・タイトル画面のボタン（手動リプレイ）どちらからもここから入る */
 function _startTrueEnding(replay) {
   _trueEndingIsReplay = replay;
   if (replay) {
-    _trueEndingReturnPhase = phase;
     /* 実機報告で発覚: _stopBossBGMForVictory（120msフェード+150ms後に破棄）は
        ボス勝利演出の余韻を意図した緩やかな停止だが、_playTrueEndingThemeは
        50ms後には最初の音を鳴らし始めるため、フェード中盤（ゲームBGMがまだ
@@ -6493,8 +6519,8 @@ function _trueEndingEnterStage(stage) {
    ではなく一回限りのライブスケジューリング（_playKongariCompleteFanfareと
    同じ方式）。専用gainノードに通すことで、演出がスキップされた場合も
    このノードのゲインを落とすだけで即座に打ち切れる（個々のオシレーターを
-   逐一追跡・停止する必要がない） */
-const _TRUE_ENDING_BEAT = 0.6;
+   逐一追跡・停止する必要がない）。_TRUE_ENDING_BEATは冒頭の定数群
+   （_TRUE_ENDING_SCROLL_SPEED参照）で定義済み */
 const _TRUE_ENDING_MEL = [
   ['E',5,0.20], null, ['G',5,0.20], null, ['A',5,0.22], null, ['G',5,0.18], null,
   ['E',5,0.18], null, ['D',5,0.18], null, ['C',5,0.24], null, null, null,
@@ -6576,14 +6602,14 @@ function _drawTrueEndingRows(o) {
     ctx.globalAlpha = edgeFade;
     if (row.type === 'roll') {
       /* アイコン・文字列は_TRUE_ENDING_ROLL_ICON_X/TEXT_X等で位置・フォントを
-         それぞれ独立指定する（定義箇所のコメント参照）。アイコンをcenter
-         寄せにしているのは、「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ
-         文字と隙間なく詰まって見える（U+FE0F付きグリフの実測送り幅が
-         プラットフォームによって狂う）という実機報告への対策で、文字列側の
-         開始位置がアイコンの実測幅に一切影響されないようにするため */
+         それぞれ独立指定する（定義箇所のコメント参照）。アイコンをleft寄せに
+         しているのは、「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ文字と
+         隙間なく詰まって見える（U+FE0F付きグリフの実測送り幅がプラット
+         フォームによって狂う）という実機報告への対策で、文字列側の開始位置が
+         アイコンの実測幅に一切影響されないようにするため */
       ctx.textBaseline = 'middle';
       ctx.font = _TRUE_ENDING_ROLL_ICON_FONT;
-      ctx.textAlign = 'center';
+      ctx.textAlign = 'left';
       ctx.fillStyle = '#fff';
       ctx.fillText(row.icon, _TRUE_ENDING_ROLL_ICON_X, screenY);
       ctx.font = _TRUE_ENDING_ROLL_TEXT_FONT;
@@ -6646,25 +6672,20 @@ function drawTrueEnding() {
   ctx.restore();
 }
 
-/* 真エンディング終了処理。自動再生（本編勝利）なら通常の勝利後処理へ、
-   リプレイなら元のphaseへ復帰するだけに留める（ゲーム進行の状態は一切変えない）。
-   startup画面からのリプレイはinitGame()前と同じ「無音」状態に戻すのが正しい
-   （startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()すると
-   その前提を崩してしまう）。ゲーム内リプレイの場合のみBGMを再開する。 */
+/* 真エンディング終了処理。自動再生（本編勝利）・リプレイ（タイトル画面の
+   ボタン）のどちらでも、エンディングの後は常にゲームスタート前の初期画面
+   （startup）へ戻す（ユーザー要望: エンドロールはゲームの続きではなく、
+   スタートと並列の選択肢という位置づけのため）。本編勝利からの初回再生の
+   場合のみ、キング戦関連のstateを後片付けする必要がある（_trueEndingIsReplay
+   がfalseの時。リプレイはそもそも戦闘を経ていないため不要）。
+   startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()等は
+   呼ばない（無音のまま戻る） */
 function _finishTrueEnding() {
   trueEndingSeen = true;
   lsSaveStats();
-  const wasReplay = _trueEndingIsReplay;
-  const returnPhase = _trueEndingReturnPhase;
+  if (!_trueEndingIsReplay) _cleanupKingBattleState();
   _trueEnding = null;
-  if (wasReplay) {
-    phase = returnPhase;
-    if (returnPhase === 'startup') return;
-    if (audioCtx) audioCtx.resume().catch(() => {});
-    startBGM();
-  } else {
-    _kingBattleEnd();
-  }
+  phase = 'startup';
 }
 
 /* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
