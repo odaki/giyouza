@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.07';
+const VERSION = 'v5.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6324,6 +6324,19 @@ const _TRUE_ENDING_CLOSE_LINES = [
   'ここまで 見届けてくれて、ありがとう。',
 ];
 const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
+/* 実績ロール1行内の「アイコン」「文字列」の位置・フォントをそれぞれ独立した
+   定数として明示指定する。以前はアイコンをtextAlign='right'で文字列の
+   すぐ左に詰めて置いていたため、絵文字グリフの実測送り幅がプラットフォーム
+   依存でわずかに狂う（U+FE0F付きコードポイントで実際に発生）と、文字列側の
+   開始位置がその影響をそのまま受けて隙間が潰れていた。アイコンを
+   textAlign='center'の固定スロットに変え、文字列の開始位置もアイコンの
+   実測幅から逆算せず完全に独立した固定値にすることで、個々のグリフの
+   幅ゆれに左右されず確実に隙間を確保する。将来アイコン・文字列それぞれの
+   サイズだけを個別に調整したい場合もこの4定数だけを触ればよい */
+const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 84; // アイコンの中心位置
+const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
+const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 44; // 文字列の開始位置（アイコンの実測幅とは無関係）
+const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
 /* 演出全体を貫く唯一の速度。以前はセリフ(タイマーで1行ずつ表示)→
    ロール(rollYスクロール)→締め(固定表示)がそれぞれ別の時間軸・別の
    見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
@@ -6562,25 +6575,21 @@ function _drawTrueEndingRows(o) {
     if (edgeFade <= 0) continue;
     ctx.globalAlpha = edgeFade;
     if (row.type === 'roll') {
+      /* アイコン・文字列は_TRUE_ENDING_ROLL_ICON_X/TEXT_X等で位置・フォントを
+         それぞれ独立指定する（定義箇所のコメント参照）。アイコンをcenter
+         寄せにしているのは、「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ
+         文字と隙間なく詰まって見える（U+FE0F付きグリフの実測送り幅が
+         プラットフォームによって狂う）という実機報告への対策で、文字列側の
+         開始位置がアイコンの実測幅に一切影響されないようにするため */
       ctx.textBaseline = 'middle';
-      ctx.font = `18px serif`;
-      ctx.textAlign = 'right';
+      ctx.font = _TRUE_ENDING_ROLL_ICON_FONT;
+      ctx.textAlign = 'center';
       ctx.fillStyle = '#fff';
-      /* アイコン列の右端。「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ
-         文字と隙間なく詰まって見えるとの実機報告があった。この2つは
-         実績一覧中で唯一、絵文字化のためU+FE0F（異体字セレクタ16）が
-         付いたコードポイント（U+1F321/U+1F579）で、他の絵文字は単独
-         コードポイントのみ。VS16付きグリフはプラットフォームによって
-         測定上の送り幅より実際の描画（インク）が右へはみ出すことがあり、
-         右寄せ（textAlign='right'）で厳密に詰めていた隙間20pxを侵食して
-         いたと考えられる。個々のグリフ実測に依存せず確実に隙間を確保
-         するため、アイコン側の右端をさらに左へ・文字側の開始位置を
-         さらに右へ、それぞれ余裕を持たせて計30pxに広げた */
-      ctx.fillText(row.icon, W / 2 - 74, screenY);
-      ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+      ctx.fillText(row.icon, _TRUE_ENDING_ROLL_ICON_X, screenY);
+      ctx.font = _TRUE_ENDING_ROLL_TEXT_FONT;
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
-      ctx.fillText(row.text, W / 2 - 44, screenY);
+      ctx.fillText(row.text, _TRUE_ENDING_ROLL_TEXT_X, screenY);
     } else {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
