@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.30';
+const VERSION = 'v5.31';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6737,7 +6737,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.fillText('餃', cx - sideCX, cy - sideLineH / 2 - sideGap / 2);
   ctx.fillText('子', cx - sideCX, cy + sideLineH / 2 + sideGap / 2);
 
-  const centerFont  = R * 0.34 * 1.4 * 1.05; // 「ギヨウザ」を1.4倍、さらに全体を1.05倍に
+  const centerFont  = R * 0.34 * 1.4 * 1.07; // 「ギヨウザ」を1.4倍、さらに全体を1.07倍に
   const centerLineH = centerFont * 0.88; // 文字間隔を少し詰める（中心揃えは対称な配置式のため自動的に維持される）
   ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = '#ffffff';
