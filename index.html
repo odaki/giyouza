@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.20';
+const VERSION = 'v5.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6727,9 +6727,11 @@ function drawTrueEnding() {
     ctx.globalAlpha = 1;
     if (o.stage === 'titleHold' && o.creditAlpha > 0) {
       ctx.globalAlpha = o.creditAlpha;
-      ctx.font = `${IS_PORTRAIT ? 12 : 14}px 'Hiragino Mincho ProN',serif`;
+      const creditFontSize = IS_PORTRAIT ? 12 : 14;
+      ctx.font = `${creditFontSize}px 'Hiragino Mincho ProN',serif`;
       ctx.fillStyle = 'rgba(245,208,32,0.75)';
-      ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 78 : 90) - _TRUE_ENDING_TITLE_Y_OFFSET);
+      /* COPYRIGHT行の文字列の縦幅（フォントサイズ）分、さらに上にずらす */
+      ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 78 : 90) - _TRUE_ENDING_TITLE_Y_OFFSET - creditFontSize);
       ctx.globalAlpha = 1;
     }
     /* あえてバッジは表示しない（ユーザー要望）。canExit成立後はタップ/
