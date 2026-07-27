@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.45';
+const VERSION = 'v5.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6773,17 +6773,13 @@ function drawTrueEnding() {
     /* タイトルをCOPYRIGHT行の文字列の縦幅（フォントサイズ）分下へ、
        COPYRIGHT行を同じ幅分さらに上へずらし、両者の間隔を詰める */
     const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
-    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82 * 3, 1);
+    /* ロゴは画面の上下中央に配置し、タイトルと同じくo.titleAlphaで
+       じんわりフェードインさせる（暗幕の色を徐々に変える方式はやめ、
+       ロゴ自体をフェードインさせることで唐突な変化を避ける） */
+    _drawGyozaCircleLogo(W / 2, H / 2, (IS_PORTRAIT ? 62 : 82) * 3, o.titleAlpha);
 
-    /* 直前(closeLinesFadeOut)の暗幕 rgba(4,6,10,0.86) から、drawStartupと
-       同じ暗幕 rgba(5,30,12,0.82) へ、o.titleAlpha(0→1)に合わせて徐々に
-       色を変える。固定値へ即切り替えると明るさが唐突に変わって見える
-       ため、既にあるタイトルのフェード進行度をそのまま流用して滑らかに
-       つなぐ */
-    const ot = o.titleAlpha;
-    const or_ = 4 + (5 - 4) * ot, og_ = 6 + (30 - 6) * ot, ob_ = 10 + (12 - 10) * ot;
-    const oa_ = 0.86 + (0.82 - 0.86) * ot;
-    ctx.fillStyle = `rgba(${or_},${og_},${ob_},${oa_})`;
+    /* drawStartupの暗幕と全く同じ色・濃さにする（勝手に別の値にしない） */
+    ctx.fillStyle = 'rgba(5,30,12,0.82)';
     ctx.fillRect(0, 0, W, H);
 
     ctx.globalAlpha = o.titleAlpha;
