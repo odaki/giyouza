@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.26';
+const VERSION = 'v5.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6726,7 +6726,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
 
   const sideFont  = R * 0.28 * 0.85; // 少し小さく
   const sideLineH = sideFont * 1.15;
-  const sideGap   = sideFont * 0.6; // 文字間隔を少し詰める
+  const sideGap   = sideFont * 0.8; // 文字の間を少し広げる
   /* エリア中央（数学的な中点）よりわずかに内周（中央エリア）寄りにオフセットし、
      文字の周囲に均等な余白ができるようにする（崎陽軒の実物パッケージ参照） */
   const sideCX    = (centerHalfW + R) / 2 - R * 0.05;
@@ -6746,7 +6746,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
     const y = cy + (i - (chars.length - 1) / 2) * centerLineH;
     ctx.save();
     ctx.translate(cx, y);
-    ctx.scale(1, 0.92); // 縦横比を変えてごくわずかに縦を潰す
+    ctx.scale(1.08, 0.92); // 縦横比を変え、横幅を少し広げつつ縦をごくわずかに潰す
     ctx.fillText(c, 0, 0);
     ctx.restore();
   });
