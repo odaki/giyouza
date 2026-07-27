@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.22';
+const VERSION = 'v5.23';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6696,6 +6696,56 @@ function _trueEndingKingAlpha(o) {
   return a;
 }
 
+/* 崎陽軒ギヨウザのパッケージにある丸いロゴマークを模した装飾。
+   黄色い円を縦3分割し、中央（やや幅広）を緑地に白文字で大きく「ギヨウザ」、
+   左右を黄地に緑文字で「餃　子」「横　濱」（各文字の間を少しあけて表示）。
+   中央エリアだけ内側にわずかに小さい円でクリップして塗るため、
+   中央の上下だけ外周の黄色いリングが弧状に残って見える */
+function _drawGyozaCircleLogo(cx, cy, R, alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.fillStyle = Y;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  ctx.beginPath();
+  ctx.arc(cx, cy, R * 0.92, 0, Math.PI * 2);
+  ctx.clip();
+  const centerHalfW = R * 0.38;
+  ctx.fillStyle = GN;
+  ctx.fillRect(cx - centerHalfW, cy - R, centerHalfW * 2, R * 2);
+  ctx.restore();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const sideFont  = R * 0.28;
+  const sideLineH = sideFont * 1.15;
+  const sideGap   = sideLineH * 0.4; // 「横　濱」の全角スペース相当の間隔
+  const sideCX    = (centerHalfW + R) / 2;
+  ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = GN;
+  ctx.fillText('横', cx + sideCX, cy - sideLineH / 2 - sideGap / 2);
+  ctx.fillText('濱', cx + sideCX, cy + sideLineH / 2 + sideGap / 2);
+  ctx.fillText('餃', cx - sideCX, cy - sideLineH / 2 - sideGap / 2);
+  ctx.fillText('子', cx - sideCX, cy + sideLineH / 2 + sideGap / 2);
+
+  const centerFont  = R * 0.34;
+  const centerLineH = centerFont * 1.05;
+  ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.fillStyle = '#ffffff';
+  const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
+  chars.forEach((c, i) => {
+    ctx.fillText(c, cx, cy + (i - (chars.length - 1) / 2) * centerLineH);
+  });
+
+  ctx.restore();
+}
+
 function drawTrueEnding() {
   if (phase !== 'trueEnding' || !_trueEnding) return;
   const o = _trueEnding;
@@ -6725,7 +6775,9 @@ function drawTrueEnding() {
     const creditFontSize = IS_PORTRAIT ? 12 : 14;
     /* タイトルをCOPYRIGHT行の文字列の縦幅（フォントサイズ）分下へ、
        COPYRIGHT行を同じ幅分さらに上へずらし、両者の間隔を詰める */
-    ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize);
+    const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
+    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 1); // globalAlphaに既にtitleAlpha適用済み
+    ctx.fillText('ギヨウザ ルーレット', W / 2, titleY);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
     if (o.stage === 'titleHold' && o.creditAlpha > 0) {
