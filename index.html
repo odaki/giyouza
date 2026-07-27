@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.36';
+const VERSION = 'v5.37';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7286,7 +7286,7 @@ function draw() {
      バラバラになる */
   if (!_isBossBattlePhase()) {
     if (phase === 'startup') {
-      for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.025);
+      for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.0375);
     } else {
       for (let i=0;i<4;i++) drawWheel(i);
     }
