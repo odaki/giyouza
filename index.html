@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.39';
+const VERSION = 'v5.40';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6798,10 +6798,10 @@ function drawTrueEnding() {
     /* タイトルをCOPYRIGHT行の文字列の縦幅（フォントサイズ）分下へ、
        COPYRIGHT行を同じ幅分さらに上へずらし、両者の間隔を詰める */
     const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
-    /* タイトル・COPYRIGHT文字の背後に透けて見えるよう半透明にする
-       （globalAlphaには既にtitleAlphaを適用済みなので、そこにさらに
-       乗算する形で0.35倍の半透明にする） */
-    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 0.35);
+    /* 半透明にすると色味が崩れて見えるとの指摘のため、タイトル画面の
+       ロゴと同じ不透明表示にする（globalAlphaには既にtitleAlphaが
+       適用済みなので、そこに1を乗算するだけで色味は変えない） */
+    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 1);
     ctx.fillText('ギヨウザ ルーレット', W / 2, titleY);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
