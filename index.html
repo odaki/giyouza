@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.41';
+const VERSION = 'v5.42';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6761,10 +6761,23 @@ function drawTrueEnding() {
   if (phase !== 'trueEnding' || !_trueEnding) return;
   const o = _trueEnding;
   ctx.save();
-  ctx.fillStyle = 'rgba(4,6,10,0.86)';
-  ctx.fillRect(0, 0, W, H);
 
   if (o.stage === 'titleFadeIn' || o.stage === 'titleHold') {
+    /* タイトル画面（drawStartup）と同じレイヤー構成にする:
+       ロゴ（不透明）→ 暗幕 → タイトル文字、の順に描く。
+       以前は暗幕を先に敷いてしまっていたため、タイトル画面ではロゴが
+       暗幕越しに暗く沈んで見えるのに対し、ここではロゴが暗幕に一切
+       暗くされない生の彩度のまま出てしまい、同じ「不透明alpha=1」の
+       指定でも見た目の色味が一致しない原因になっていた */
+    const creditFontSize = IS_PORTRAIT ? 12 : 14;
+    /* タイトルをCOPYRIGHT行の文字列の縦幅（フォントサイズ）分下へ、
+       COPYRIGHT行を同じ幅分さらに上へずらし、両者の間隔を詰める */
+    const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
+    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 1);
+
+    ctx.fillStyle = 'rgba(4,6,10,0.86)';
+    ctx.fillRect(0, 0, W, H);
+
     ctx.globalAlpha = o.titleAlpha;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px 'Hiragino Mincho ProN',serif`;
@@ -6783,14 +6796,6 @@ function drawTrueEnding() {
       ctx.shadowColor = `rgba(245,208,32,${0.7 * glow})`;
       ctx.shadowBlur = 16 * glow;
     }
-    const creditFontSize = IS_PORTRAIT ? 12 : 14;
-    /* タイトルをCOPYRIGHT行の文字列の縦幅（フォントサイズ）分下へ、
-       COPYRIGHT行を同じ幅分さらに上へずらし、両者の間隔を詰める */
-    const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
-    /* 半透明にすると色味が崩れて見えるとの指摘のため、タイトル画面の
-       ロゴと同じ不透明表示にする（globalAlphaには既にtitleAlphaが
-       適用済みなので、そこに1を乗算するだけで色味は変えない） */
-    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 1);
     ctx.fillText('ギヨウザ ルーレット', W / 2, titleY);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
@@ -6806,6 +6811,8 @@ function drawTrueEnding() {
        いつでも終了できるが、余韻を楽しんでもらうため案内は出さず、
        静かに佇む演出のままにする */
   } else {
+    ctx.fillStyle = 'rgba(4,6,10,0.86)';
+    ctx.fillRect(0, 0, W, H);
     if (_king) {
       const kingAlpha = _trueEndingKingAlpha(o);
       if (kingAlpha > 0) {
