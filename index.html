@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.28';
+const VERSION = 'v5.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6742,7 +6742,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = '#ffffff';
   const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
-  const charScaleX = [1.08, 1.14, 1.00, 1.08]; // ヨを少し大きく、ウを少し小さく
+  const charScaleX = [1.08, 1.20, 1.00, 1.00]; // ヨを少し大きく、ウ・ザを少し小さく
   chars.forEach((c, i) => {
     const y = cy + (i - (chars.length - 1) / 2) * centerLineH;
     ctx.save();
