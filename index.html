@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.24';
+const VERSION = 'v5.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6724,10 +6724,12 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const sideFont  = R * 0.28;
+  const sideFont  = R * 0.28 * 0.85; // 少し小さく
   const sideLineH = sideFont * 1.15;
-  const sideGap   = sideFont; // 文字の間の空白を文字サイズと同じくらいに
-  const sideCX    = (centerHalfW + R) / 2; // 左右エリアの中央揃え
+  const sideGap   = sideFont * 0.6; // 文字間隔を少し詰める
+  /* エリア中央（数学的な中点）よりわずかに外周（縁）寄りにオフセットし、
+     文字の周囲に均等な余白ができるようにする（崎陽軒の実物パッケージ参照） */
+  const sideCX    = (centerHalfW + R) / 2 + R * 0.05;
   ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = GN;
   ctx.fillText('横', cx + sideCX, cy - sideLineH / 2 - sideGap / 2);
@@ -6736,7 +6738,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.fillText('子', cx - sideCX, cy + sideLineH / 2 + sideGap / 2);
 
   const centerFont  = R * 0.34 * 1.4; // 「ギヨウザ」を1.4倍に
-  const centerLineH = centerFont * 1.05;
+  const centerLineH = centerFont * 0.88; // 文字間隔を少し詰める（中心揃えは対称な配置式のため自動的に維持される）
   ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = '#ffffff';
   const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
