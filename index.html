@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.38';
+const VERSION = 'v5.39';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6704,7 +6704,14 @@ function _trueEndingKingAlpha(o) {
 function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   if (alpha <= 0) return;
   ctx.save();
-  ctx.globalAlpha *= alpha;
+  /* 半透明表示（alpha<1）で黄色だけが浮いて色味が崩れるのを防ぐ:
+     黄色は輝度が高いため、緑と同じアルファで暗い背景に透かすと黄色ばかりが
+     目立ち「黄色っぽすぎる」見え方になる。黄色は基準アルファより速く、
+     緑・文字は基準アルファより遅く減衰させることで、不透明時(alpha=1)は
+     従来と全く同じ見た目のまま、半透明時は3分割の色バランスを保つ */
+  const baseAlpha   = ctx.globalAlpha * alpha;
+  const yellowAlpha = Math.pow(baseAlpha, 1.6);
+  const greenAlpha  = Math.pow(baseAlpha, 0.55);
   ctx.translate(cx, cy);
   ctx.rotate(rot); // タイトル画面のホイール流用時、ホイールの回転と同期させるため
 
@@ -6712,6 +6719,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   ctx.beginPath();
   ctx.arc(0, 0, R, 0, Math.PI * 2);
   ctx.clip();
+  ctx.globalAlpha = yellowAlpha;
   ctx.fillStyle = Y;
   ctx.fillRect(-R, -R, R * 2, R * 2);
   /* 外径の枠線（黄色いリング）の太さを従来の1/3に */
@@ -6719,6 +6727,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   ctx.arc(0, 0, R * (1 - 0.08 / 3), 0, Math.PI * 2);
   ctx.clip();
   const centerHalfW = R * 0.40; // 中央エリアを少し狭く
+  ctx.globalAlpha = greenAlpha;
   ctx.fillStyle = GN;
   ctx.fillRect(-centerHalfW, -R, centerHalfW * 2, R * 2);
   ctx.restore();
@@ -6733,6 +6742,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
      文字の周囲に均等な余白ができるようにする（崎陽軒の実物パッケージ参照） */
   const sideCX    = (centerHalfW + R) / 2 - R * 0.05;
   ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.globalAlpha = greenAlpha;
   ctx.fillStyle = GN;
   ctx.fillText('横', sideCX, -sideLineH / 2 - sideGap / 2);
   ctx.fillText('濱', sideCX, sideLineH / 2 + sideGap / 2);
@@ -6742,6 +6752,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   const centerFont  = R * 0.34 * 1.4 * 1.08; // 「ギヨウザ」を1.4倍、さらに全体を1.08倍に
   const centerLineH = centerFont * 0.88; // 文字間隔を少し詰める（中心揃えは対称な配置式のため自動的に維持される）
   ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.globalAlpha = greenAlpha;
   ctx.fillStyle = '#ffffff';
   const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
   const charScaleX = [1.08, 1.20, 1.00, 0.94]; // ヨを少し大きく、ウ・ザを少し小さく
