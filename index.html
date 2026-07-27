@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.42';
+const VERSION = 'v5.43';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6777,6 +6777,11 @@ function drawTrueEnding() {
 
     ctx.fillStyle = 'rgba(4,6,10,0.86)';
     ctx.fillRect(0, 0, W, H);
+
+    /* 暗幕だけを薄くすると背後のゲームHUDまで透けて見えてしまうため、
+       暗幕はそのままにしてロゴだけを暗幕の上からもう一度重ねて描き、
+       ロゴの視認性だけを上げる */
+    _drawGyozaCircleLogo(W / 2, titleY, IS_PORTRAIT ? 62 : 82, 0.5);
 
     ctx.globalAlpha = o.titleAlpha;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
