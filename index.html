@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.34';
+const VERSION = 'v5.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7279,12 +7279,13 @@ function draw() {
   ctx.textBaseline='alphabetic'; // リセット
 
   /* ホイール（ボス戦闘中は非表示）。タイトル画面の背景演出だけ、丸い
-     ギヨウザロゴに差し替える（ユーザー要望）。ロゴは回転させると文字が
-     斜めになり読めなくなるため、位置だけホイールの座標を流用し、
-     向きは常に正立のまま表示する */
+     ギヨウザロゴに差し替える（ユーザー要望）。本来のホイール回転速度
+     (w.speed)は速すぎて文字が読めなくなるため使わず、startupTimerを
+     元にした専用のゆっくりした回転角を使う */
   if (!_isBossBattlePhase()) {
     if (phase === 'startup') {
-      for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1);
+      const logoRot = startupTimer * 0.003;
+      for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, logoRot);
     } else {
       for (let i=0;i<4;i++) drawWheel(i);
     }
