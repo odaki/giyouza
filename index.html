@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.25';
+const VERSION = 'v5.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6716,7 +6716,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.beginPath();
   ctx.arc(cx, cy, R * (1 - 0.08 / 3), 0, Math.PI * 2);
   ctx.clip();
-  const centerHalfW = R * 0.46; // 中央エリアをやや幅広に
+  const centerHalfW = R * 0.40; // 中央エリアを少し狭く
   ctx.fillStyle = GN;
   ctx.fillRect(cx - centerHalfW, cy - R, centerHalfW * 2, R * 2);
   ctx.restore();
@@ -6727,9 +6727,9 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   const sideFont  = R * 0.28 * 0.85; // 少し小さく
   const sideLineH = sideFont * 1.15;
   const sideGap   = sideFont * 0.6; // 文字間隔を少し詰める
-  /* エリア中央（数学的な中点）よりわずかに外周（縁）寄りにオフセットし、
+  /* エリア中央（数学的な中点）よりわずかに内周（中央エリア）寄りにオフセットし、
      文字の周囲に均等な余白ができるようにする（崎陽軒の実物パッケージ参照） */
-  const sideCX    = (centerHalfW + R) / 2 + R * 0.05;
+  const sideCX    = (centerHalfW + R) / 2 - R * 0.05;
   ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = GN;
   ctx.fillText('横', cx + sideCX, cy - sideLineH / 2 - sideGap / 2);
@@ -6743,7 +6743,12 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.fillStyle = '#ffffff';
   const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
   chars.forEach((c, i) => {
-    ctx.fillText(c, cx, cy + (i - (chars.length - 1) / 2) * centerLineH);
+    const y = cy + (i - (chars.length - 1) / 2) * centerLineH;
+    ctx.save();
+    ctx.translate(cx, y);
+    ctx.scale(1, 0.92); // 縦横比を変えてごくわずかに縦を潰す
+    ctx.fillText(c, 0, 0);
+    ctx.restore();
   });
 
   ctx.restore();
