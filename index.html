@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.17';
+const VERSION = 'v5.18';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6404,6 +6404,11 @@ const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル�
    フェードが完了してアルファが1で固定された後にグローだけを別途
    育てる。「輝きが増していく」印象も強くなる */
 const _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES = 60; // フェード完了後、グローが0→フルに育つ時間
+/* タイトル＋COPYRIGHTのブロック全体を一行分上にずらすオフセット。
+   PAUSE中は"PAUSED"がH*0.5に表示されるため、そのままだとタイトルと
+   重なってしまう。タイトルとCOPYRIGHTを一行分まとめて上にずらすことで、
+   PAUSED表示がその間（隙間）に収まるようにする */
+const _TRUE_ENDING_TITLE_Y_OFFSET = IS_PORTRAIT ? 34 : 46;
 const _TRUE_ENDING_CREDIT_TEXT = 'COPYRIGHT © 2026 Michiyasu ODAKI';
 const _TRUE_ENDING_CREDIT_FADEIN_FRAMES = 90; // グローが育ち切った後、クレジットが単独でフェードインする時間
 const _TRUE_ENDING_FIN_LINGER_FRAMES = 150; // クレジットが出そろってからFIN.を出すまでの余韻（早すぎるとの指摘で延長）
@@ -6709,14 +6714,14 @@ function drawTrueEnding() {
       ctx.shadowColor = `rgba(245,208,32,${0.7 * glow})`;
       ctx.shadowBlur = 16 * glow;
     }
-    ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5);
+    ctx.fillText('ギヨウザ ルーレット', W / 2, H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET);
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
     if (o.stage === 'titleHold' && o.creditAlpha > 0) {
       ctx.globalAlpha = o.creditAlpha;
       ctx.font = `${IS_PORTRAIT ? 12 : 14}px 'Hiragino Mincho ProN',serif`;
       ctx.fillStyle = 'rgba(245,208,32,0.75)';
-      ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 48 : 62));
+      ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 48 : 62) - _TRUE_ENDING_TITLE_Y_OFFSET);
       ctx.globalAlpha = 1;
     }
     /* あえてバッジは表示しない（ユーザー要望）。canExit成立後はタップ/
