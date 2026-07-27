@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.19';
+const VERSION = 'v5.20';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6418,9 +6418,12 @@ const _TRUE_ENDING_FIN_LINGER_FRAMES = 150; // クレジットが出そろって
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES =
   _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES + _TRUE_ENDING_CREDIT_FADEIN_FRAMES + _TRUE_ENDING_FIN_LINGER_FRAMES;
 
-/* { stage, timer, scrollY, targetScrollY, content:{rows,closeStartIdx},
+/* { stage, timer, scrollY, targetScrollY, openSceneEndScrollY,
+     content:{rows,rollStartIdx,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
-   stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold' */
+   stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold'
+   タップ操作は上記4段階の"表示"（開幕セリフ/実績一覧/締めセリフ/タイトル）を
+   順に1段ずつ進める（handleGameClickのphase==='trueEnding'分岐参照） */
 let _trueEnding = null;
 let _trueEndingIsReplay = false; // タイトル画面のボタンからの単体再生か（_finishTrueEndingでのキング戦state後片付けの要否に使う）
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
@@ -6474,6 +6477,7 @@ function _buildTrueEndingContent() {
   }
   y += spacerAfterOpen;
 
+  const rollStartIdx = rows.length;
   for (const a of ACHIEVEMENTS) {
     rows.push({ type: 'roll', icon: a.icon, text: a.name, y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
@@ -6498,7 +6502,7 @@ function _buildTrueEndingContent() {
     rows.push({ type: 'close', text, y, h: closeDy, fs: fsClose });
     y += closeDy;
   }
-  return { rows, closeStartIdx, closeRowCount: closeDisplayLines.length };
+  return { rows, rollStartIdx, closeStartIdx, closeRowCount: closeDisplayLines.length };
 }
 
 /* こんがり達成直後（自動）・タイトル画面のボタン（手動リプレイ）どちらからもここから入る */
@@ -6527,9 +6531,13 @@ function _startTrueEnding(replay) {
      折り返しで画面幅ごとに変わるため、常に実際の行数から中央行を求める */
   const midClose = content.rows[content.closeStartIdx + Math.floor(content.closeRowCount / 2)];
   const targetScrollY = H * 0.5 + (midClose.y + midClose.h / 2) - H * _TRUE_ENDING_CLOSE_REST_Y_RATIO;
+  /* タップでの「開幕セリフ→実績一覧」ジャンプ先。実績一覧の先頭行を画面中央
+     （H*0.5）に来させるスクロール位置を、targetScrollYと同じ考え方で逆算する */
+  const firstRoll = content.rows[content.rollStartIdx];
+  const openSceneEndScrollY = firstRoll.y + firstRoll.h / 2;
   _trueEnding = {
     stage: 'scroll', timer: 0,
-    scrollY: 0, targetScrollY, content,
+    scrollY: 0, targetScrollY, openSceneEndScrollY, content,
     closeAlpha: 1, titleAlpha: 0, titleGlow: 0, creditAlpha: 0, canExit: false,
   };
   _playTrueEndingTheme();
@@ -9316,14 +9324,34 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'trueEnding') {
-    /* スクロール中はいつでもタップでスキップ可（締めセリフの静止位置まで
-       一気に進める。速度が一定なのでスキップしても自然に流れた場合と
-       同じ着地位置になる）。締めセリフが静止した後は演出に任せ、
-       タイトル表示中のみCONTINUE操作を受け付ける（他のバッジ演出と同じ操作感） */
-    if (_trueEnding.stage === 'scroll') {
-      _trueEnding.scrollY = _trueEnding.targetScrollY;
-      _trueEndingEnterStage('closeLinesRest');
-    } else if (_trueEnding.stage === 'titleHold' && _trueEnding.canExit) {
+    /* 「開幕セリフ→実績一覧→締めセリフ→タイトル＋COPYRIGHT」の4段階を、
+       タップ/クリック/キー入力のたびに1段ずつ順送りする（ユーザー要望）。
+       速度が一定なので、途中の停止位置までスキップしても自然に流れた
+       場合と同じ着地位置になる */
+    const o = _trueEnding;
+    if (o.stage === 'scroll') {
+      if (o.scrollY < o.openSceneEndScrollY) {
+        o.scrollY = o.openSceneEndScrollY; // 開幕セリフ → 実績一覧
+      } else {
+        o.scrollY = o.targetScrollY; // 実績一覧 → 締めセリフ
+        _trueEndingEnterStage('closeLinesRest');
+      }
+    } else if (o.stage === 'closeLinesRest' || o.stage === 'closeLinesFadeOut' || o.stage === 'titleFadeIn') {
+      /* 締めセリフ → タイトル＋COPYRIGHT。グロー成長・クレジットの
+         フェードインを待たず、演出が出そろった状態まで一気に進める。
+         テーマ曲がまだ鳴っていれば同じ止め方で消す（停止済みなら
+         _stopTrueEndingTheme内部のガードで何もしない） */
+      _stopTrueEndingTheme(_TRUE_ENDING_CLOSE_FADEOUT_FRAMES / 60);
+      _trueEndingEnterStage('titleHold');
+      /* timerを十分進めた状態にしておくことで、_updateTrueEndingのtitleHold
+         分岐（グロー成長・クレジットフェードインの経過時間計算）が次フレームで
+         我々が直接設定した値を巻き戻してしまわないようにする */
+      o.timer = _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES + 1;
+      o.titleAlpha = 1;
+      o.titleGlow = 1;
+      o.creditAlpha = 1;
+      o.canExit = true;
+    } else if (o.stage === 'titleHold' && o.canExit) {
       _startScreenFade(() => _finishTrueEnding());
     }
     return;
