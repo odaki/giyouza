@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.23';
+const VERSION = 'v5.24';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6712,10 +6712,11 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.clip();
   ctx.fillStyle = Y;
   ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  /* 外径の枠線（黄色いリング）の太さを従来の1/3に */
   ctx.beginPath();
-  ctx.arc(cx, cy, R * 0.92, 0, Math.PI * 2);
+  ctx.arc(cx, cy, R * (1 - 0.08 / 3), 0, Math.PI * 2);
   ctx.clip();
-  const centerHalfW = R * 0.38;
+  const centerHalfW = R * 0.46; // 中央エリアをやや幅広に
   ctx.fillStyle = GN;
   ctx.fillRect(cx - centerHalfW, cy - R, centerHalfW * 2, R * 2);
   ctx.restore();
@@ -6725,8 +6726,8 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
 
   const sideFont  = R * 0.28;
   const sideLineH = sideFont * 1.15;
-  const sideGap   = sideLineH * 0.4; // 「横　濱」の全角スペース相当の間隔
-  const sideCX    = (centerHalfW + R) / 2;
+  const sideGap   = sideFont; // 文字の間の空白を文字サイズと同じくらいに
+  const sideCX    = (centerHalfW + R) / 2; // 左右エリアの中央揃え
   ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = GN;
   ctx.fillText('横', cx + sideCX, cy - sideLineH / 2 - sideGap / 2);
@@ -6734,7 +6735,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha) {
   ctx.fillText('餃', cx - sideCX, cy - sideLineH / 2 - sideGap / 2);
   ctx.fillText('子', cx - sideCX, cy + sideLineH / 2 + sideGap / 2);
 
-  const centerFont  = R * 0.34;
+  const centerFont  = R * 0.34 * 1.4; // 「ギヨウザ」を1.4倍に
   const centerLineH = centerFont * 1.05;
   ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
   ctx.fillStyle = '#ffffff';
