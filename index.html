@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.47';
+const VERSION = 'v5.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6835,13 +6835,27 @@ function drawTrueEnding() {
    場合のみ、キング戦関連のstateを後片付けする必要がある（_trueEndingIsReplay
    がfalseの時。リプレイはそもそも戦闘を経ていないため不要）。
    startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()等は
-   呼ばない（無音のまま戻る） */
+   呼ばない（無音のまま戻る）。
+   ただし bgmGain 自体は 0 のまま残ることがある: 本編勝利経由
+   （_stopBossBGMForVictoryが120msフェードで0にする）・タイトル画面から
+   のリプレイ（_startTrueEndingのreplay分岐が二重再生防止で即座に0にする）
+   のどちらも、そのままでは1に戻す処理を挟まない。真エンディングのテーマ曲
+   自体は専用の_trueEndingGain経由なので鳴るが、bgmGain=0のまま次回の
+   START（playStartJingleがdest=bgmGain経由でジングルを鳴らす。scheduleJingle
+   参照）を迎えると、オリエンタルリフとカウントイン（カウントダウン）が
+   無音のまま進行し、その後startBGM()がbgmGainを1に戻した瞬間に通常BGMだけ
+   唐突に鳴り出す＝画面（ゲームは即座に開始済み）と音のズレとして体感される
+   （実機報告で発覚）。startup帰還時に確実に1へ戻しておく */
 function _finishTrueEnding() {
   trueEndingSeen = true;
   lsSaveStats();
   if (!_trueEndingIsReplay) _cleanupKingBattleState();
   _trueEnding = null;
   phase = 'startup';
+  if (bgmGain && audioCtx) {
+    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  }
 }
 
 /* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
