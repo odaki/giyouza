@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.48';
+const VERSION = 'v5.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1115,13 +1115,24 @@ function _updateBeatDisplayAdvance() {
 /* BGM ループ長をサンプル単位に量子化した実ループ長（秒）。
    AudioBuffer の loopEnd は内部で floor(loopEnd * sampleRate)/sampleRate に丸められるため、
    この値を使ってビート位相を計算しないとループを重ねるたびにズレが蓄積する。
-   getAudioCtx() 内で sampleRate が確定してから更新される。 */
-let _bgmQuantizedLoopDur = 0; // _updateBgmQuantizedLoopDur() で sampleRate確定後に設定
+   getAudioCtx() 内で sampleRate が確定してから更新される。
+   ボス戦BGMは5拍子化（BGM_LOOP_DUR_BOSS定義部参照）でループ長が通常と異なる
+   ため、_bgmIsBoss で切り替える別の量子化値を持つ（_curQuantizedLoopDur参照） */
+let _bgmQuantizedLoopDur     = 0; // _updateBgmQuantizedLoopDur() で sampleRate確定後に設定
+let _bgmQuantizedLoopDurBoss = 0;
 
 function _updateBgmQuantizedLoopDur() {
   if (!audioCtx) return;
   const sr = audioCtx.sampleRate;
-  _bgmQuantizedLoopDur = Math.floor(BGM_LOOP_DUR * sr) / sr;
+  _bgmQuantizedLoopDur     = Math.floor(BGM_LOOP_DUR * sr) / sr;
+  _bgmQuantizedLoopDurBoss = Math.floor(BGM_LOOP_DUR_BOSS * sr) / sr;
+}
+
+/* 現在鳴っているBGM（通常/ボス）に対応する量子化ループ長を返す。
+   getBeatPulse/calcSyncScore等、ビートシンク判定は通常・ボス両方の入力
+   （_kingReelShoot含む）から共通で呼ばれるため、_bgmIsBossで動的に選ぶ */
+function _curQuantizedLoopDur() {
+  return _bgmIsBoss ? _bgmQuantizedLoopDurBoss : _bgmQuantizedLoopDur;
 }
 
 /* ── BGM 音声バッファ位置の積算追跡 ──────────────────────────────────────────
@@ -1197,7 +1208,8 @@ function getBeatPulse() {
      _bgmAccumLastWall が更新されるとキャッシュが無効化される */
   if (_beatPulseCacheFrame === _bgmAccumLastWall) return _beatPulseCache;
   _beatPulseCacheFrame = _bgmAccumLastWall;
-  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) {
+  const loopDur = _curQuantizedLoopDur();
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || loopDur <= 0) {
     return (_beatPulseCache = 0);
   }
   /* playbackRate変動を考慮した音声バッファ内位置を計算。
@@ -1206,9 +1218,10 @@ function getBeatPulse() {
      rate を掛けるのは latency が壁時計秒だが offset は音声秒で評価するため。 */
   const rate      = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo; // ランプ中も正確に取得
   const rawPos    = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - _hwLatency) * rate;
-  /* ループ量子化ドリフト対策: loopEnd はサンプル丸めされた実ループ長で割り切る */
-  const loopN     = Math.floor(rawPos / _bgmQuantizedLoopDur);
-  const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
+  /* ループ量子化ドリフト対策: loopEnd はサンプル丸めされた実ループ長で割り切る。
+     拍単位（BGM_BEAT）の判定自体はループ長（通常/ボスの5拍子）に依存しない */
+  const loopN     = Math.floor(rawPos / loopDur);
+  const posInLoop = rawPos - loopN * loopDur;
   const ph = (((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
   return (_beatPulseCache = Math.pow(Math.max(0, 1 - ph * 2.5), 2)); // ~160ms で減衰（0.4拍）
 }
@@ -1217,7 +1230,8 @@ function getBeatPulse() {
    atPerfMs: 入力イベントの timeStamp（performance.now() 基準 ms、省略時は現在時刻）
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
 function calcSyncScore(atPerfMs) {
-  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0.5;
+  const loopDur = _curQuantizedLoopDur();
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || loopDur <= 0) return 0.5;
   /* 判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
      表示先読み _BEAT_DISPLAY_ADVANCE は描画パイプライン補償なので判定には含めない
      — リング自体が表示遅延を経て光るため、見た目のピークと判定グリッドは体感上一致する。
@@ -1230,8 +1244,8 @@ function calcSyncScore(atPerfMs) {
   const extra   = Math.max(0, Math.min(nowPerf - _bgmAccumLastPerf, 0.1)); // 最後のstepから入力までの差分
   const audioPos = _bgmAccumAudioTime + extra * rate;
   const rawPos   = audioPos + (_JUDGE_TRIM - _hwLatency) * rate; // 聴取基準 + 判定較正
-  const loopN    = Math.floor(rawPos / _bgmQuantizedLoopDur);
-  const posInLoop = rawPos - loopN * _bgmQuantizedLoopDur;
+  const loopN    = Math.floor(rawPos / loopDur);
+  const posInLoop = rawPos - loopN * loopDur;
   /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
      メロディは4分・8分音符両方に音符があるため、4分音符グリッドでは
      8分音符タイミングが常に最悪スコアになっていた。
@@ -1308,9 +1322,11 @@ function getAudioCtx() {
     for (let tier = 0; tier < RUMBLE_TIER_COUNT; tier++) {
       const mellow = tier / (RUMBLE_TIER_COUNT - 1);
       renderBGMBuffer(audioCtx.sampleRate, {
-        bassArr: BGM_BASS_BOSS,
+        bassArr: BGM_BASS_BOSS_7,
+        melArr: BGM_MEL_BOSS, hatArr: BGM_HAT_BOSS, kickSet: BGM_KICK_BOSS,
+        taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
         bassDurMul: 0.85, bassDecay: 0.05,
-        useTaiko: true, useRumble: true, melAcid: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
+        useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
         useLimiter: true, // ステップ0の同時発音でピーク1.6超のためコンプレッサー必須
         rumbleMellow: mellow,
       }).then(buf => {
@@ -1531,24 +1547,19 @@ const BGM_BASS = [
   ['C',3,0.28], null, ['E',3,0.22], null,
   ['G',3,0.22], null, ['C',3,0.30], null,
 ];
-/* ボス戦BGM用ベースライン（v2・ゼロベース再設計）。
-   初版（Cメジャーペンタ/Aマイナーペンタ共通音を使った「同じ曲の暗黒版」・
-   再生レート0.9倍で重さを出す方針）はユーザー実機評価で「緊張感・緊迫感・
-   焦燥感が足りない」と判定された。減速は「重厚」には効くが「切迫」には
-   逆効果（追い立てられる感覚には加速の方が合う）と判断し、以下へ転換:
+/* ボス戦BGM用ベースラインの設計思想（v2・ゼロベース再設計時の判断、以後の
+   5拍子化・7拍子化でもこの路線を継承している。具体的な配列はBGM_BASS_BOSS_7
+   参照）。初版（Cメジャーペンタ/Aマイナーペンタ共通音を使った「同じ曲の
+   暗黒版」・再生レート0.9倍で重さを出す方針）はユーザー実機評価で「緊張感・
+   緊迫感・焦燥感が足りない」と判定された。減速は「重厚」には効くが「切迫」
+   には逆効果（追い立てられる感覚には加速の方が合う）と判断し、以下へ転換:
    - ペンタトニックの外側の音(A#)を使い、A2/A#2の半音を全ステップ交互連打
      する不協和オスティナートに変更（ジョーズ的な「迫り来る」緊張の定番技法）
    - 再生レートは0.9倍→1.2倍（減速ではなく加速）
-   メロディ・ハイハット・キックの音符自体は流用するが、メロディの音色は
-   ノコギリ波に差し替え、ループ頭に低音の地鳴りも追加する（当初はサイレン風
-   の上昇スイープだったが、実機評価で「耳障り」との指摘があり地鳴りに変更）
-   （renderBGMBuffer の melType/useRumble 引数、_playGroundRumble 参照） */
-const BGM_BASS_BOSS = [
-  ['A',2,0.30], ['A#',2,0.26], ['A',2,0.30], ['A#',2,0.26],
-  ['A',2,0.30], ['A#',2,0.26], ['A',2,0.30], ['A#',2,0.26],
-  ['A',2,0.32], ['A#',2,0.28], ['A',2,0.32], ['A#',2,0.28],
-  ['A',2,0.34], ['A#',2,0.30], ['A',2,0.34], ['A#',2,0.30],
-];
+   メロディの音色はノコギリ波に差し替え、ループ頭に低音の地鳴りも追加する
+   （当初はサイレン風の上昇スイープだったが、実機評価で「耳障り」との指摘が
+   あり地鳴りに変更）（renderBGMBuffer の melType/useRumble 引数、
+   _playGroundRumble 参照） */
 const BOSS_BGM_RATE = 1.2;
 /* ボス戦BGM専用: 和太鼓の強打をループの頭・折り返し（ステップ0・8）に絞り、
    不協和ベースオスティナートの頭拍と重ねて一撃の重みを出す（合いの手の
@@ -1564,6 +1575,67 @@ const BGM_KICK = new Set([0,2,4,6,8,10,12,14]);
 const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
 const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
+
+/* ── キングギヨウザ戦BGM: 7拍子版（ユーザー要望「キングギヨウザ戦のBGMを
+   5拍子にできませんか」→ 参考曲の紹介を経て「5拍子を7拍子に作り直す」に変更。
+   グルーピングは4+3（ユーザー確認済み）、曲調は「アフリカ先住民族の狩りの前の
+   鼓舞する踊りのような感じ」というユーザー要望を反映し、単一の旋律的フレーズ
+   というより反復チャント＋合いの手の太鼓が積み重なる構成にした） ──
+   通常BGMと違い、メロディ・ハイハット・キック・和太鼓のすべてを専用配列に
+   差し替える（renderBGMBufferのmelArr/hatArr/kickSet/taikoStrongSet/
+   taikoFlourishSetパラメータ参照）。ステップ数はBGM_MEL.length依存をやめ、
+   これらの配列自身のlengthから動的に決まる設計にしたため、ここだけ長さが
+   変わっても他の処理に影響しない。
+   7/4 x 2小節 = 14拍 = 28ステップ（1ステップ=0.5拍のまま流用）。
+   「7」を体感させる核はビートシンク判定（拍単位=BGM_BEAT基準、小節長には
+   依存しない）ではなく、アクセントの配置。4+3グルーピング（拍1-2-3-4｜
+   拍5-6-7）で、拍1（各小節頭）と拍5（4+3の折り返し）に和太鼓の強打、
+   拍3・拍7に合いの手の和太鼓を重ねて「複数人が輪になって足踏みする」ような
+   層になった打楽器を狙った。
+   和声は後日ユーザー要望で全面的に改訂: 「メロディーに聞こえる部分の音色を、
+   高いシンセみたいな音じゃなくて、低いベースの音にしたい」「気持ちの良い
+   和声になるように地鳴り音も含め全体を調整してほしい」。当初はA2/A#2の
+   半音オスティナート＋A4オクターブのアシッドリードという意図的な不協和
+   構成だったが、これをA(ルート)/E(完全5度)のパワーコード的オスティナート
+   に差し替え（ロック/メタル系でおなじみの、攻撃的だが濁らない定番の型）、
+   メロディ層もA2〜E3のAマイナー和音構成音（A,C,E,G）だけを低音域で動かす
+   「ベースの合いの手」に再設計した（音色はTB-303リード→低音ベースシンセ
+   へ変更、_playBossBassMel参照）。地鳴り（_playGroundRumble）もA2→A1の
+   1オクターブスライドへ改めて同じA中心の調性に揃えた */
+const BGM_MEL_BOSS = [
+  // 小節1・グループA（拍1-4）: チャント（同音連打）→合いの手で一段高く
+  ['A',2,0.34], null, ['A',2,0.34], null, ['C',3,0.36], null, ['G',2,0.30], null,
+  // 小節1・グループB（拍5-7）: 折り返しのチャント→5度へ解決
+  ['A',2,0.34], null, ['A',2,0.34], null, ['E',2,0.32], null,
+  // 小節2・グループA（拍1-4、少し強めて繰り返す。オクターブ上の5度で変化）
+  ['A',2,0.36], null, ['A',2,0.36], null, ['E',3,0.38], null, ['C',3,0.32], null,
+  // 小節2・グループB（拍5-7、ループ末尾は開いた5度で次周回への引きを作る）
+  ['A',2,0.36], null, ['A',2,0.36], null, ['E',3,0.40], null,
+];
+const BGM_BASS_BOSS_7 = [
+  // 小節1・グループA（拍1-4）: ルート(A2)と完全5度(E2)のパワーコード連打
+  ['A',2,0.36], ['E',2,0.26], ['A',2,0.28], ['E',2,0.24], ['A',2,0.30], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24],
+  // 小節1・グループB（拍5-7）
+  ['A',2,0.34], ['E',2,0.26], ['A',2,0.28], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24],
+  // 小節2・グループA（少し強める）
+  ['A',2,0.38], ['E',2,0.28], ['A',2,0.30], ['E',2,0.26], ['A',2,0.32], ['E',2,0.26], ['A',2,0.30], ['E',2,0.26],
+  // 小節2・グループB
+  ['A',2,0.36], ['E',2,0.28], ['A',2,0.30], ['E',2,0.26], ['A',2,0.30], ['E',2,0.26],
+];
+/* ハイハット: 「狩りの踊り」のシェイカー/ラトルのような細かい刻みを狙い、
+   裏拍もやや大きめ（0.06→0.08）にして通常より隙間を埋める */
+const BGM_HAT_BOSS = [
+  0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08,
+  0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08, 0.16,0.08,
+];
+/* キックは全拍打ち（14拍すべて）でせき立てる推進力を維持 */
+const BGM_KICK_BOSS = new Set([0,2,4,6,8,10,12,14,16,18,20,22,24,26]);
+/* 和太鼓: 拍1・拍5（各小節頭と4+3の折り返し、ステップ0・8・14・22）に強打、
+   拍3・拍7（各グループの終わり、ステップ4・12・18・26）に合いの手を重ね、
+   複数の打楽器が層になって踏み鳴らすような密度にする */
+const BGM_TAIKO_STRONG_BOSS   = new Set([0, 8, 14, 22]);
+const BGM_TAIKO_FLOURISH_BOSS = new Set([4, 12, 18, 26]);
+const BGM_LOOP_DUR_BOSS = BGM_BEAT * 0.5 * BGM_MEL_BOSS.length; // 14拍 ≈5.526s
 
 /* ピッチスライド系ワンショットの共通実装: type波形のオシレーターを
    f0→f1へ指数スライドさせつつ、ゲイン包絡線envで鳴らして止める。
@@ -1618,10 +1690,10 @@ function _acidDistortionCurve(amount) {
 
 /* TB-303系音色の共通オーディオグラフ: sawtooth osc → lowpass filter
    (→ ソフトクリップ歪み) → gain → dest を構築してノード束を返す。
-   周波数・Q・包絡線の設定は呼び出し側が行う。地鳴り（_playGroundRumble）・
-   アシッドメロディ（_playAcidMelNote）・リール射撃音（_playAcidShootHit）の
-   3音色が同一のチェーン構築をコピーして持っていたのを統合した。
-   distAmount=null で歪みなし（メロディ用: 音程の聞き取りやすさ優先） */
+   周波数・Q・包絡線の設定は呼び出し側が行う。現在は地鳴り（_playGroundRumble）
+   専用（キング戦のリール射撃音・メロディ層は後にそれぞれクローズハイハット
+   風ノイズ・低音ベースシンセへ変更済み。playSE('kingShoot')・
+   _playBossBassMel参照）。distAmount=null で歪みなし */
 function _acidChain(ctx, dest, distAmount) {
   const osc    = ctx.createOscillator();
   const filter = ctx.createBiquadFilter();
@@ -1660,8 +1732,12 @@ function _acidChain(ctx, dest, distAmount) {
 function _playGroundRumble(ctx, t, dest, mellow = 0) {
   const distAmount = 4 - mellow * 3.2; // 4→0.8: ソフトクリップの歪み量を弱める
   const { osc, filter, gain, shaper } = _acidChain(ctx, dest, distAmount);
-  const topFreq = 130 - mellow * 35; // 130→95: 滑り出しの高さを抑える
-  const botFreq = 36  + mellow * 34; // 36→70: 下限を持ち上げて「ズドン」感を弱める
+  /* ユーザー要望「気持ちの良い和声になるように地鳴り音も含め全体を調整して
+     ほしい」に対応し、滑り出し・着地点をベース/メロディのルート音A（A2=110Hz
+     →A1=55Hz、ちょうど1オクターブ）へ調律。従来値（130→36Hz）はA中心の調性
+     から外れた任意の値だったため、他パートと合わせた時に濁って聞こえていた */
+  const topFreq = 110 - mellow * 25; // 110(A2)→85: 滑り出しの高さを抑える
+  const botFreq = 55  + mellow * 20; // 55(A1)→75: 下限を持ち上げて「ズドン」感を弱める
   osc.frequency.setValueAtTime(topFreq, t);
   osc.frequency.exponentialRampToValueAtTime(botFreq, t + 1.0); // なめらかな尻下がりスライド（単音なのでカクつかない）
   filter.Q.setValueAtTime(20 - mellow * 14, t); // 20→6: 高レゾナンスの「ウォゥ」感を弱める
@@ -1689,24 +1765,30 @@ function _playGroundRumble(ctx, t, dest, mellow = 0) {
   if (ctx === audioCtx) _disconnectAfter(ctx, t + 1.15, osc, filter, gain, shaper);
 }
 
-/* メロディ用TB-303風アシッド音色（ボス戦BGM専用）。ユーザー要望:
-   「メインのメロディの音色もTB-303ぽくしてください」。playOsc（三角波/
-   ノコギリ波を単純に鳴らすだけの汎用関数、通常BGM・SE・ジングルで共用の
-   ため変更不可）とは別に、303らしさの核である「音符ごとの高レゾナンス
-   フィルター掃引（プラック/クワック感）」を持つ専用関数を用意する。
-   音符が短い（16分音符=約0.16秒）ため、フィルターの掃引時間もそれに
-   合わせて短く・高速にする。地鳴りより控えめなQ（10）で、旋律の音程が
-   潰れて聞き取れなくならないようにしている */
-function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
-  const { osc, filter, gain } = _acidChain(ctx, dest, null); // 歪みなし（音程の聞き取り優先）
+/* メロディ層用の低音ベースシンセ音色（ボス戦BGM専用）。ユーザー要望:
+   「メロディーに聞こえる部分ですが、まず音色を高いシンセみたいな音じゃ
+   なくて、低いベースの音にしたい」。以前はTB-303アシッドリード
+   （_playAcidMelNote、明るいノコギリ波+高レゾナンスの派手なフィルター
+   掃引）だったが、ノコギリ波の豊富な倍音とレゾナンスの強い掃引が
+   「高いシンセ」に聞こえる主因のため、三角波（倍音が少なく丸い）+
+   控えめなレゾナンス（Q=2）+ 狭いカットオフ幅の穏やかな下降に差し替え、
+   ベースオスティナート（BGM_BASS_BOSS_7）と音域・質感の両方で馴染む
+   低音シンセベースにした */
+function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
+  const osc = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  filter.type = 'lowpass';
+  osc.connect(filter); filter.connect(gain); gain.connect(dest);
   osc.frequency.setValueAtTime(freq, t);
-  filter.Q.setValueAtTime(10, t);
-  /* カットオフは音程に応じて追従させる（低い音符でも高い音符でも同じ
-     絶対Hzだと聞こえ方が偏るため、基音との相対関係で決める） */
-  const cutHigh = Math.min(6000, freq * 8 + 1200);
-  const cutLow  = Math.max(280, freq * 1.6);
+  filter.Q.setValueAtTime(2, t);
+  /* カットオフは音程に応じて追従させ（低い音符でも高い音符でも同じ絶対Hzだと
+     聞こえ方が偏るため）、かつ全体を低めに抑えて明るい倍音を出さない */
+  const cutHigh = Math.min(900, freq * 6 + 200);
+  const cutLow  = Math.max(120, freq * 1.2);
   filter.frequency.setValueAtTime(cutHigh, t);
-  filter.frequency.exponentialRampToValueAtTime(cutLow, t + Math.min(dur * 0.8, 0.11));
+  filter.frequency.exponentialRampToValueAtTime(cutLow, t + Math.min(dur * 0.8, 0.14));
 
   gain.gain.setValueAtTime(vol, t);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
@@ -1715,29 +1797,25 @@ function _playAcidMelNote(ctx, freq, t, dur, vol, dest) {
   if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, filter, gain);
 }
 
-/* キングギヨウザ戦のリール射撃音（TB-303アシッド版）。ユーザー要望:
-   「射る音もTB-303に合うような音にしてください」。通常ゲームのコマ送り
-   確定音（playSE('lock')、E4→G3の矩形波クリック）とはリズム・音程を保った
-   まま音色だけノコギリ波+高レゾナンスフィルター掃引+ソフトクリップの
-   アシッド質に差し替える。'lock'自体は通常ゲームの矢確定でも共用されている
-   ため直接変更せず、ボス戦専用の新規SEケースとして切り出す
-   （ボス戦BGMのkickVol/melAcid等、他の音周りの変更と同じ隔離方針）。 */
-function _playAcidShootHit(ctx, t, dest) {
-  const _pluck = (pt, freq, dur, vol) => {
-    const { osc, filter, gain, shaper } = _acidChain(ctx, _seDest(ctx, dest), 3);
-    osc.frequency.setValueAtTime(freq, pt);
-    filter.Q.setValueAtTime(16, pt);
-    filter.frequency.setValueAtTime(Math.min(6000, freq * 10 + 800), pt);
-    filter.frequency.exponentialRampToValueAtTime(Math.max(300, freq * 1.4), pt + dur);
-    gain.gain.setValueAtTime(0.001, pt);
-    gain.gain.exponentialRampToValueAtTime(vol, pt + 0.006);
-    gain.gain.exponentialRampToValueAtTime(0.0001, pt + dur);
-    const stopAt = pt + dur + 0.02;
-    osc.start(pt); osc.stop(stopAt);
-    if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, filter, gain, shaper);
-  };
-  _pluck(t,         noteHz('E', 4), 0.05,  0.24);
-  _pluck(t + 0.025, noteHz('G', 3), 0.045, 0.17);
+/* キングギヨウザ戦のビーム発射音（スネアドラム風の「ばーーーん」）。ユーザー要望:
+   「レーザー発射時の音をもっとパーンという音にしたい。スネアドラムのように」
+   → 続けて「もっとばーーーーーーんと鳴らしたい。今の音はタイトすぎるので
+   残響がある感じがよい」。通常ゲームのコマ送り確定音（playSE('lock')、
+   E4→G3の矩形波クリック）とは共用せず、専用ケースとして切り出す（'lock'は
+   通常ゲームの矢確定でも使うため直接変更しない。以前の_playAcidShootHit
+   切り出し時と同じ隔離方針）。
+   構成: ボディ（低音の一撃、減衰を長く伸ばして「ばーん」の余韻を作る）+
+   スナッピー（広帯域ノイズの本体）+ エコータップ2発（遅らせて・弱く・
+   こもらせたノイズを重ね、反射音のように鳴らす）。convolver等の本格的な
+   リバーブノードはこのプロジェクトに無いため、時間差ノイズの重ね打ちで
+   「残響がある感じ」を近似する（_playDoraHitの倍音重ねと同じ加算合成の
+   考え方を、時間軸方向のエコーに応用したもの） */
+function _playKingBeamHit(ctx, t, dest) {
+  const d = _seDest(ctx, dest);
+  _playSlideOsc(ctx, d, t, 'triangle', 200, 55, 0.12, [[0, 0.65, 'set'], [0.35, 0.0001]], 0.38); // ボディ
+  playNoise(ctx, t,        0.42, 0.48, 1400, d); // スナッピー本体
+  playNoise(ctx, t + 0.05, 0.30, 0.22,  700, d); // 残響エコー1
+  playNoise(ctx, t + 0.11, 0.26, 0.11,  500, d); // 残響エコー2
 }
 
 /* キングギヨウザ登場（誕生）の瞬間専用、ドラ（銅鑼）風の派手な一撃音
@@ -1862,36 +1940,46 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
 }
 
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
-   optsでボス戦用の差し替え要素をまとめて指定できる（メロディ・ハイハット・
-   キックの音符自体・鳴らすステップは通常BGMと共通のため、音色・音量・
-   追加パートのみ引数化している）:
-     bassArr    : ベースラインの音符配列（BGM_BASS / BGM_BASS_BOSS）
+   optsでボス戦用の差し替え要素をまとめて指定できる:
+     bassArr    : ベースラインの音符配列（BGM_BASS / BGM_BASS_BOSS_7）
+     melArr/hatArr/kickSet/taikoStrongSet/taikoFlourishSet: メロディ・
+                  ハイハット・キック・和太鼓のパターン配列（通常BGM_MEL等）。
+                  ステップ数はmelArr.lengthから動的に決まる（ボス戦7拍子化
+                  でmelArr等の長さが通常と異なるため。BGM_MEL_BOSS定義部参照）
      melType    : メロディのオシレーター波形（通常='triangle'、ボスは
                   角のある鋭さを出すため'sawtooth'）
      bassDurMul/bassDecay: ベース音符の長さ・減衰（ボスは全ステップ連打の
-                  不協和オスティナートのため、通常より短く切ってオーバー
-                  ラップによる濁りを防ぐ）
-     useTaiko   : 和太鼓の強打を追加するか（BGM_TAIKO_STRONG/FLOURISH参照）
+                  オスティナートのため、通常より短く切ってオーバーラップに
+                  よる濁りを防ぐ）
+     useTaiko   : 和太鼓の強打を追加するか（taikoStrongSet/taikoFlourishSet参照）
      useRumble  : ループ頭に低音の地鳴りを追加するか（_playGroundRumble参照）
-     melAcid    : メロディをTB-303風アシッド音色にするか（_playAcidMelNote
-                  参照。trueの場合melTypeは無視される）
+     melBossBass: メロディ層を低音ベースシンセ音色にするか（_playBossBassMel
+                  参照。ユーザー要望「メロディーに聞こえる部分の音色を、高い
+                  シンセみたいな音じゃなくて、低いベースの音にしたい」に対応。
+                  trueの場合melTypeは無視される）
      kickVol    : キックの音量（_playKick参照）
      rumbleMellow: 地鳴りのマイルド化係数0〜1（_playGroundRumble参照。
                   こんがり度に応じた複数段階のボスBGMバッファを事前レンダ
                   リングするために引数化した。_rumbleTierForCookPct参照） */
 async function renderBGMBuffer(sampleRate, {
   bassArr    = BGM_BASS,
+  melArr     = BGM_MEL,
+  hatArr     = BGM_HAT,
+  kickSet    = BGM_KICK,
+  taikoStrongSet   = BGM_TAIKO_STRONG,
+  taikoFlourishSet = BGM_TAIKO_FLOURISH,
   melType    = 'triangle',
   bassDurMul = 1.6,
   bassDecay  = 0.10,
   useTaiko   = false,
   useRumble  = false,
-  melAcid    = false,
+  melBossBass = false,
   kickVol    = 0.45,
   useLimiter = false, // ボスBGM専用（下記コメント参照）
   rumbleMellow = 0,
 } = {}) {
-  const totalSec  = BGM_LOOP_DUR + 0.4; // 末尾にリリース余白
+  const loopDur   = BGM_BEAT * 0.5 * melArr.length; // melArrのステップ数から動的に算出
+  const totalSec  = loopDur + 0.4; // 末尾にリリース余白
   const offCtx    = new OfflineAudioContext(2, Math.ceil(sampleRate * totalSec), sampleRate);
   let dest;
   if (useLimiter) {
@@ -1926,22 +2014,22 @@ async function renderBGMBuffer(sampleRate, {
     safety.connect(offCtx.destination);
     dest = safety;
   }
-  for (let s = 0; s < BGM_MEL.length; s++) {
+  for (let s = 0; s < melArr.length; s++) {
     const t   = s * BGM_BEAT * 0.5;
     const dur = BGM_BEAT * 0.5;
-    const mel = BGM_MEL[s];
+    const mel = melArr[s];
     if (mel) {
-      if (melAcid) _playAcidMelNote(offCtx, noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], dest);
+      if (melBossBass) _playBossBassMel(offCtx, noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], dest);
       else playOsc(offCtx, melType, noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06, null, null, dest);
     }
     const bas = bassArr[s];
     if (bas) playOsc(offCtx, 'sine', noteHz(bas[0], bas[1]), t, dur * bassDurMul, bas[2], bassDecay, null, null, dest);
     if (useRumble && s === 0) _playGroundRumble(offCtx, t, dest, rumbleMellow);
-    playNoise(offCtx, t, 0.04, BGM_HAT[s], 8000, dest);
-    if (BGM_KICK.has(s)) _playKick(offCtx, t, dest, kickVol);
+    playNoise(offCtx, t, 0.04, hatArr[s], 8000, dest);
+    if (kickSet.has(s)) _playKick(offCtx, t, dest, kickVol);
     if (useTaiko) {
-      if (BGM_TAIKO_STRONG.has(s))   _playTaikoHit(offCtx, t, dest, true);
-      else if (BGM_TAIKO_FLOURISH.has(s)) _playTaikoHit(offCtx, t, dest, false);
+      if (taikoStrongSet.has(s))        _playTaikoHit(offCtx, t, dest, true);
+      else if (taikoFlourishSet.has(s)) _playTaikoHit(offCtx, t, dest, false);
     }
   }
   return offCtx.startRendering();
@@ -1968,13 +2056,13 @@ function _destroyBGMSource() {
   }
 }
 
-function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
+function _createBGMSource(startRate = 1.0, buffer = bgmBuffer, loopDur = BGM_LOOP_DUR) {
   if (!audioCtx || !buffer) return null;
   _destroyBGMSource();
   const src      = audioCtx.createBufferSource();
   src.buffer     = buffer;
   src.loop       = true;
-  src.loopEnd    = BGM_LOOP_DUR;
+  src.loopEnd    = loopDur;
   src.playbackRate.value = startRate;
   _setBgmRateJS(startRate, startRate, 0, 0); // 即時セット（ランプなし）
   src.connect(bgmGain);
@@ -1998,13 +2086,14 @@ function _rumbleTierForCookPct(pct) {
 
 /* 次にループが先頭（=地鳴りが鳴る瞬間）に戻るaudioCtx.currentTimeを返す。
    _bgmAccumAudioTime（レート変動を考慮したバッファ内積算位置）と
-   _bgmQuantizedLoopDurから算出する（ボスBGM再生中のみ意味を持つ） */
+   _bgmQuantizedLoopDurBossから算出する（呼び出し元がボスBGM再生中のみ
+   呼ぶため、常にボス側の量子化ループ長を直接使う。_updateBossRumbleTier参照） */
 function _nextBossLoopBoundaryTime() {
-  if (!audioCtx || !bgmSource || _bgmQuantizedLoopDur <= 0) return null;
+  if (!audioCtx || !bgmSource || _bgmQuantizedLoopDurBoss <= 0) return null;
   const rate = _getBgmRateJS();
   if (rate <= 0) return null;
-  const posInLoop = ((_bgmAccumAudioTime % _bgmQuantizedLoopDur) + _bgmQuantizedLoopDur) % _bgmQuantizedLoopDur;
-  return audioCtx.currentTime + (_bgmQuantizedLoopDur - posInLoop) / rate;
+  const posInLoop = ((_bgmAccumAudioTime % _bgmQuantizedLoopDurBoss) + _bgmQuantizedLoopDurBoss) % _bgmQuantizedLoopDurBoss;
+  return audioCtx.currentTime + (_bgmQuantizedLoopDurBoss - posInLoop) / rate;
 }
 
 /* tierのバッファへ、直近のループ境界（boundaryT、audioCtx.currentTime基準）で
@@ -2017,7 +2106,7 @@ function _swapBossRumbleBuffer(tier, boundaryT) {
   const newSrc = audioCtx.createBufferSource();
   newSrc.buffer = buf;
   newSrc.loop = true;
-  newSrc.loopEnd = BGM_LOOP_DUR;
+  newSrc.loopEnd = BGM_LOOP_DUR_BOSS; // この関数はボスの地鳴りマイルド化差し替え専用（常にボス側の値）
   newSrc.playbackRate.value = rate;
   newSrc.connect(bgmGain);
   newSrc.start(boundaryT, 0);
@@ -2203,7 +2292,7 @@ function startBossBGMTape(durationMs = 1400) {
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   const t = audioCtx.currentTime;
   const startRate = bgmSource ? _getBgmRateJS() : 0.001;
-  const src = _createBGMSource(startRate, bossBgmBuffer);
+  const src = _createBGMSource(startRate, bossBgmBuffer, BGM_LOOP_DUR_BOSS);
   if (!src) return;
   src.playbackRate.setValueCurveAtTime(
     _tapeRateCurve(startRate, BOSS_BGM_RATE, 'easeIn'), t, durationMs / 1000);
@@ -2316,8 +2405,16 @@ function playSE(name, atTime) {
       break;
     }
     case 'kingShoot': {
-      /* キングギヨウザ戦のリール射撃音（TB-303アシッド版、_playAcidShootHit参照） */
-      _playAcidShootHit(ctx, t);
+      /* キングギヨウザ戦、的をマークした時の音（クローズハイハット風）。
+         ユーザー要望: 「マークをセットする時の効果音を、クローズハイハットの
+         ようにしたい」。ジングルのカウントインハイハットと同じ高域ノイズ
+         バースト方式（_jingleDef参照）でタイトな一撃にする */
+      playNoise(ctx, t, 0.045, 0.28, 8500);
+      break;
+    }
+    case 'kingBeam': {
+      /* キングギヨウザ戦、ビーム発射音（スネアドラム風、_playKingBeamHit参照） */
+      _playKingBeamHit(ctx, t);
       break;
     }
     case 'bet': {
@@ -3188,6 +3285,43 @@ function _buildKingReelOC(w) {
   w._ocR = ocR;
 }
 
+/* 的の三角ポインタ先端のワールド座標。ポインタは画面の向きによらず常に的の
+   真上固定（当たり位置は hitResult 呼び出し側で常に -PI/2 を渡して揃える）。
+   drawKingReelの描画と_kingApplyHitのビーム発射元の両方から参照する共通式 */
+function _kingReelPointerPos(w) {
+  const pointer = -Math.PI / 2;
+  return { x: w.x + Math.cos(pointer) * (KING_WR + 12), y: w.y + Math.sin(pointer) * (KING_WR + 12) };
+}
+
+/* 発射待ち（マーク済みだが未発射）の的の三角ポインタに帯電演出を描く
+   （ユーザー要望: 「4つマークした状態で次のアクションが必要だとわかりにくい。
+   的を射るとその的の三角がビリビリとエネルギーを帯びる感じにしたい」）。
+   時間ベースのバケツ値を擬似乱数シードにして数十msごとにジグザグの向きを
+   切り替えることで静電気のような点滅を表現する（パーティクル・プール化は
+   的4本ぶんの極小描画のため不要、プロジェクト規約の描画最適化対象外） */
+function _drawKingReelCharge(px, py, idx) {
+  let seed = Math.floor(performance.now() / 45) + idx * 7;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.strokeStyle = Y;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = 0.5 + rnd() * 0.5;
+  for (let b = 0; b < 3; b++) {
+    const baseAng = (b / 3) * Math.PI * 2 + rnd() * 0.6;
+    const len = 6 + rnd() * 6;
+    const midAng = baseAng + (rnd() - 0.5) * 0.8;
+    const midLen = len * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(midAng) * midLen, Math.sin(midAng) * midLen);
+    ctx.lineTo(Math.cos(baseAng) * len, Math.sin(baseAng) * len);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawKingReel(w, active, idx) {
   ctx.save();
   ctx.translate(w.x, w.y);
@@ -3227,11 +3361,15 @@ function drawKingReel(w, active, idx) {
      重ならない」よう先端が KING_WR+5 に来る値に調整済み（+7 のままだと先端がリングの
      内側まで食い込んでいた。実機指摘で発覚） */
   const pointer = -Math.PI/2;
-  const px = w.x + Math.cos(pointer)*(KING_WR+12), py = w.y + Math.sin(pointer)*(KING_WR+12);
+  const { x: px, y: py } = _kingReelPointerPos(w);
   ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
   ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
   ctx.fillStyle = Y; ctx.fill();
   ctx.restore();
+  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）
+     が必要なことを視覚的に伝える。発射（_kingFireAttack）でattemptFiredが
+     立つと消える */
+  if (w.locked && _king && !_king.attemptFired) _drawKingReelCharge(px, py, idx);
   /* 当たった文字は的の下に表示（ロック前は何も出さない） */
   if (w.result) {
     ctx.save();
@@ -4184,10 +4322,11 @@ function updateGiugiu() {
   /* ATTRACT脈動: ビート同期（拍頭に一瞬だけ弱反発→すぐ引き戻し）
      getBeatPulse()に+60ms先読みを追加してギウギウ拍動の体感遅延を補正 */
   const beatPulse = (function() {
-    if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || _bgmQuantizedLoopDur <= 0) return 0;
+    const loopDur = _curQuantizedLoopDur();
+    if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || loopDur <= 0) return 0;
     const rate = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
     const pos  = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - _hwLatency + 0.06) * rate;
-    const pip  = ((pos % _bgmQuantizedLoopDur) + _bgmQuantizedLoopDur) % _bgmQuantizedLoopDur;
+    const pip  = ((pos % loopDur) + loopDur) % loopDur;
     const ph   = (((pip % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
     return Math.pow(Math.max(0, 1 - ph * 2.5), 2);
   })();
@@ -5360,6 +5499,12 @@ const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消え�
    （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
 const KING_GOOD_PCT = 0.5;
 const KING_JUST_PCT = 1.0;
+/* ビームが三角から着地先マークまで到達するのにかける時間（フレーム数）。
+   距離に関わらず全ビーム共通のこの値で進行度(age/KING_LASER_TRAVEL_FRAMES)を
+   計算するため、的とマークの距離が違っても4本とも同時に着弾する
+   （ユーザー要望: 「距離によらず、４つ同時にマークにビームが到着するように
+   したい。1/60×3フレーム程度の高速なアニメーションで」） */
+const KING_LASER_TRAVEL_FRAMES = 3;
 /* こんがり攻撃失敗（4文字不一致）のペナルティとルーレット破壊演出（ユーザー要望）:
    失敗のたびにこんがり%を少し後退させ、ルーレットにひびを1本ずつ増やす。
    KING_MAX_FAILS回失敗するとルーレット完全破壊＝敗北（_startBossDefeat） */
@@ -5416,26 +5561,24 @@ const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消える�
    保険上限（通常は発火しない） */
 const KING_CHAR_FALL_MAX_FRAMES = 180;
 const KING_CHAR_OFFSCREEN_MARGIN = 60;
-/* 的への衝突反発の物理係数（ユーザー要望: 的にヒビを入れるために運動
-   エネルギーが消費されるので、はねかえりやその後の動きの勢いが減るはず）。
-   衝突点の法線は常に真上固定（着弾点=的の縁の真上、_startKingCharBounce
-   参照）なので、bvyがそのまま法線方向、bvxがそのまま接線方向の速度成分
-   になる。RESTITUTION（反発係数）は法線方向の速度保持率、FRICTIONは
-   接線方向の速度保持率。どちらも1未満にしてエネルギー損失を表現する */
-const KING_CHAR_BOUNCE_RESTITUTION = 0.4;
-const KING_CHAR_BOUNCE_FRICTION    = 0.55;
-/* 衝突時にキング側から加える能動的な「弾き飛ばし」インパルス（ユーザー指摘:
-   反発係数によるはね返りだけだと、勢いが弱く単なる自由落下に見える。的が
-   ヒビを入れられた腹いせに文字を払いのけるような、外力による弾き出しに
-   したい）。RESTITUTION/FRICTIONによる入射速度の反射「後」に加算し、
-   「弱い自然な跳ね返り」の上に「強い能動的な一撃」を上乗せする。
-   左右方向はボス中心から見たその的のオフセット方向（ひび演出のbiasAngleと
-   同じ考え方）に払い、常に強い上向きを加えて「叩き上げて弾き飛ばす」
-   軌道にする。回転（KNOCK_ROT）は弾かれた勢いを視覚的に強調する演出で、
-   物理的な角運動量計算ではなく左右方向に応じた見た目付けの乱数 */
-const KING_CHAR_KNOCK_SPEED_X = 5;
-const KING_CHAR_KNOCK_SPEED_Y = 9;
-const KING_CHAR_KNOCK_ROT_SPD = 0.25;
+/* 的への衝突反発の物理係数（ユーザー要望: 「運動エネルギーがほぼ全て的を
+   割るために使われ、その結果、的にあたった文字はほぼ下に自由落下する動作に
+   近くしたい」）。衝突点の法線は常に真上固定（着弾点=的の縁の真上、
+   _startKingCharBounce参照）なので、bvyがそのまま法線方向、bvxがそのまま
+   接線方向の速度成分になる。RESTITUTION（反発係数）は法線方向の速度保持率、
+   FRICTIONは接線方向の速度保持率。ほぼゼロに近い値にして「衝突でほとんど
+   静止し、そこから重力だけで落ちる」動きにする（以前は逆に「はね返りが
+   弱すぎて単なる自由落下に見える」という指摘で強めていたが、今回はその
+   逆方向の要望のため差し替え） */
+const KING_CHAR_BOUNCE_RESTITUTION = 0.08;
+const KING_CHAR_BOUNCE_FRICTION    = 0.15;
+/* 衝突時にキング側から加える能動的な「弾き飛ばし」インパルス。上記と同じ
+   要望により、的が払いのけるような強い外力はほぼ無くし、わずかな残り香
+   程度に留める（0だと硬直的に見えるため、ごくわずかだけ残す）。回転
+   （KNOCK_ROT）も同様にごく小さくし、勢いよく弾かれる見た目にしない */
+const KING_CHAR_KNOCK_SPEED_X = 0.6;
+const KING_CHAR_KNOCK_SPEED_Y = 0.8;
+const KING_CHAR_KNOCK_ROT_SPD = 0.06;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -5594,8 +5737,7 @@ function _initBossBattle() {
     liveOC, half, marks, cookPct: 0, scale,
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
-    tx: W / 2, ty: reelY,
-    reels, reelIdx: 0, resultTimer: null, resultMatched: false, charWeights,
+    reels, reelIdx: 0, awaitingFire: false, attemptFired: false, resultTimer: null, resultMatched: false, charWeights,
     failCount: 0, pendingDefeat: false, missAttemptToken: null,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
@@ -5765,17 +5907,18 @@ function _kingCurrentFlightPos(f) {
 
 /* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
    （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
-   4本目が確定した時点で判定: こ・ん・が・り全一致なら _kingApplyHit で自動発射、
-   不一致なら何も起きない。いずれの場合も4本の結果文字を表示したまま静止させ、
-   その後に再スピンする（_updateBossBattle が resultTimer を監視。解放条件は
-   通常モードの的判定＝KING_RESULT_MIN_WAIT + onBeatGrid() と同じ仕様）。
-   確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
-   （ミス時のペナルティは現状なし。将来M3でここに追加する）。
+   4本目は的をマークするだけで発射しない（ユーザー要望: 「4つの的を射ると
+   マークされるだけにして、その後、一回タップ/クリック/キー押下したタイミングで
+   マークした場所にビームを発射するようにしたい」）。実際の判定・発射は
+   awaitingFire を立てて _kingFireAttack に委ね、次の入力（handleGameClick の
+   phase==='boss'分岐参照）で実行する。
    決定した文字はここで即バックグラウンドの飛翔演出（_spawnKingCharFlight）に渡す。
    演出自体は _updateKingCharFlights が矢を射る操作（リールのロック）とは無関係に
-   毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える */
+   毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える。
+   'wait'状態（着地して結果待ち）にはタイムアウトが無いため、発射までの
+   待機がどれだけ延びても安全（_updateKingCharFlights参照） */
 function _kingReelShoot(inputPerfMs) {
-  if (phase !== 'boss' || !_king || _king.reelIdx >= 4) return;
+  if (phase !== 'boss' || !_king || _king.reelIdx >= 4 || _king.awaitingFire) return;
   const w = _king.reels[_king.reelIdx];
   w.result = hitResult(w, -Math.PI/2); // 的の三角ポインタは常に真上（drawKingReel参照）
   w.locked = true;
@@ -5784,9 +5927,22 @@ function _kingReelShoot(inputPerfMs) {
   _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   _spawnKingCharFlight(w, _king.reelIdx);
   _king.reelIdx++;
-  if (_king.reelIdx >= 4) {
-    const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
-    if (matched) {
+  if (_king.reelIdx >= 4) _king.awaitingFire = true; // 4本マーク完了。発射は次の入力で_kingFireAttackが行う
+}
+
+/* 4本マーク後の発射入力（handleGameClickのphase==='boss'分岐、_king.awaitingFire
+   がtrueの間はこちらに委譲される）。こ・ん・が・り全一致なら _kingApplyHit で
+   発射、不一致なら何も起きない。いずれの場合も4本の結果文字を表示したまま
+   静止させ、その後に再スピンする（_updateBossBattle が resultTimer を監視。
+   解放条件は通常モードの的判定＝KING_RESULT_MIN_WAIT + onBeatGrid() と同じ仕様）。
+   確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
+   （ミス時のペナルティは現状なし。将来M3でここに追加する） */
+function _kingFireAttack() {
+  if (phase !== 'boss' || !_king || !_king.awaitingFire) return;
+  _king.awaitingFire = false;
+  _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
+  const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
+  if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
       /* こんがり%はタップごとの精度で直接積算する（JUST=+1.0%・GOOD=+0.5%・
          OK以下=0%）。今回の4タップぶんの候補焦げ跡（スポーン時に
@@ -5802,7 +5958,7 @@ function _kingReelShoot(inputPerfMs) {
         _king.marks.push(f.markRef);
         _king.cookPct = Math.min(100, _king.cookPct + (f.tier === 'just' ? KING_JUST_PCT : KING_GOOD_PCT));
       }
-      _kingApplyHit(avgScore);
+      _kingApplyHit(avgScore, thisAttempt);
       if (_king.cookPct >= 100) _startBossVictory();
     } else {
       /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
@@ -5842,7 +5998,6 @@ function _kingReelShoot(inputPerfMs) {
        全て画面外に消えるまで、次のトライができないようにしてほしい」。
        _king側に保持し、_updateBossBattleの再スピン可否判定で参照する */
     _king.missAttemptToken = attemptToken;
-  }
 }
 
 /* 4本とも即座に再スピン（ヒット・ミス問わず毎回呼ばれる） */
@@ -5853,6 +6008,7 @@ function _respinKingReels() {
     _king.reels[i] = _createKingReel(x, y, _king.charWeights[i]); // 的ごとの現在の配分を引き継ぐ
   }
   _king.reelIdx = 0;
+  _king.attemptFired = false; // 次トライの帯電演出（drawKingReel参照）を解禁
 }
 
 /* 的posIdxで文字charが命中した際、その的（他の3的とは独立）の配分を少し
@@ -5880,17 +6036,27 @@ function _adjustKingCharWeight(posIdx, char) {
 
 /* こんがり一致成立時の焼き攻撃演出（レーザー・SE・JUST/GOOD/OKラベル）。
    こんがり%・焦げ跡サイズはタップ個別の精度で決まる（_spawnKingCharFlight・
-   _kingReelShoot参照）。ここでのscore（4タップ平均）は見た目のフィードバック
-   （レーザー色・SE・ラベル）にのみ使う */
-function _kingApplyHit(score) {
+   _kingReelShoot参照）。ここでのscore（4タップ平均）はSE・ラベル表示のみに使う。
+   レーザーは的ごと・マークごとに個別発射する（ユーザー要望: 「射った的の三角
+   からそれぞれ対応するマークに向かってビームを発射したい。ビームの色はマーク
+   の色と一致させたい」）。マークが無い（OK以下）タップは対応するビームも無し
+   ＝的とマークが1:1で対応する見た目を保つ */
+function _kingApplyHit(score, flights) {
   let label = '';
   if      (score >= 0.667) label = 'JUST!';
   else if (score >= 0.333) label = 'GOOD';
   else if (score > 0)      label = 'OK';
-  const [col, glow] = _syncBarColor(score);
-  _kingLasers.push({ x1: _king.tx, y1: _king.ty, x2: _king.bx, y2: _king.by,
-    life: 14, maxLife: 14, color: col, glow, hit: score > 0 });
-  playSE(score > 0 ? 'lock' : 'miss');
+  for (const f of flights) {
+    if (!f.markRef) continue; // 焦げ跡が無いタップはビームも発射しない
+    const p1 = _kingReelPointerPos(_king.reels[f.reelIdx]);
+    const p2 = _kingFlightTargetPos(f);
+    /* マークの色＝そのタップの飛翔文字の色（drawKingCharFlightsのf.score基準の
+       色付けと同一。_syncBarColor(f.score)）にビーム色を一致させる */
+    const [col, glow] = _syncBarColor(f.score);
+    _kingLasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
+      age: 0, life: 14, maxLife: 14, color: col, glow, hit: true });
+  }
+  playSE(score > 0 ? 'kingBeam' : 'miss');
   if (label) { syncJustLabel = label; syncJustTimer = 50; syncJustScore = score; }
 }
 
@@ -5993,11 +6159,11 @@ function _updateKingCharFlights() {
         const jitter = (Math.random() - 0.5) * 0.5;
         f.bvx = f.bvx * KING_CHAR_BOUNCE_FRICTION + jitter;
         f.bvy = -f.bvy * KING_CHAR_BOUNCE_RESTITUTION;
-        /* 弾き飛ばしインパルスを上乗せする（ユーザー指摘: 反発係数によるはね返り
-           だけだと勢いが弱く単なる自由落下に見える。的が払いのけるような能動的な
-           一撃を追加したい）。左右方向はボス中心から見たその的のオフセット方向
-           （ひび演出のbiasAngleと同じ考え方、_addKingReelCrackAtCollision参照）
-           に払い、上方向は常に強く跳ね上げる。回転は弾かれた勢いの視覚的強調 */
+        /* 弾き飛ばしインパルスをわずかに上乗せする（KING_CHAR_KNOCK_SPEED_X/Y
+           定義部参照: ユーザー要望で運動エネルギーの大半を的の破壊に使わせ、
+           ほぼ自由落下に近づけたため、この上乗せもごく小さい値に変更済み）。
+           左右方向はボス中心から見たその的のオフセット方向（ひび演出の
+           biasAngleと同じ考え方、_addKingReelCrackAtCollision参照）に払う */
         const reel = _king.reels[f.reelIdx];
         const knockDir = reel ? (Math.sign(reel.x - _king.dbx) || 1) : 1;
         f.bvx += knockDir * KING_CHAR_KNOCK_SPEED_X;
@@ -6078,7 +6244,7 @@ function _updateBossBattle() {
       _respinKingReels();
     }
   }
-  for (const l of _kingLasers) l.life--;
+  for (const l of _kingLasers) { l.age++; l.life--; }
   swapRemove(_kingLasers, p => p.life > 0);
 }
 
@@ -6127,16 +6293,21 @@ function drawBossBattle() {
      表示し続け、的の絵柄だけ_kingShatterの破片描画に差し替える
      （drawKingReelShatter参照） */
   if ((phase !== 'boss' && phase !== 'bossShatter') || !_king) return;
-  /* レーザー（層状ストローク・shadowBlur不使用の描画規約に準拠） */
+  /* レーザー（層状ストローク・shadowBlur不使用の描画規約に準拠）。
+     距離に関わらずKING_LASER_TRAVEL_FRAMES（時間基準の進行度）で先端を
+     x1,y1→x2,y2へ進めるため、的とマークの距離が違っても4本が同時に着弾する
+     （ユーザー要望参照、KING_LASER_TRAVEL_FRAMES定義部） */
   for (const l of _kingLasers) {
+    const t = Math.min(1, l.age / KING_LASER_TRAVEL_FRAMES);
+    const tx = l.x1 + (l.x2 - l.x1) * t, ty = l.y1 + (l.y2 - l.y1) * t;
     const a = l.life / l.maxLife;
     ctx.save();
     ctx.globalAlpha = a * 0.5;
     ctx.strokeStyle = l.glow; ctx.lineWidth = l.hit ? 10 : 5; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(tx, ty); ctx.stroke();
     ctx.globalAlpha = a;
     ctx.strokeStyle = l.color; ctx.lineWidth = l.hit ? 4 : 2;
-    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(tx, ty); ctx.stroke();
     ctx.restore();
   }
   /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用）。
@@ -6890,7 +7061,7 @@ function _updateKingReelShatter() {
      と同様の継続処理） */
   if (_king) _easeKingXform();
   _updateKingCharFlights();
-  for (const l of _kingLasers) l.life--;
+  for (const l of _kingLasers) { l.age++; l.life--; }
   swapRemove(_kingLasers, p => p.life > 0);
 
   const s = _kingShatter;
@@ -9293,9 +9464,14 @@ function togglePause() {
         setTimeout(() => {
           if (isPaused || NO_BGM_SOURCE_PHASES.has(phase)) return;
           _destroyBGMSource();
-          const loopDur = _bgmQuantizedLoopDur > 0 ? _bgmQuantizedLoopDur : BGM_LOOP_DUR;
+          /* 再開するバッファが通常/ボスどちらかで量子化ループ長も切り替える
+             （_resumeBgmBufの選定と同じ_bgmIsBoss基準。5拍子化でボスのループ長が
+             通常と異なるため、ここを揃えないとoffsetがずれる） */
+          const defaultLoopDur = _bgmIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR;
+          const quantLoopDur   = _curQuantizedLoopDur();
+          const loopDur = quantLoopDur > 0 ? quantLoopDur : defaultLoopDur;
           const offset  = _pauseBgmPos % loopDur;
-          const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf);
+          const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf, defaultLoopDur);
           if (src) {
             const t = audioCtx.currentTime;
             src.start(t, offset);
@@ -9406,7 +9582,10 @@ function handleGameClick(inputPerfMs) {
     if (_omen && _omen.step >= 7 && _omen.timer > 20) _initBossBattle();
     return;
   }
-  if (phase === 'boss') { _kingReelShoot(inputPerfMs); return; }
+  if (phase === 'boss') {
+    if (_king && _king.awaitingFire) _kingFireAttack(); else _kingReelShoot(inputPerfMs);
+    return;
+  }
   if (phase === 'bossShatter') {
     /* 的の破砕演出中は入力を無視（_updateKingReelShatterが自動的に
        敗北確定（_startBossDefeat）へ進める） */
