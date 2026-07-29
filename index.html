@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.53';
+const VERSION = 'v5.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3240,6 +3240,24 @@ function _createKingReel(x, y, weights) {
   return w;
 }
 
+/* ひびの位置を的の絵柄に固定するための基準となる文字。的の segs は再スピンの
+   たびにシャッフルされ、開始角も w.rot も作り直されるため、ひびを「ワールド角
+   −そのときのw.rot」で保存すると次のトライで別の場所へ移動してしまう
+   （ユーザー指摘: 「トライごとにヒビが回転移動しているかのように見える」）。
+   セグメント配置そのものを基準にすれば絵柄に対する相対位置が保たれるので、
+   この文字のエリアの開始角を原点としてひびの角度を保存・復元する
+   （ユーザー要望: 「『こ』のエリアの始まり部分を基準として、ヒビは同じ相対
+   位置にあるようにしたい」）。どこにひびが入るかの仕様は従来どおり
+   「文字が当たったところ」で変えていない */
+const KING_CRACK_ANCHOR_CHAR = 'こ';
+
+/* 的ローカル座標系（w.rotを含まない、segs.startと同じ系）における
+   基準文字エリアの開始角。segsは必ず4文字すべてを含むが、防御的に0で代替する */
+function _kingReelAnchorAngle(w) {
+  const seg = w && w.segs && w.segs.find(s => s.char === KING_CRACK_ANCHOR_CHAR);
+  return seg ? seg.start : 0;
+}
+
 /* 的のひび割れ（破壊演出）用の先細りウェッジ（扇形の破片）ポリゴンを1個生成する。
    ユーザー要望: 「ヒビが入るのは、飛んできた文字が的に当たった場所を起点に
    したい。的の、文字が当たった縁部分から、的の中心方向に向かって割れる。
@@ -3359,19 +3377,21 @@ function drawKingReel(w, active, idx) {
   ctx.rotate(w.rot);
   ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
   /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ
-     向けて先細りに割れる（_createKingCrackWedge参照）。ポリゴン自体は着弾
-     時点で的のローカル座標系（w.rotを差し引いた角度）で生成済みのため、
-     segsの回転描画と同じこの ctx.rotate(w.rot) の内側で描くことで、的が
-     回転する（再スピン後の回転中も含む）とひびも一緒に回転する
-     （ユーザー指摘: 「的とクラック表示が独立してしまっている。クラックごと
-     的が回転するはず」に対応。以前ここをctx.rotateの外側＝ワールド固定で
-     描いていたため、的が回っているのにひびだけ画面上で静止して見えていた）。
-     的自体は再スピンのたびに新しいオブジェクトへ作り直されるが、ひびは
-     _king.reelCracks[idx]に的スロット単位で蓄積するため、再スピンをまたいで
-     消えずに残る（新しい的の現在のw.rotでそのまま回転描画されるだけ） */
+     向けて先細りに割れる（_createKingCrackWedge参照）。この ctx.rotate(w.rot)
+     の内側で描くことで、的が回転する（再スピン後の回転中も含む）とひびも
+     一緒に回転する（ユーザー指摘: 「的とクラック表示が独立してしまっている。
+     クラックごと的が回転するはず」に対応）。
+     さらにここで基準文字エリアの開始角ぶんを回す。ポリゴンはその開始角を原点
+     とした相対角で保存されているため（_addKingReelCrackAtCollision参照）、
+     現在の的の開始角を足し戻すことで絵柄に対する位置が一定になる。
+     的は再スピンのたびに新しいrot・新しいセグメント配置で作り直されるが、
+     ひびは_king.reelCracks[idx]にスロット単位で蓄積して残るため、この
+     足し戻しが無いとトライごとにひびが絵柄の上を回転移動してしまう */
   if (_king && _king.reelCracks && idx != null) {
     const cracks = _king.reelCracks[idx];
     if (cracks && cracks.length) {
+      ctx.save();
+      ctx.rotate(_kingReelAnchorAngle(w));
       ctx.fillStyle = 'rgba(12,9,7,0.82)';
       for (const poly of cracks) {
         ctx.beginPath();
@@ -3380,6 +3400,7 @@ function drawKingReel(w, active, idx) {
         ctx.closePath();
         ctx.fill();
       }
+      ctx.restore();
     }
   }
   ctx.restore();
@@ -6205,7 +6226,14 @@ function _addKingReelCrackAtCollision(f) {
   if (!rw) return;
   const biasAngle = Math.max(-0.35, Math.min(0.35, (rw.x - _king.dbx) / 220));
   const worldAngle = -Math.PI / 2 + biasAngle;
-  _king.reelCracks[f.reelIdx].push(_createKingCrackWedge(worldAngle - rw.rot));
+  /* 保存する角度は「基準文字エリアの開始角から見た相対角」にする
+     （KING_CRACK_ANCHOR_CHAR参照）。w.rotだけを引いた的ローカル角のままだと、
+     再スピンで的が新しいrot・新しいセグメント配置に作り直された際に、
+     蓄積済みのひびが絵柄に対して回転移動して見えてしまう。
+     描画側（drawKingReel）が現在の的の基準角を足し戻すため、着弾直後は
+     文字が当たったその場所に、以後も絵柄に対して同じ位置に出続ける */
+  const localAngle = worldAngle - rw.rot - _kingReelAnchorAngle(rw);
+  _king.reelCracks[f.reelIdx].push(_createKingCrackWedge(localAngle));
 }
 
 /* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
