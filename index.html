@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.52';
+const VERSION = 'v5.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5311,8 +5311,13 @@ const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同�
    2行まとめて1つのメッセージとして扱う。フェードイン・フェードアウトも
    行ごとではなく全体で1回ずつ（誕生予告drawBossOmenの「過去行を薄く残して
    積んでいく」見せ方とは意図的に別物にする）。
-   FADEはイン・アウト共通の長さ、HOLDは全文を表示したまま保持する長さ */
-const _DEFEAT_OUTRO_MSG_FADE = 22;
+   HOLDは全文を表示したまま保持する長さ。
+   フェードアウトはイン側と同じ長さでは短すぎて余韻が残らないという指摘を
+   受け、イン側と分離して3倍の長さでゆっくり消えるようにした。さらに
+   easeOutカーブ（_easeF参照）を掛けることで、消え際の薄い状態が長く尾を
+   引くようにしている（線形だと最後まで一定速度で消えて余韻が出にくい） */
+const _DEFEAT_OUTRO_MSG_FADE_IN  = 22;
+const _DEFEAT_OUTRO_MSG_FADE_OUT = 66;
 const _DEFEAT_OUTRO_MSG_HOLD = 96;
 
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
@@ -5466,22 +5471,25 @@ function _updateBossDefeatOutro() {
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
   } else {
     /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
-       行ごとの出し分けはしない（_DEFEAT_OUTRO_MSG_FADE/HOLD の定義部参照）。
+       行ごとの出し分けはしない（_DEFEAT_OUTRO_MSG_FADE_IN/OUT・HOLD の定義部参照）。
        描画側が判断に迷わないよう、透明度はここで確定させて o.msgAlpha に持たせる
        （update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針） */
-    const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE + _DEFEAT_OUTRO_MSG_HOLD;
-    if (o.timer < _DEFEAT_OUTRO_MSG_FADE) {
-      o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE;
+    const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE_IN + _DEFEAT_OUTRO_MSG_HOLD;
+    if (o.timer < _DEFEAT_OUTRO_MSG_FADE_IN) {
+      o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE_IN;
     } else if (o.timer < fadeOutStart) {
       o.msgAlpha = 1;
     } else {
-      o.msgAlpha = Math.max(0, 1 - (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE);
+      /* 消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で
+         消えてしまい余韻が出ない）。p=消化率0〜1に対し 1-sin(p*π/2) */
+      const p = Math.min(1, (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE_OUT);
+      o.msgAlpha = Math.max(0, 1 - _easeF(p, 'easeOut'));
     }
     /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ
        戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
        _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレーム
        この条件を満たし続けて構わない */
-    if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE) {
+    if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE_OUT) {
       _startScreenFade(() => _kingBattleEnd());
     }
   }
