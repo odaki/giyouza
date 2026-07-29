@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.51';
+const VERSION = 'v5.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -911,6 +911,17 @@ let shotCount = 0;    // 矢を放った累計本数
 let jackpotCount = 0; // 大当たり累計回数
 let kingGyozaMeter = 0; // 画面外へ退場した落下ギヨウザ累計（キングギヨウザ蓄積・game_stats永続化）
 let _trialKingGain = 0; // 現在のトライでking値に加算した量（KING_METER_TRIAL_CAPの上限判定用、initで0リセット）
+/* こんがり失敗（_startBossDefeat）で没収された所持ギヨウザの累計プール。
+   こんがり達成（_startBossVictory）時に、その戦闘の蓄積メーター分と合わせて
+   まとめて所持ギヨウザへ返す（ユーザー要望: 「過去にこんがり失敗で奪われた
+   ギヨウザもプールしておいて、こんがり達成時にプラスする」）。
+   返却した時点で0に戻る。複数回の敗北をまたいで貯まるため game_stats へ永続化する */
+let kingLostPool = 0;
+/* 戦闘開始時点の蓄積メーター値（_initBossBattleがメーターを0にリセットする前に退避）。
+   こんがり達成時の返却額に使う（ユーザー要望: 「キング蓄積メーターの値だけ
+   所持ギヨウザにプラス」）。出現閾値KING_GYOZA_THRESHOLD以上＝1000+アルファになる。
+   戦闘中しか意味を持たない一時値なので永続化しない */
+let _kingMeterAtBattleStart = 0;
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
 let trueEndingSeen = false; // 真エンディングを一度視聴済みか（初回自動再生の可否・実績パネルの再生ボタン表示可否に使う）
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
@@ -2605,6 +2616,7 @@ function lsLoadStats() {
       if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
       if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
       if (typeof o.kingGyozaMeter === 'number') kingGyozaMeter = o.kingGyozaMeter;
+      if (typeof o.kingLostPool   === 'number') kingLostPool   = o.kingLostPool;
       if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
     }
   } catch(e) {}
@@ -2612,7 +2624,7 @@ function lsLoadStats() {
   if (_KING_DEBUG !== null) kingGyozaMeter = _KING_DEBUG;
 }
 function lsSaveStats() {
-  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, trueEndingSeen });
+  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen });
   _idle(() => { try { localStorage.setItem(LS_STATS, s); } catch(e) {} });
 }
 /* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数
@@ -5645,6 +5657,7 @@ let _steamSprite = null; // 湯気用の柔らかい放射状グラデーショ�
    （_startTrueEnding参照） */
 let _pendingTrueEnding = false;
 let _bossVictoryTimer = 0;
+let _bossVictoryWonCoins = 0; // こんがり達成で返却したギヨウザ数（勝利画面の表示用、_startBossVictory参照）
 let _bossDefeatTimer = 0;
 let _bossDefeatShrinkTimer = 0;
 let _scorchBlotSprite = null;
@@ -5696,7 +5709,12 @@ function _initBossBattle() {
   /* 蓄積メーターは戦闘開始時点でリセット（ボスは蓄積そのものが実体化したもの）。
      ここでリセットしないと勝敗に関わらず次のトライ終了直後に即再発動する
      （リネーム時にリセット処理の移し忘れで実際に発生したバグ・M2検証で発覚）。
-     OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットする。 */
+     OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットする。
+     リセット前の値は_kingMeterAtBattleStartへ退避する。こんがり達成時に
+     「このキングに取り込まれていたギヨウザ」として所持数へ返すため
+     （ユーザー要望、_startBossVictory参照）。ボスは閾値到達で出現するので
+     必ずKING_GYOZA_THRESHOLD以上＝1000+アルファになる */
+  _kingMeterAtBattleStart = kingGyozaMeter;
   kingGyozaMeter = 0;
   lsSaveStats();
   if (typeof OffscreenCanvas === 'undefined' || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
@@ -6519,6 +6537,21 @@ function _startBossVictory() {
   phase = 'bossVictory';
   _bossVictoryTimer = 0;
   if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
+  /* こんがり達成の報酬（ユーザー要望）: このキングの実体である蓄積メーター分
+     （_kingMeterAtBattleStart＝1000+アルファ）と、過去の敗北で没収されて
+     プールされていた分（kingLostPool）をまとめて所持ギヨウザへ返す。
+     「キングに取り込まれていたギヨウザが、こんがり焼けて解放される」という
+     筋立て。プールは返した時点で0に戻す（ユーザー指示）。
+     返却額は勝利画面の表示にも使うため_bossVictoryWonCoinsへ控える（_kingは
+     復帰時にnullになるので、そちらには持たせない＝真実の源を1つに保つ） */
+  const won = _kingMeterAtBattleStart + kingLostPool;
+  coins += won;
+  kingLostPool = 0;
+  _kingMeterAtBattleStart = 0; // 二重取得防止（次戦の_initBossBattleで再設定される）
+  _bossVictoryWonCoins = won;
+  lsSave();
+  lsSaveStats();
+  checkCoinsAch(); // 返却で所持数が跳ね上がるため実績判定を回す
   launchFireworks();
   /* BGMをここで止め、達成感のある専用ファンファーレを鳴らす。従来は通常モードの
      jackpot（stopBGM+2秒後に自動再開）を流用しており、勝利演出の最中にボスBGM
@@ -6572,6 +6605,15 @@ function drawBossVictory() {
     ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
     : (IS_PORTRAIT ? 90 : 70);
   outText('こんがり キングギヨウザ！', W / 2, titleY, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
+  /* 返却されたギヨウザ数の表示。位置・書式・出るタイミングは敗北画面の没収
+     メッセージ（drawBossDefeat）と対になるよう揃えてある。所持数表示自体も
+     coinsDispのカウントアップで増えていくが、それだけだと「なぜ増えたのか」が
+     分からないため理由を明示する */
+  if (_bossVictoryTimer > 40 && _bossVictoryWonCoins > 0) {
+    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    outText(`ギヨウザ ${fmt(_bossVictoryWonCoins)}個が 解放された！`, W / 2, Math.max(H - 80, titleY + 40),
+      '#ffe9a8', 'rgba(60,20,0,0.85)', 4);
+  }
   if (_bossVictoryTimer > 90) {
     _drawBottomPillBadge('CONTINUE');
   }
@@ -7206,7 +7248,12 @@ function _startBossDefeat() {
     const lost = Math.ceil(coins / 2);
     coins -= lost;
     _king.lostCoins = lost; // 敗北画面での表示用（_kingBattleEndでのちに_kingがnullになるため先に記録）
+    /* 没収分はキングに取り込まれたものとしてプールし、いつかこんがり達成した
+       時にまとめて返す（ユーザー要望）。敗北を重ねるほどプールが厚くなり、
+       達成時の見返りが大きくなる。永続化はlsSaveStats側 */
+    kingLostPool += lost;
     lsSave();
+    lsSaveStats();
   }
   /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、
      予兆演出・通常ゲームオーバーと同じ手法の流用）。以前はBGMが鳴りっぱなしで
