@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.49';
+const VERSION = 'v5.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1047,7 +1047,7 @@ let bossBgmBuffers = null;  // [tier0(最も凶暴)..tierN-1(最もマイルド)
 let _bossRumbleTier = 0;        // 現在再生中バッファの段階
 let _bossRumblePendingTier = null; // 次のループ境界間近になったら切り替える予約段階
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
-let _bgmIsBoss = false;     // 現在鳴っているのがboss用バッファかどうか（startBGMTape参照）
+let _bgmIsBoss = false;     // 現在鳴っているのがboss用バッファかどうか（_createBGMSourceがbufferから導出。直接代入しないこと）
 let bgmPendingStart = false;// バッファ未完時にstartBGMが呼ばれた場合のフラグ
 let bgmRestartTimer = null; // SE後のBGM再開pending timer（stopBGMでキャンセル）
 let masterGain = null;      // 全音声の親gainノード（ミュート制御）
@@ -1327,7 +1327,7 @@ function getAudioCtx() {
         taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
         bassDurMul: 0.85, bassDecay: 0.05,
         useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
-        useLimiter: true, // ステップ0の同時発音でピーク1.6超のためコンプレッサー必須
+        useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
         rumbleMellow: mellow,
       }).then(buf => {
         bossBgmBuffers[tier] = buf;
@@ -1556,16 +1556,13 @@ const BGM_BASS = [
    - ペンタトニックの外側の音(A#)を使い、A2/A#2の半音を全ステップ交互連打
      する不協和オスティナートに変更（ジョーズ的な「迫り来る」緊張の定番技法）
    - 再生レートは0.9倍→1.2倍（減速ではなく加速）
-   メロディの音色はノコギリ波に差し替え、ループ頭に低音の地鳴りも追加する
+   メロディの音色は専用音色に差し替え、ループ頭に低音の地鳴りも追加する
    （当初はサイレン風の上昇スイープだったが、実機評価で「耳障り」との指摘が
-   あり地鳴りに変更）（renderBGMBuffer の melType/useRumble 引数、
-   _playGroundRumble 参照） */
+   あり地鳴りに変更）（renderBGMBuffer の melBossBass/useRumble 引数、
+   _playGroundRumble 参照）。
+   なお現在のベースラインは後日の和声調整でA2/E2のパワーコードへ移行済み
+   （BGM_BASS_BOSS_7 参照）。上記のA#による不協和路線はその時点で終了している */
 const BOSS_BGM_RATE = 1.2;
-/* ボス戦BGM専用: 和太鼓の強打をループの頭・折り返し（ステップ0・8）に絞り、
-   不協和ベースオスティナートの頭拍と重ねて一撃の重みを出す（合いの手の
-   フレーズ感より、ベース連打と噛み合う「一発の衝撃」を優先した） */
-const BGM_TAIKO_STRONG   = new Set([0, 8]);
-const BGM_TAIKO_FLOURISH = new Set();
 /* ハイハット: 偶数ステップ=強, 奇数=弱 */
 const BGM_HAT = [0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06,
                  0.16,0.06,0.16,0.06, 0.16,0.06,0.16,0.06];
@@ -1574,7 +1571,6 @@ const BGM_KICK = new Set([0,2,4,6,8,10,12,14]);
 /* 1ループの長さ（秒）*/
 const BGM_LOOP_DUR = BGM_BEAT * 0.5 * BGM_MEL.length; // ≈3.158s
 const BEAT_DIV4    = BGM_BEAT / 4;  // 16分音符 ≈ 0.099s
-const BEAT_DIV3    = BGM_BEAT / 3;  // 8分3連   ≈ 0.132s
 
 /* ── キングギヨウザ戦BGM: 7拍子版（ユーザー要望「キングギヨウザ戦のBGMを
    5拍子にできませんか」→ 参考曲の紹介を経て「5拍子を7拍子に作り直す」に変更。
@@ -1942,12 +1938,13 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
    optsでボス戦用の差し替え要素をまとめて指定できる:
      bassArr    : ベースラインの音符配列（BGM_BASS / BGM_BASS_BOSS_7）
-     melArr/hatArr/kickSet/taikoStrongSet/taikoFlourishSet: メロディ・
-                  ハイハット・キック・和太鼓のパターン配列（通常BGM_MEL等）。
-                  ステップ数はmelArr.lengthから動的に決まる（ボス戦7拍子化
-                  でmelArr等の長さが通常と異なるため。BGM_MEL_BOSS定義部参照）
-     melType    : メロディのオシレーター波形（通常='triangle'、ボスは
-                  角のある鋭さを出すため'sawtooth'）
+     melArr/hatArr/kickSet: メロディ・ハイハット・キックのパターン配列
+                  （通常BGM_MEL等）。ステップ数はmelArr.lengthから動的に決まる
+                  （ボス戦7拍子化でmelArr等の長さが通常と異なるため。
+                  BGM_MEL_BOSS定義部参照）
+     taikoStrongSet/taikoFlourishSet: 和太鼓を鳴らすステップ集合（useTaiko時のみ
+                  参照）。和太鼓を使うのはボス戦だけなので既定値は持たせず、
+                  使う側が必ず明示的に渡す
      bassDurMul/bassDecay: ベース音符の長さ・減衰（ボスは全ステップ連打の
                   オスティナートのため、通常より短く切ってオーバーラップに
                   よる濁りを防ぐ）
@@ -1956,7 +1953,7 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
      melBossBass: メロディ層を低音ベースシンセ音色にするか（_playBossBassMel
                   参照。ユーザー要望「メロディーに聞こえる部分の音色を、高い
                   シンセみたいな音じゃなくて、低いベースの音にしたい」に対応。
-                  trueの場合melTypeは無視される）
+                  falseなら通常BGMのtriangle波playOsc）
      kickVol    : キックの音量（_playKick参照）
      rumbleMellow: 地鳴りのマイルド化係数0〜1（_playGroundRumble参照。
                   こんがり度に応じた複数段階のボスBGMバッファを事前レンダ
@@ -1966,9 +1963,8 @@ async function renderBGMBuffer(sampleRate, {
   melArr     = BGM_MEL,
   hatArr     = BGM_HAT,
   kickSet    = BGM_KICK,
-  taikoStrongSet   = BGM_TAIKO_STRONG,
-  taikoFlourishSet = BGM_TAIKO_FLOURISH,
-  melType    = 'triangle',
+  taikoStrongSet   = null,
+  taikoFlourishSet = null,
   bassDurMul = 1.6,
   bassDecay  = 0.10,
   useTaiko   = false,
@@ -1984,7 +1980,8 @@ async function renderBGMBuffer(sampleRate, {
   let dest;
   if (useLimiter) {
     /* ボス版はステップ0で地鳴り・和太鼓・キック・ベース・メロディが同時に鳴り、
-       単純合算だとピーク振幅が1.6を超えてデジタルクリッピングしていた（実機指摘:
+       単純合算だとピーク振幅が1.6を超えてデジタルクリッピングしていた（7拍子化・
+       和声調整後の実測ではリミッター無しで約2.72、有りで0.74）（実機指摘:
        「耳障りなキューという高音」「重低音になっていない」の直接原因。
        クリッピングの高調波歪みが地鳴りの低音を覆い隠し、耳障りな高音成分を
        生んでいた）。DynamicsCompressorNodeで疑似リミッターとして働かせる。 */
@@ -2020,7 +2017,7 @@ async function renderBGMBuffer(sampleRate, {
     const mel = melArr[s];
     if (mel) {
       if (melBossBass) _playBossBassMel(offCtx, noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], dest);
-      else playOsc(offCtx, melType, noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06, null, null, dest);
+      else playOsc(offCtx, 'triangle', noteHz(mel[0], mel[1]), t, dur * 0.85, mel[2], 0.06, null, null, dest);
     }
     const bas = bassArr[s];
     if (bas) playOsc(offCtx, 'sine', noteHz(bas[0], bas[1]), t, dur * bassDurMul, bas[2], bassDecay, null, null, dest);
@@ -2028,8 +2025,8 @@ async function renderBGMBuffer(sampleRate, {
     playNoise(offCtx, t, 0.04, hatArr[s], 8000, dest);
     if (kickSet.has(s)) _playKick(offCtx, t, dest, kickVol);
     if (useTaiko) {
-      if (taikoStrongSet.has(s))        _playTaikoHit(offCtx, t, dest, true);
-      else if (taikoFlourishSet.has(s)) _playTaikoHit(offCtx, t, dest, false);
+      if (taikoStrongSet?.has(s))        _playTaikoHit(offCtx, t, dest, true);
+      else if (taikoFlourishSet?.has(s)) _playTaikoHit(offCtx, t, dest, false);
     }
   }
   return offCtx.startRendering();
@@ -2056,13 +2053,26 @@ function _destroyBGMSource() {
   }
 }
 
-function _createBGMSource(startRate = 1.0, buffer = bgmBuffer, loopDur = BGM_LOOP_DUR) {
+/* BGMソースを生成する。通常バッファかボスバッファかは「渡されたbufferそのもの」
+   から判定し、_bgmIsBoss と loopEnd の両方をここで確定させる。
+   実機報告で発覚した不具合の再発防止（水平展開）: 以前は _bgmIsBoss の false 化が
+   startBGMTape() の一分岐にしか無く、ボス勝利→真エンディング→タイトル復帰の経路
+   （_kingBattleEnd を通らない）でフラグが true のまま残っていた。その状態で通常
+   ゲームを始めてポーズ→再開すると、復帰処理が _bgmIsBoss を見てボス用バッファを
+   選び直すため、通常プレイ中にボス戦BGMが鳴り出していた。加えて 7拍子化で
+   ループ長が通常/ボスで変わったため、_curQuantizedLoopDur() 経由のビート判定も
+   道連れでずれていた。
+   「今どのバッファが鳴っているか」はソースの属性であって演出関数の都合ではない
+   ため、唯一の生成箇所であるここで buffer から導出する（呼び出し側がフラグと
+   ループ長を矛盾なく渡す、という守りにくい約束を無くす） */
+function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
   if (!audioCtx || !buffer) return null;
   _destroyBGMSource();
   const src      = audioCtx.createBufferSource();
   src.buffer     = buffer;
   src.loop       = true;
-  src.loopEnd    = loopDur;
+  _bgmIsBoss     = (buffer !== bgmBuffer);
+  src.loopEnd    = _bgmIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR;
   src.playbackRate.value = startRate;
   _setBgmRateJS(startRate, startRate, 0, 0); // 即時セット（ランプなし）
   src.connect(bgmGain);
@@ -2278,7 +2288,6 @@ function startBGMTape(durationMs = 1400) {
     bgmPhaseRef = t + durationMs / 1000; // 加速完了時点を拍グリッド基準にする
     _bgmAccumReset(); // 新規ソースなので積算位置もリセット
     grayRateCur = 0.001; // フォールバック時はグレースケール現在値もリセット
-    _bgmIsBoss = false;
   }
   grayRateTarget = 1.0; // グレースケールを解除方向へアニメーション
 }
@@ -2292,7 +2301,7 @@ function startBossBGMTape(durationMs = 1400) {
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   const t = audioCtx.currentTime;
   const startRate = bgmSource ? _getBgmRateJS() : 0.001;
-  const src = _createBGMSource(startRate, bossBgmBuffer, BGM_LOOP_DUR_BOSS);
+  const src = _createBGMSource(startRate, bossBgmBuffer); // _bgmIsBoss/loopEndはbufferから自動導出
   if (!src) return;
   src.playbackRate.setValueCurveAtTime(
     _tapeRateCurve(startRate, BOSS_BGM_RATE, 'easeIn'), t, durationMs / 1000);
@@ -2302,7 +2311,6 @@ function startBossBGMTape(durationMs = 1400) {
   _bgmAccumReset();
   grayRateCur = 0.001;
   grayRateTarget = 1.0;
-  _bgmIsBoss = true;
 }
 
 /* BET額に対応するスローハンドBGM速度比率を返す
@@ -2415,6 +2423,17 @@ function playSE(name, atTime) {
     case 'kingBeam': {
       /* キングギヨウザ戦、ビーム発射音（スネアドラム風、_playKingBeamHit参照） */
       _playKingBeamHit(ctx, t);
+      break;
+    }
+    case 'kingBeamDud': {
+      /* ビーム不発音: こんがりは揃ったが4タップ全てOK止まりで、焦げ跡＝ビームが
+         1本も出ないケース専用（_kingApplyHit参照）。kingBeamの「パーン」から
+         打撃のヌケとスナッピーを取り去り、低くこもった空振りだけを残す
+         （鳴らさない選択もあるが、無音だと入力を取りこぼしたのか成功したのかが
+         分からないため、弱くても反応は返す） */
+      _playSlideOsc(ctx, _seDest(ctx), t, 'triangle', 150, 70, 0.10,
+        [[0, 0.20, 'set'], [0.18, 0.0001]], 0.20);
+      playNoise(ctx, t, 0.07, 0.05, 300);
       break;
     }
     case 'bet': {
@@ -3519,7 +3538,10 @@ function update() {
   /* グレースケール視覚レートをlerpで追従（係数0.04≈1300ms収束、easeOut近似） */
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
   if (phase === 'startup') {
-    for (const w of wheels) w.rot += w.speed; // ホイールだけ背景で回す
+    /* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
+       その回転角は startupTimer と w.speed から直接求める（draw側参照）。
+       w.rot は誰も読まないため加算しない（ゲーム開始時に init() がホイールを
+       作り直すので、ここで進めておく必要も無い） */
     startupTimer++; // draw()ではなくupdate()でカウント（draw分離後も60fps固定）
     return;
   }
@@ -5364,8 +5386,7 @@ function _startBossDefeatShrink() {
 
 function _updateBossDefeatShrink() {
   _bossDefeatShrinkTimer++;
-  if (_king) _easeKingXform();
-  _updateKingCharFlights();
+  _updateKingCommonFx();
   /* dscaleが目標近くまで縮んだらクロスフェードを開始し、キングとギヨウザ群を
      一定フレームかけて滑らかに入れ替える */
   if (_king && _king.dscale <= KING_DEFEAT_XFADE_START_DSCALE) {
@@ -5408,6 +5429,10 @@ function drawBossDefeatShrink() {
 function _updateBossDefeatOutro() {
   const o = _defeatOutro;
   if (!o) { phase = 'idle'; return; }
+  /* この時点で_kingはnull・飛翔/レーザーも空なので実質no-opだが、キング戦系
+     フェーズは例外なく共通FXを呼ぶ形に揃えておく（将来この演出中まで残る
+     オブジェクトが増えたときに、ここだけ更新漏れになるのを防ぐ） */
+  _updateKingCommonFx();
   o.timer++;
   /* step5の収束式 pos=c+(pos-c)*(1-K) を厳密に逆算した拡散式（重力は使わない） */
   const inv = 1 / (1 - _DEFEAT_OUTRO_K);
@@ -5580,7 +5605,7 @@ const KING_CHAR_KNOCK_SPEED_X = 0.6;
 const KING_CHAR_KNOCK_SPEED_Y = 0.8;
 const KING_CHAR_KNOCK_ROT_SPD = 0.06;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
-let _kingLasers = [];   // { x1,y1,x2,y2, life, maxLife, color, glow, hit }
+let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
 let _kingShatter = null; // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
 const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
@@ -5738,7 +5763,7 @@ function _initBossBattle() {
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
     reels, reelIdx: 0, awaitingFire: false, attemptFired: false, resultTimer: null, resultMatched: false, charWeights,
-    failCount: 0, pendingDefeat: false, missAttemptToken: null,
+    failCount: 0, pendingDefeat: false, pendingVictory: false, missAttemptToken: null,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
   _kingLasers = [];
@@ -5959,7 +5984,9 @@ function _kingFireAttack() {
         _king.cookPct = Math.min(100, _king.cookPct + (f.tier === 'just' ? KING_JUST_PCT : KING_GOOD_PCT));
       }
       _kingApplyHit(avgScore, thisAttempt);
-      if (_king.cookPct >= 100) _startBossVictory();
+      /* 勝利はここで確定させず予約だけする（この試技のビームを見せきってから
+         _updateBossBattle が確定させる。pendingVictory の扱いはそちらのコメント参照） */
+      if (_king.cookPct >= 100) _king.pendingVictory = true;
     } else {
       /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
          ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が
@@ -6045,7 +6072,8 @@ function _kingApplyHit(score, flights) {
   let label = '';
   if      (score >= 0.667) label = 'JUST!';
   else if (score >= 0.333) label = 'GOOD';
-  else if (score > 0)      label = 'OK';
+  else                     label = 'OK'; // scoreは常に>0（calcSyncScoreの下限は約0.016）
+  let fired = 0;
   for (const f of flights) {
     if (!f.markRef) continue; // 焦げ跡が無いタップはビームも発射しない
     const p1 = _kingReelPointerPos(_king.reels[f.reelIdx]);
@@ -6054,10 +6082,17 @@ function _kingApplyHit(score, flights) {
        色付けと同一。_syncBarColor(f.score)）にビーム色を一致させる */
     const [col, glow] = _syncBarColor(f.score);
     _kingLasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
-      age: 0, life: 14, maxLife: 14, color: col, glow, hit: true });
+      age: 0, life: 14, maxLife: 14, color: col, glow });
+    fired++;
   }
-  playSE(score > 0 ? 'kingBeam' : 'miss');
-  if (label) { syncJustLabel = label; syncJustTimer = 50; syncJustScore = score; }
+  /* こ・ん・が・りが揃っても4タップ全てがOK止まりだとmarkRefが無く、ビームが
+     1本も出ず焦げ跡もこんがり%も増えない（JUST/GOODのみ加点という既存の
+     バランス仕様どおり）。この時に発射音を鳴らすと「音は撃ったと言っているのに
+     画面は無反応」になるため、音の方を実際の見た目に合わせて弱い不発音にする
+     （バランスは変えず演出の整合だけを取る方針。タイミング精度が報酬の核という
+     設計思想を薄めないため、OKティアへの加点はしない） */
+  playSE(fired > 0 ? 'kingBeam' : 'kingBeamDud');
+  syncJustLabel = label; syncJustTimer = 50; syncJustScore = score;
 }
 
 /* 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれのジャンプをなくすための
@@ -6067,6 +6102,24 @@ function _easeKingXform() {
   _king.dbx += (_king.bx - _king.dbx) * KING_XFORM_EASE;
   _king.dby += (_king.by - _king.dby) * KING_XFORM_EASE;
   _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
+}
+
+/* キング戦系フェーズを通して「決着に関係なく背景で自走し続ける」演出をまとめて
+   1フレーム進める。boss / bossShatter / bossVictory / bossDefeat /
+   bossDefeatShrink / bossDefeatOutro のすべてから呼ぶ。
+   以前はこの3つ（姿勢イージング・文字飛翔・レーザー寿命）が各フェーズの
+   update関数にバラバラの組み合わせでコピーされており、bossVictory だけ
+   レーザーの寿命処理が抜けている等の穴があった（実際、勝利を決めた瞬間の
+   ビームが life を消費できず描画もされないまま残る不具合の一因になっていた）。
+   フェーズごとの取捨選択をやめて一箇所に集約し、新しい常時演出を追加した際の
+   水平展開漏れを構造的に防ぐ。
+   個々の中身は対象が空なら何もしない（_king が null、配列が空）ため、
+   どのフェーズから呼んでも安全 */
+function _updateKingCommonFx() {
+  if (_king) _easeKingXform();
+  _updateKingCharFlights();
+  for (const l of _kingLasers) { l.age++; l.life--; }
+  swapRemove(_kingLasers, p => p.life > 0);
 }
 
 /* ハズレ確定の文字を、着地点（ボス側）から的の上部（三角ポインタ付近、
@@ -6210,9 +6263,20 @@ function _updateKingCharFlights() {
 
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
-  _easeKingXform();
-  _updateKingCharFlights();
+  _updateKingCommonFx();
   _updateBossRumbleTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
+  /* こんがり100%到達（pendingVictory）は即座に勝利へ飛ばさず、この試技で撃った
+     ビームが消えきるのを待ってから確定させる。_kingFireAttackは入力ハンドラから
+     同期的に呼ばれるため、そこで直接_startBossVictory()するとビーム生成と同じ
+     フレームでphaseがbossVictoryに変わり、drawBossBattleが早期returnして
+     「とどめの一撃のビームだけ一度も描画されない」状態になっていた。
+     敗北側（pendingDefeat→文字の衝突完了を待って破砕へ）と同じ「予約してから
+     演出の完了を待つ」形に揃える。ビームが1本も出なかった場合
+     （全タップOK以下でmarkRefが無い）は_kingLasersが空なので即座に確定する */
+  if (_king.pendingVictory) {
+    if (_kingLasers.length === 0) { _startBossVictory(); }
+    return;
+  }
   /* 4本確定後の結果表示保持: 通常モードの的判定（endTimer + onBeatGrid()、2582行目
      付近）と同じ仕様に合わせる。ハズレ待ち時間が長くBGMとも同期していないという
      実機指摘で、wall-clockの固定待ち時間（旧KING_RESULT_HOLD_SEC）から、
@@ -6244,8 +6308,6 @@ function _updateBossBattle() {
       _respinKingReels();
     }
   }
-  for (const l of _kingLasers) { l.age++; l.life--; }
-  swapRemove(_kingLasers, p => p.life > 0);
 }
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
@@ -6303,10 +6365,10 @@ function drawBossBattle() {
     const a = l.life / l.maxLife;
     ctx.save();
     ctx.globalAlpha = a * 0.5;
-    ctx.strokeStyle = l.glow; ctx.lineWidth = l.hit ? 10 : 5; ctx.lineCap = 'round';
+    ctx.strokeStyle = l.glow; ctx.lineWidth = 10; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(tx, ty); ctx.stroke();
     ctx.globalAlpha = a;
-    ctx.strokeStyle = l.color; ctx.lineWidth = l.hit ? 4 : 2;
+    ctx.strokeStyle = l.color; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(tx, ty); ctx.stroke();
     ctx.restore();
   }
@@ -6461,10 +6523,9 @@ function _startBossVictory() {
 
 function _updateBossVictory() {
   _bossVictoryTimer++;
-  if (_king) _easeKingXform();
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
-  _updateKingCharFlights();
+  _updateKingCommonFx();
   if (_bossVictoryTimer % 5 === 0 && _king) _spawnVictorySteamWisp();
   _updateVictorySteam();
 }
@@ -6773,7 +6834,12 @@ function _stopTrueEndingTheme(rampSec = 0.3) {
 function _updateTrueEnding() {
   const o = _trueEnding;
   if (!o) { phase = 'idle'; return; }
-  if (_king) _easeKingXform(); // 引き継いだキングの呼吸などを続ける（自然な余韻）
+  /* ここだけ_updateKingCommonFx()を使わず姿勢イージングのみ行うのは意図的。
+     真エンディングはキング戦の続きではなく独立した演出で、飛翔文字もレーザーも
+     drawBossBattleごと描画対象外になる（bossVictoryを90フレーム以上経てから
+     入るため、その時点で既に消え切っている）。引き継いだキングの呼吸だけを
+     静かに続けたい */
+  if (_king) _easeKingXform();
   o.timer++;
   if (o.stage === 'scroll') {
     /* 開幕セリフは締めセリフと同じく「静止表示→一定時間後にスクロール開始」に
@@ -7057,12 +7123,8 @@ function _startKingReelShatter() {
 
 function _updateKingReelShatter() {
   /* ボス本体の呼吸・位置イージング、直前attemptの文字飛翔（まだ落下中の
-     ものが残っている場合）、レーザー演出は破砕中も止めない（_updateBossBattle
-     と同様の継続処理） */
-  if (_king) _easeKingXform();
-  _updateKingCharFlights();
-  for (const l of _kingLasers) { l.age++; l.life--; }
-  swapRemove(_kingLasers, p => p.life > 0);
+     ものが残っている場合）、レーザー演出は破砕中も止めない */
+  _updateKingCommonFx();
 
   const s = _kingShatter;
   if (!s) { _startBossDefeat(); return; }
@@ -7136,9 +7198,8 @@ function _startBossDefeat() {
 
 function _updateBossDefeat() {
   _bossDefeatTimer++;
-  if (_king) _easeKingXform();
   /* 勝利側と同様、直前に飛ばした文字の演出（跳ね返り等）を決着後も止めない */
-  _updateKingCharFlights();
+  _updateKingCommonFx();
 }
 
 function drawBossDefeat() {
@@ -9464,14 +9525,16 @@ function togglePause() {
         setTimeout(() => {
           if (isPaused || NO_BGM_SOURCE_PHASES.has(phase)) return;
           _destroyBGMSource();
-          /* 再開するバッファが通常/ボスどちらかで量子化ループ長も切り替える
-             （_resumeBgmBufの選定と同じ_bgmIsBoss基準。5拍子化でボスのループ長が
-             通常と異なるため、ここを揃えないとoffsetがずれる） */
-          const defaultLoopDur = _bgmIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR;
-          const quantLoopDur   = _curQuantizedLoopDur();
-          const loopDur = quantLoopDur > 0 ? quantLoopDur : defaultLoopDur;
+          /* 再生位置(offset)を求めるループ長は、これから鳴らすバッファ自身から
+             決める（グローバルの_bgmIsBossを見に行かない）。7拍子化でボスの
+             ループ長が通常と異なるため、ここが実際のバッファと食い違うと
+             再開位置がずれる。_createBGMSource側も同じくbufferから導出するので、
+             両者が同じ根拠で必ず一致する */
+          const _resumeIsBoss = (_resumeBgmBuf !== bgmBuffer);
+          const _quant  = _resumeIsBoss ? _bgmQuantizedLoopDurBoss : _bgmQuantizedLoopDur;
+          const loopDur = _quant > 0 ? _quant : (_resumeIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR);
           const offset  = _pauseBgmPos % loopDur;
-          const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf, defaultLoopDur);
+          const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf);
           if (src) {
             const t = audioCtx.currentTime;
             src.start(t, offset);
