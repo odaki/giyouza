@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.50';
+const VERSION = 'v5.51';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5294,6 +5294,14 @@ function _kingBattleEnd() {
    出現時の半径R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する。 */
 const _DEFEAT_OUTRO_K = 0.06;      // _updateBossOmen step5 の収束係数と同値
 const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
+/* 締めのメッセージ（_DEFEAT_OUTRO_LINES）の見せ方。ユーザー要望により
+   「ちからが とけて……／かえっていった……」を1行ずつ順に出すのをやめ、
+   2行まとめて1つのメッセージとして扱う。フェードイン・フェードアウトも
+   行ごとではなく全体で1回ずつ（誕生予告drawBossOmenの「過去行を薄く残して
+   積んでいく」見せ方とは意図的に別物にする）。
+   FADEはイン・アウト共通の長さ、HOLDは全文を表示したまま保持する長さ */
+const _DEFEAT_OUTRO_MSG_FADE = 22;
+const _DEFEAT_OUTRO_MSG_HOLD = 96;
 
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
    KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
@@ -5357,7 +5365,7 @@ function _makeDefeatOutroItems() {
     const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
     items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
-  return { step: 0, timer: 0, items, cx, cy };
+  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0 };
 }
 
 /* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
@@ -5442,15 +5450,28 @@ function _updateBossDefeatOutro() {
     g.rot -= 0.15; // step5の回転(+0.15)を逆再生
   }
   if (o.step === 0) {
+    /* step0: ギヨウザ群の拡散のみ。拡散しきってからメッセージへ移る */
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
-  } else if (o.step < _DEFEAT_OUTRO_LINES.length) {
-    if (o.timer > _OMEN_LINE_FRAMES) { o.step++; o.timer = 0; }
-  } else if (o.timer > _OMEN_LINE_FRAMES) {
-    /* 最終行まで表示しきったら、タップ待ちにせず時間経過で自動的に通常モードへ
+  } else {
+    /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
+       行ごとの出し分けはしない（_DEFEAT_OUTRO_MSG_FADE/HOLD の定義部参照）。
+       描画側が判断に迷わないよう、透明度はここで確定させて o.msgAlpha に持たせる
+       （update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針） */
+    const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE + _DEFEAT_OUTRO_MSG_HOLD;
+    if (o.timer < _DEFEAT_OUTRO_MSG_FADE) {
+      o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE;
+    } else if (o.timer < fadeOutStart) {
+      o.msgAlpha = 1;
+    } else {
+      o.msgAlpha = Math.max(0, 1 - (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE);
+    }
+    /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ
        戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
        _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレーム
        この条件を満たし続けて構わない */
-    _startScreenFade(() => _kingBattleEnd());
+    if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE) {
+      _startScreenFade(() => _kingBattleEnd());
+    }
   }
 }
 
@@ -7253,24 +7274,23 @@ function drawBossDefeatOutro() {
   ctx.fillStyle = 'rgba(2,4,8,0.7)';
   ctx.fillRect(0, 0, W, H);
   for (const g of o.items) drawOneItem(g);
-  if (o.step >= 1) {
-    /* 台詞演出は誕生予告（drawBossOmen）と同じ見せ方（過去行は薄く残して積む）だが、
-       位置・サイズは別建てにする。誕生予告は4行ぶんの表示領域を見込んで
-       H*0.30始まりにしているが（4行目=キングの登場位置の少し上で終わる想定）、
-       こちらは2行しかなく同じ開始位置だと画面上寄りに偏って見える
-       （実機指摘）。ここでは画面に固定のボスが存在しないぶん表示领域に余裕が
-       あるため、2行の中心が画面中央(H/2)に来るよう配置し、行数が少ない分
-       フォントもひとまわり大きくする */
+  if (o.step >= 1 && o.msgAlpha > 0) {
+    /* 誕生予告（drawBossOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、
+       こちらは全行を1つのメッセージとして同時に出す（ユーザー要望）。
+       透明度は全行共通で o.msgAlpha（_updateBossDefeatOutro が確定させる）。
+       位置・サイズも誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から
+       始めるが、こちらは2行しかなく同じ開始位置だと画面上寄りに偏って見える
+       （実機指摘）。画面に固定のボスが居ないぶん余裕があるため、全行の中心が
+       画面中央(H/2)に来るよう配置し、行数が少ない分フォントも大きくする */
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const fsL = IS_PORTRAIT ? 26 : 30;
     const lineDy = fsL * 2.2;
-    const lineY0 = H / 2 - lineDy / 2; // 2行の中心を画面中央に揃える
+    const lineY0 = H / 2 - lineDy * (_DEFEAT_OUTRO_LINES.length - 1) / 2;
     ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
-    for (let i = 0; i < o.step && i < _DEFEAT_OUTRO_LINES.length; i++) {
-      const isCur = (i === o.step - 1);
-      ctx.globalAlpha = isCur ? Math.min(1, o.timer / 20) : 0.5;
-      outText(_DEFEAT_OUTRO_LINES[i], W/2, lineY0 + i*lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
-    }
+    ctx.globalAlpha = o.msgAlpha;
+    _DEFEAT_OUTRO_LINES.forEach((line, i) => {
+      outText(line, W/2, lineY0 + i*lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
+    });
     ctx.globalAlpha = 1;
   }
   /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない
