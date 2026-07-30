@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.59';
+const VERSION = 'v5.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3405,6 +3405,11 @@ function _drawKingReelCharge(px, py, idx) {
 }
 
 function drawKingReel(w, active, idx) {
+  /* 被弾揺れは的まるごと（絵柄・リング・三角ポインタ・結果文字）に効かせたいので、
+     関数全体を包む外側のsave/translateで掛ける（_kingReelShakeOffset参照） */
+  const _shk = _kingReelShakeOffset(idx);
+  ctx.save();
+  if (_shk) ctx.translate(_shk.x, _shk.y);
   ctx.save();
   ctx.translate(w.x, w.y);
   ctx.rotate(w.rot);
@@ -3426,7 +3431,8 @@ function drawKingReel(w, active, idx) {
       ctx.save();
       ctx.rotate(_kingReelAnchorAngle(w));
       ctx.fillStyle = 'rgba(12,9,7,0.82)';
-      for (const poly of cracks) {
+      for (const c of cracks) {
+        const poly = c.poly;
         ctx.beginPath();
         ctx.moveTo(poly[0].x, poly[0].y);
         for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j].x, poly[j].y);
@@ -3465,6 +3471,7 @@ function drawKingReel(w, active, idx) {
     ctx.fillStyle = '#fffde7'; ctx.fillText(w.result, 0, 0);
     ctx.restore();
   }
+  ctx.restore(); // 被弾揺れの外側save
 }
 
 /* ════════════════ Update ════════════════ */
@@ -5752,6 +5759,13 @@ const KING_CHAR_RETURN_FRAMES = KING_CHAR_FLY_FRAMES - KING_SIFT_RELEASE_FRAME;
    打撃感の補強なので短く小さく。フレームカウンタで良い（映像の進行に紐づく演出） */
 const KING_SIFT_SHAKE_FRAMES = 8;
 let _kingSiftShake = 0;
+/* 文字が的に当たった衝撃で、その的だけが小さく揺れる（ユーザー要望）。
+   減衰する上下振動を主体にし、横はごくわずかに添えるだけ（衝突点は常に的の
+   真上なので、縦に叩かれた揺れ方が自然）。的スロット単位で持つのはひび
+   （_king.reelCracks）と同じ理由で、再スピンで的オブジェクトが作り直されても
+   スロットに紐づけておけば取り違えないため */
+const KING_REEL_SHAKE_FRAMES = 12;
+const KING_REEL_SHAKE_AMP    = 3.5;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -5921,7 +5935,8 @@ function _initBossBattle() {
     /* 篩い落とし演出（KING_SIFT_*参照）。siftPending=文字の到着待ち、
        siftTimer=null で非発動・0以上で経過フレーム */
     siftPending: false, siftTimer: null,
-    reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
+    reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（{poly,angle}の配列。drawKingReel参照。再スピンをまたいで残る）
+    reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
   };
   _kingLasers = [];
   _kingCharFlights = [];
@@ -6281,6 +6296,13 @@ function _easeKingXform() {
    どのフェーズから呼んでも安全 */
 function _updateKingCommonFx() {
   if (_king) _easeKingXform();
+  /* 被弾した的の揺れを減衰させる（_kingReelShakeOffset参照）。衝突は破砕へ
+     跨ぐ可能性があるため共通FX側で進める */
+  if (_king && _king.reelShake) {
+    for (let i = 0; i < _king.reelShake.length; i++) {
+      if (_king.reelShake[i] > 0) _king.reelShake[i]--;
+    }
+  }
   /* 篩い落としの経過。文字の衝突→破砕（bossShatter）へ跨ぐ可能性があるため、
      boss限定ではなく共通FX側で進める */
   if (_king && _king.siftTimer !== null) {
@@ -6323,6 +6345,20 @@ function _kingSiftSquash() {
   }
   if (k <= 0) return null;
   return { sx: 1 + KING_SIFT_SQUASH * k, sy: 1 - KING_SIFT_SQUASH * k };
+}
+
+/* 被弾した的の揺れオフセット（描画時のみ。KING_REEL_SHAKE_*の定義部参照）。
+   残量が無ければnullを返し、呼び出し側で余計なtranslateを掛けないようにする */
+function _kingReelShakeOffset(idx) {
+  if (!_king || !_king.reelShake || idx == null) return null;
+  const r = _king.reelShake[idx];
+  if (!r) return null;
+  const t = KING_REEL_SHAKE_FRAMES - r;          // 経過フレーム
+  const decay = r / KING_REEL_SHAKE_FRAMES;      // 1→0
+  return {
+    x: Math.sin(t * 1.7) * KING_REEL_SHAKE_AMP * 0.35 * decay,
+    y: Math.sin(t * 1.15) * KING_REEL_SHAKE_AMP * decay,
+  };
 }
 
 /* 文字を離してよいか（＝振り下ろしが底に達したか）。
@@ -6377,7 +6413,11 @@ function _addKingReelCrackAtCollision(f) {
      描画側（drawKingReel）が現在の的の基準角を足し戻すため、着弾直後は
      文字が当たったその場所に、以後も絵柄に対して同じ位置に出続ける */
   const localAngle = worldAngle - rw.rot - _kingReelAnchorAngle(rw);
-  _king.reelCracks[f.reelIdx].push(_createKingCrackWedge(localAngle));
+  /* 角度も一緒に保存する。破砕（_startKingReelShatter）が「ひびの入った位置で
+     割る」ために境界角として使うため、ポリゴンから復元せず素直に持たせる */
+  _king.reelCracks[f.reelIdx].push({ poly: _createKingCrackWedge(localAngle), angle: localAngle });
+  /* 当たった衝撃でその的だけを小さく揺らす（_kingReelShakeOffset参照） */
+  if (_king.reelShake) _king.reelShake[f.reelIdx] = KING_REEL_SHAKE_FRAMES;
 }
 
 /* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
@@ -7608,18 +7648,55 @@ function _finishTrueEnding() {
    起こさず既存のsegs/色をそのまま流用）、的の中心から外向きに飛び散らせる。
    phaseを'bossShatter'に切り替えて入力を止め、_updateKingReelShatterが
    全破片の消滅を監視して_startBossDefeatへ引き継ぐ */
+/* 角度を 0〜2π へ正規化 */
+function _norm2pi(a) { const t = a % (Math.PI * 2); return t < 0 ? t + Math.PI * 2 : t; }
+
+/* 的1枚を「ひびの入った位置」で分割した破片の境界角（的ローカル＝OCの座標系、昇順）
+   を返す（ユーザー指摘: 均等に4つへ割れるのは、ひびの位置と無関係で違和感がある）。
+   ひびの保存角は基準文字エリア起点の相対角なので、現在の的の基準角を足して
+   OCの座標系へ戻す（drawKingReelの描画と同じ変換）。
+   ひびが2本未満だと扇形に分割できないため、その場合は従来どおり文字セグメントの
+   境界で割る（KING_MAX_FAILS回失敗して破砕に至る時点では通常6本あるので、
+   これは保険の経路） */
+function _kingReelShatterBounds(w, idx) {
+  const cracks = (_king.reelCracks && _king.reelCracks[idx]) || [];
+  const anchor = _kingReelAnchorAngle(w);
+  let bounds = cracks.map(c => _norm2pi(c.angle + anchor)).sort((a, b) => a - b);
+  /* ほぼ同じ角度のひびが重なると極端に細い破片ができるのでまとめる */
+  const MIN_GAP = 0.12;
+  bounds = bounds.filter((a, i) => i === 0 || a - bounds[i - 1] > MIN_GAP);
+  /* 先頭と末尾が2π跨ぎで近すぎる場合も末尾を落とす */
+  if (bounds.length > 1 && (bounds[0] + Math.PI * 2 - bounds[bounds.length - 1]) <= MIN_GAP) bounds.pop();
+  if (bounds.length >= 2) return bounds;
+  return w.segs.map(s => _norm2pi(s.start)).sort((a, b) => a - b);
+}
+
 function _startKingReelShatter() {
   phase = 'bossShatter';
   const pieces = [];
-  for (const w of _king.reels) {
-    for (const seg of w.segs) {
-      const mid = w.rot + seg.start + seg.span / 2; // ワールド角度（現在の的の向き基準）
-      const spd = 2.5 + Math.random() * 3;
+  for (let idx = 0; idx < _king.reels.length; idx++) {
+    const w = _king.reels[idx];
+    const bounds = _kingReelShatterBounds(w, idx);
+    for (let i = 0; i < bounds.length; i++) {
+      const a0 = bounds[i];
+      const a1 = (i + 1 < bounds.length) ? bounds[i + 1] : bounds[0] + Math.PI * 2;
+      const span = a1 - a0;
+      const mid  = a0 + span / 2;                 // 的ローカルでの破片の中心角
+      const world = w.rot + mid;                  // 現在の的の向きを反映したワールド角
+      /* 細い破片ほど軽い＝速く飛ぶようにして、割れ方の不均等さを動きにも出す */
+      const spd = (2.5 + Math.random() * 3) * (1 + (Math.PI / 2 - Math.min(span, Math.PI / 2)) * 0.35);
       pieces.push({
         cx: w.x, cy: w.y, x: 0, y: 0,
-        vx: Math.cos(mid) * spd, vy: Math.sin(mid) * spd - 2.5, // 少し上向きに弾ける
-        rot: w.rot + seg.start + seg.span / 2, rotSpd: (Math.random() - 0.5) * 0.3,
-        start: seg.start, span: seg.span, char: seg.char,
+        vx: Math.cos(world) * spd, vy: Math.sin(world) * spd - 2.5, // 少し上向きに弾ける
+        rot: world, rotSpd: (Math.random() - 0.5) * 0.3,
+        span, mid,
+        /* 破片は的のOCを扇形にクリップして描く＝元の絵柄（文字・色）がそのまま
+           乗るので「同じ的が割れた」ように見える。OCは破砕中は生きている
+           （返却は_cleanupKingBattleState/_updateBossDefeatShrinkで、いずれも
+           破砕完了後に実行される）。未対応環境向けにcharも保持してフラット塗り
+           にフォールバックできるようにしておく */
+        oc: w._oc, ocR: w._ocR,
+        char: (w.segs.find(s => mid >= s.start && mid < s.start + s.span) || w.segs[0]).char,
       });
     }
   }
@@ -7658,13 +7735,27 @@ function drawKingReelShatter() {
     ctx.save();
     ctx.translate(p.cx + p.x, p.cy + p.y);
     ctx.rotate(p.rot);
+    /* 破片の形は「ひびから隣のひびまで」の扇形。回転の基準を破片の中心角に
+       置いているので、ローカルでは -span/2〜+span/2 の扇形になる */
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.arc(0, 0, KING_WR, -p.span / 2, p.span / 2);
     ctx.closePath();
-    ctx.fillStyle = SEG_L[p.char];
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1;
+    if (p.oc) {
+      /* 元の絵柄を扇形で切り出して貼る。rotate(-p.mid)でOCの座標系へ戻すことで、
+         OC上の角度θが この破片ローカルの (θ-mid) に来る＝割れる前と同じ位置の
+         模様がそのまま乗る */
+      ctx.save();
+      ctx.clip();
+      ctx.rotate(-p.mid);
+      ctx.drawImage(p.oc, -p.ocR, -p.ocR, p.ocR * 2, p.ocR * 2);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = SEG_L[p.char]; // OC未対応環境向けフォールバック
+      ctx.fill();
+    }
+    /* 割れ口の縁を描いて破片の輪郭を立たせる */
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1;
     ctx.stroke();
     ctx.restore();
   }
