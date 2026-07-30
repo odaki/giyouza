@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.58';
+const VERSION = 'v5.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2440,6 +2440,14 @@ function playSE(name, atTime) {
     case 'kingBeam': {
       /* キングギヨウザ戦、ビーム発射音（スネアドラム風、_playKingBeamHit参照） */
       _playKingBeamHit(ctx, t);
+      break;
+    }
+    case 'kingSift': {
+      /* こんがり不一致時、キングが文字を篩い落とす振り下ろしの音。
+         和太鼓の強打（_playTaikoHit）で「ドスッ」という一撃を作り、直後に
+         こもったノイズを重ねて「ザッ」と振り落ちる質感を足す */
+      _playTaikoHit(ctx, t, _seDest(ctx), true);
+      playNoise(ctx, t + 0.02, 0.18, 0.10, 700);
       break;
     }
     case 'kingVictoryInhale': {
@@ -5317,6 +5325,7 @@ function _cleanupKingBattleState() {
   _king = null; _kingLasers = []; _kingCharFlights = [];
   _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
   _bossRumblePendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
+  _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
@@ -5691,7 +5700,7 @@ const KING_XFORM_EASE = 0.12;
    ぶつかり、物理エミュレーションで衝突・反発・落下を表現し、最終的に画面外へ
    落ちていくようにしたい。的側のひび演出はfailCount連動の既存演出をそのまま
    使うため、この飛翔演出側では何も生成しない） */
-const KING_CHAR_FLY_FRAMES = 16;        // 往路（接近）・復路接近（bounce）にかかるフレーム数
+const KING_CHAR_FLY_FRAMES = 16;        // 往路（キングへの接近）にかかるフレーム数。復路はKING_CHAR_RETURN_FRAMES
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
 /* ハズレは的に衝突後、反発して画面外に出るまでフェードせず表示し続ける
    （ユーザー指摘: 途中でフェードアウトするのは違う、画面外に消えるまで
@@ -5717,6 +5726,32 @@ const KING_CHAR_BOUNCE_FRICTION    = 0.15;
 const KING_CHAR_KNOCK_SPEED_X = 0.6;
 const KING_CHAR_KNOCK_SPEED_Y = 0.8;
 const KING_CHAR_KNOCK_ROT_SPD = 0.06;
+/* ── こんがり不一致時の「篩い落とし」演出（ユーザー要望: 「マークした文字が
+   向かい始める時に、キングギヨウザが文字を下に向かって篩い落とすようなアクションを
+   追加したい」） ──
+   タメ（わずかに上へ引く）→ 振り下ろし（底で文字が離れる）→ 減衰する残振動。
+   発動タイミングは「4文字すべてがキングに到着してから」（ユーザー選択の案(b)。
+   最速発射でも常に『到着→振り下ろす→落ちる』の順になり見え方が一定になる）。
+   キング本体の変位は描画時オフセットとして持ち、dby等の状態は汚さない
+   （_easeKingXformが毎フレームdby→byへ収束させるため綱引きになる。呼吸の拡縮
+   breathと同じ「描画時だけ掛ける」方式に揃える。_kingSiftOffsetY参照） */
+const KING_SIFT_WINDUP_FRAMES = 4;   // タメ
+const KING_SIFT_DROP_FRAMES   = 6;   // 振り下ろし
+const KING_SIFT_SETTLE_FRAMES = 22;  // 残振動（減衰）
+const KING_SIFT_RELEASE_FRAME = KING_SIFT_WINDUP_FRAMES + KING_SIFT_DROP_FRAMES; // 底＝文字が離れる
+const KING_SIFT_AMP    = 14;         // 振り下ろしの最大変位(px)
+const KING_SIFT_SQUASH = 0.08;       // 底でのスカッシュ量（縦を潰し横を広げる）
+const KING_SIFT_GAZE   = -0.6;       // 振り下ろし中の視線（負＝下を見る。_drawKingFace参照）
+/* 復路（篩い落とされて的へ向かう）のフレーム数。往路KING_CHAR_FLY_FRAMES(16)から
+   振り下ろし待ち(KING_SIFT_RELEASE_FRAME=10)を差し引いた値にすることで、
+   発射タップ〜的への衝突までの総時間を演出追加前と同じ16フレームに保つ
+   （ユーザー要望「帳尻合わせて」。残振動は文字の飛行と並行して進むので総時間には
+   影響せず、間延びの実体は振り下ろし待ちの10フレームぶんだった） */
+const KING_CHAR_RETURN_FRAMES = KING_CHAR_FLY_FRAMES - KING_SIFT_RELEASE_FRAME;
+/* 振り下ろしに合わせた画面の微揺れ（既存のdraw()冒頭のshake機構に加算する）。
+   打撃感の補強なので短く小さく。フレームカウンタで良い（映像の進行に紐づく演出） */
+const KING_SIFT_SHAKE_FRAMES = 8;
+let _kingSiftShake = 0;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -5883,6 +5918,9 @@ function _initBossBattle() {
     dbx: W / 2, dby: omenBy, dscale: 1,
     reels, reelIdx: 0, awaitingFire: false, attemptFired: false, resultTimer: null, resultMatched: false, charWeights,
     failCount: 0, pendingDefeat: false, pendingVictory: false, missAttemptToken: null,
+    /* 篩い落とし演出（KING_SIFT_*参照）。siftPending=文字の到着待ち、
+       siftTimer=null で非発動・0以上で経過フレーム */
+    siftPending: false, siftTimer: null,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（drawKingReel参照。再スピンをまたいで残る）
   };
   _kingLasers = [];
@@ -6125,6 +6163,9 @@ function _kingFireAttack() {
          が0になった時点でpendingDefeatを見て_startKingReelShatterへ進む */
       if (_king.failCount >= KING_MAX_FAILS) _king.pendingDefeat = true;
       playSE('miss');
+      /* 篩い落としを予約する。実際の発動は4文字すべてがキングへ到着してから
+         （_updateBossBattleが判定。KING_SIFT_*の定義部参照） */
+      _king.siftPending = true;
     }
     _king.resultMatched = matched;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
@@ -6240,9 +6281,56 @@ function _easeKingXform() {
    どのフェーズから呼んでも安全 */
 function _updateKingCommonFx() {
   if (_king) _easeKingXform();
+  /* 篩い落としの経過。文字の衝突→破砕（bossShatter）へ跨ぐ可能性があるため、
+     boss限定ではなく共通FX側で進める */
+  if (_king && _king.siftTimer !== null) {
+    _king.siftTimer++;
+    if (_king.siftTimer === KING_SIFT_RELEASE_FRAME) _king.gazeUp = 0; // 底で視線を戻す
+    if (_king.siftTimer > KING_SIFT_RELEASE_FRAME + KING_SIFT_SETTLE_FRAMES) _king.siftTimer = null;
+  }
   _updateKingCharFlights();
   for (const l of _kingLasers) { l.age++; l.life--; }
   swapRemove(_kingLasers, p => p.life > 0);
+}
+
+/* 篩い落としの縦変位（描画時オフセット。KING_SIFT_*の定義部参照）。
+   タメで少し上へ→振り下ろしで底へ加速→底から減衰しながら上下に揺れる。
+   区間の境目で値が連続するように、残振動の開始値を底の変位(+AMP)に合わせる */
+function _kingSiftOffsetY() {
+  if (!_king || _king.siftTimer === null) return 0;
+  const t = _king.siftTimer;
+  if (t < KING_SIFT_WINDUP_FRAMES) {
+    return -KING_SIFT_AMP * 0.25 * _easeF(t / KING_SIFT_WINDUP_FRAMES, 'easeOut');
+  }
+  if (t < KING_SIFT_RELEASE_FRAME) {
+    const p = (t - KING_SIFT_WINDUP_FRAMES) / KING_SIFT_DROP_FRAMES;
+    return -KING_SIFT_AMP * 0.25 + KING_SIFT_AMP * 1.25 * _easeF(p, 'easeIn');
+  }
+  const p = Math.min(1, (t - KING_SIFT_RELEASE_FRAME) / KING_SIFT_SETTLE_FRAMES);
+  return KING_SIFT_AMP * (1 - p) * Math.cos(p * Math.PI * 3);
+}
+
+/* 篩い落としのスカッシュ倍率（描画時のみ。底で最大、離脱後に戻る）。
+   等倍のときはnullを返し、呼び出し側で余計なscaleを掛けないようにする */
+function _kingSiftSquash() {
+  if (!_king || _king.siftTimer === null) return null;
+  const t = _king.siftTimer;
+  let k = 0;
+  if (t >= KING_SIFT_WINDUP_FRAMES && t < KING_SIFT_RELEASE_FRAME) {
+    k = _easeF((t - KING_SIFT_WINDUP_FRAMES) / KING_SIFT_DROP_FRAMES, 'easeIn');
+  } else if (t >= KING_SIFT_RELEASE_FRAME) {
+    k = Math.max(0, 1 - (t - KING_SIFT_RELEASE_FRAME) / 10);
+  }
+  if (k <= 0) return null;
+  return { sx: 1 + KING_SIFT_SQUASH * k, sy: 1 - KING_SIFT_SQUASH * k };
+}
+
+/* 文字を離してよいか（＝振り下ろしが底に達したか）。
+   _kingがいない場合はtrueを返す: 待ち続けると文字が永久に降りてこず、
+   破砕（attemptToken.remaining依存）まで進めなくなるため、進行不能を作らない側に倒す */
+function _kingSiftReleased() {
+  if (!_king) return true;
+  return _king.siftTimer !== null && _king.siftTimer >= KING_SIFT_RELEASE_FRAME;
 }
 
 /* ハズレ確定の文字を、着地点（ボス側）から的の上部（三角ポインタ付近、
@@ -6250,16 +6338,17 @@ function _updateKingCommonFx() {
    （ユーザー要望: 的への衝突・反発・落下を物理エミュレーションで表現し、
    最終的に画面外へ落ちていくようにしたい。戻る先は的の下ではなくボス側の
    上にしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを設定
-   する。等速直線運動で的へ向かい、KING_CHAR_FLY_FRAMES後（＝ちょうど的に
+   する。等速直線運動で的へ向かい、KING_CHAR_RETURN_FRAMES後（＝ちょうど的に
    到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）し、
-   その瞬間に的へひびを追加する（_addKingReelCrackAtCollision参照） */
+   その瞬間に的へひびを追加する（_addKingReelCrackAtCollision参照）。
+   この関数が呼ばれるのは篩い落としの振り下ろしが底に達した後（_kingSiftReleased） */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
   const pos = _kingFlightTargetPos(f);
   f.bx = pos.x; f.by = pos.y;
   const dx = f.rtx - pos.x, dy = f.rty - pos.y;
   const dist = Math.hypot(dx, dy) || 1;
-  const spd = dist / KING_CHAR_FLY_FRAMES; // 往路と同程度の所要フレームで的に届く速度
+  const spd = dist / KING_CHAR_RETURN_FRAMES; // 復路は往路より短い（KING_CHAR_RETURN_FRAMES参照）
   f.bvx = dx / dist * spd;
   f.bvy = dy / dist * spd;
 }
@@ -6317,22 +6406,24 @@ function _updateKingCharFlights() {
     if (f.state === 'fly') {
       f.frames++;
       if (f.frames >= KING_CHAR_FLY_FRAMES) {
-        if (f.resolve === 'bounce') _startKingCharBounce(f);
-        else if (f.resolve === 'stick') _stickKingChar(f);
-        else { f.state = 'wait'; f.frames = 0; } // 結果未確定: 着地先で待機
+        if (f.resolve === 'stick') _stickKingChar(f);
+        /* ハズレ確定でもここで即bounceにはせず、いったん着地先で待機させる。
+           篩い落とし（キングが振り下ろす）の底まで待ってから降り始めることで
+           「到着→振り下ろす→落ちる」の因果が常に成立する（_kingSiftReleased参照）*/
+        else { f.state = 'wait'; f.frames = 0; }
       }
     } else if (f.state === 'wait') {
       f.frames++;
-      if (f.resolve === 'bounce') _startKingCharBounce(f);
-      else if (f.resolve === 'stick') _stickKingChar(f);
+      if (f.resolve === 'stick') _stickKingChar(f);
+      else if (f.resolve === 'bounce' && _kingSiftReleased()) _startKingCharBounce(f);
     } else if (f.state === 'stick') {
       f.frames++;
     } else if (f.state === 'bounce') {
-      /* 的への接近（等速直線運動）。KING_CHAR_FLY_FRAMES＝ちょうど的に届く
+      /* 的への接近（等速直線運動）。KING_CHAR_RETURN_FRAMES＝ちょうど的に届く
          フレーム数に達したら衝突とみなし、反発速度を与えてfallへ遷移する */
       f.frames++;
       f.bx += f.bvx; f.by += f.bvy;
-      if (f.frames >= KING_CHAR_FLY_FRAMES) {
+      if (f.frames >= KING_CHAR_RETURN_FRAMES) {
         f.state = 'fall'; f.frames = 0;
         /* 反発: 衝突点の法線（常に真上固定）方向＝bvy、接線（水平）方向＝bvxとして
            分解し、それぞれ反発係数・摩擦係数（ともに1未満）を掛けて減衰させる。
@@ -6395,6 +6486,22 @@ function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   _updateKingCommonFx();
   _updateBossRumbleTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
+  /* 篩い落としの発動判定: 予約済みかつ「降ろす対象の文字が全員キングへ到着済み」
+     になったら振り始める（ユーザー選択の案(b)）。到着済みの判定は
+     bounce予定の文字が1つも'fly'に残っていないこと。最速発射でも常に
+     「到着→振り下ろす→落ちる」の順になり、見え方が一定になる */
+  if (_king.siftPending) {
+    const pend = _kingCharFlights.filter(f => f.resolve === 'bounce');
+    if (pend.length > 0 && pend.every(f => f.state === 'wait')) {
+      _king.siftPending = false;
+      _king.siftTimer = 0;
+      _king.gazeUp = KING_SIFT_GAZE; // 振り下ろす間だけ下を見る（底で0へ戻す）
+      _kingSiftShake = KING_SIFT_SHAKE_FRAMES;
+      playSE('kingSift');
+    } else if (pend.length === 0) {
+      _king.siftPending = false; // 降ろす文字が無い（通常起こらないが保険）
+    }
+  }
   /* こんがり100%到達（pendingVictory）は即座に勝利へ飛ばさず、この試技で撃った
      ビームが消えきるのを待ってから確定させる。_kingFireAttackは入力ハンドラから
      同期的に呼ばれるため、そこで直接_startBossVictory()するとビーム生成と同じ
@@ -6506,7 +6613,13 @@ function drawBossBattle() {
      位置・スケールは dbx/dby/dscale（誕生演出からの収束中の表示値）を使う */
   const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
   ctx.save();
-  ctx.translate(_king.dbx, _king.dby); ctx.scale(breath, breath);
+  /* 篩い落としの縦変位とスカッシュは描画時にのみ掛ける（dby/dscaleは触らない。
+     _kingSiftOffsetY / _kingSiftSquash の定義部参照）。文字の離脱位置には
+     この変位を反映しない（ユーザー判断: 座標計算への波及を避ける） */
+  ctx.translate(_king.dbx, _king.dby + _kingSiftOffsetY());
+  const sq = _kingSiftSquash();
+  if (sq) ctx.scale(breath * sq.sx, breath * sq.sy);
+  else    ctx.scale(breath, breath);
   const bodySrc = _renderKingBody();
   ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
   ctx.restore();
@@ -7893,6 +8006,12 @@ function draw() {
   if (phase === 'reach' && reachTimer > REACH_DECEL_FRAMES) { // リーチ減速後: 微振動
     shakeX += (Math.random()-0.5)*2;
     shakeY += (Math.random()-0.5)*1.5;
+  }
+  if (_kingSiftShake > 0) { // 篩い落としの打撃感（KING_SIFT_SHAKE_FRAMES参照）
+    const k = _kingSiftShake / KING_SIFT_SHAKE_FRAMES;
+    shakeX += (Math.random()-0.5) * 3 * k;
+    shakeY += (Math.random()-0.5) * 5 * k;
+    _kingSiftShake--;
   }
 
   ctx.save();
