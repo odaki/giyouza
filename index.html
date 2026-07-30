@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.54';
+const VERSION = 'v5.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2436,6 +2436,25 @@ function playSE(name, atTime) {
       _playKingBeamHit(ctx, t);
       break;
     }
+    case 'kingVictoryInhale': {
+      /* こんがり達成後、空を見上げて飛び立つ前の「息を吸う」タメ音
+         （_updateBossVictoryOutro step0）。音量0から立ち上げるスウェルにして、
+         打撃音ではなく気配の変化として聞かせる */
+      _playSlideOsc(ctx, _seDest(ctx), t, 'sine', noteHz('C',3), noteHz('G',3), 0.5,
+        [[0, 0.0001, 'set'], [0.38, 0.13, 'lin'], [0.55, 0.0001]], 0.6);
+      playNoise(ctx, t + 0.05, 0.40, 0.045, 900);
+      break;
+    }
+    case 'kingVictoryFly': {
+      /* 上へ飛び去る瞬間の上昇スウィッシュ（同 step1）。主体はノイズで、
+         トーンは方向感を補うだけの控えめな音量に留める（低音の上昇スイープは
+         以前「耳障り」と評価されたため、可聴帯の高い側だけを使う）。
+         音程はCメジャーペンタ内（C4→C6のオクターブ）に収める */
+      playNoise(ctx, t, 0.85, 0.16, 1200);
+      _playSlideOsc(ctx, _seDest(ctx), t, 'sine', noteHz('C',4), noteHz('C',6), 0.8,
+        [[0, 0.0001, 'set'], [0.12, 0.10, 'lin'], [0.85, 0.0001]], 0.95);
+      break;
+    }
     case 'kingBeamDud': {
       /* ビーム不発音: こんがりは揃ったが4タップ全てOK止まりで、焦げ跡＝ビームが
          1本も出ないケース専用（_kingApplyHit参照）。kingBeamの「パーン」から
@@ -3606,6 +3625,10 @@ function update() {
   }
   if (phase === 'bossVictory') {
     _updateBossVictory();
+    return;
+  }
+  if (phase === 'bossVictoryOutro') {
+    _updateBossVictoryOutro();
     return;
   }
   if (phase === 'trueEnding') {
@@ -5055,6 +5078,10 @@ let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト�
    弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
 const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
 let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
+/* こんがり達成側の退場演出の状態（null=非表示、drawBossVictoryOutro参照）。
+   宣言をここに置くのは_cleanupKingBattleStateが両方を後片付けするため
+   （letはホイストされないので、使用箇所より後で宣言するとTDZ risk になる） */
+let _victoryOutro = null; // { step, timer, items, seedItem, msgAlpha, gaugeAlpha, baseBy, baseScale }
 
 /* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
 function _spawnOmenGhost() {
@@ -5075,9 +5102,16 @@ function _spawnOmenGhost() {
    適用済みの論理座標系であること前提（_buildBossOC から分離。理由は _buildBossOC
    のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
    pct（こんがり進行度 0〜1）で吊り眉+へ字口（怒り）から、やや下がった眉+U字口
-   （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。 */
-function _drawKingFace(c, s, pct = 0) {
+   （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。
+   gazeUp（0〜1）は瞳を白目の中で上へ寄せる量。こんがり達成後に空を見上げてから
+   飛び去る演出（_updateBossVictoryOutro）で使う。瞳だけを動かし、白目・眉・口は
+   動かさない（顔全体を傾けるのではなく「視線を上げた」に見せるため）。
+   ※ この値を変えたら _renderKingBody のキャッシュ判定にも反映が必要
+   （_gazeRenderedUp参照。忘れると顔が更新されない） */
+function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
   const ex = s*0.16, ey = s*0.06, er = s*0.055;
+  /* 瞳の上寄せ量。白目の縦半径(er)からはみ出さないよう0.5erまでに留める */
+  const pupilDy = -er * 0.5 * gazeUp;
   /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.2er 〜 眉尻=ex+1.2er,ey-2.4er）を、
      黒目とほぼ同じX座標（瞳=ex-0.25er、ユーザー指定）にあるピボットを中心に
      回転させる。ピボットYは元の眉ライン上（そのX位置での直線上の点）に置くため
@@ -5104,7 +5138,7 @@ function _drawKingFace(c, s, pct = 0) {
     c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
     c.fillStyle = '#fff'; c.fill();
     c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = 2; c.stroke();
-    c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15, er*0.45, 0, Math.PI*2);
+    c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15 + pupilDy, er*0.45, 0, Math.PI*2);
     c.fillStyle = '#1a1a1a'; c.fill();
     c.beginPath();
     c.moveTo(sx*outerX, outerY);
@@ -5252,7 +5286,8 @@ function _updateBossOmen() {
    していたため、新フェーズ追加時（bossShatter等）の広げ忘れが実バグになった
    （drawSlowHandBadgeのコメント参照）。一元化により全ガードへ同時反映される */
 const BOSS_BATTLE_PHASES = new Set(
-  ['boss', 'bossShatter', 'bossVictory', 'trueEnding', 'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
+  ['boss', 'bossShatter', 'bossVictory', 'bossVictoryOutro', 'trueEnding',
+   'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
 function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
 
 /* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
@@ -5260,8 +5295,11 @@ function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
    いるため一時停止からの復帰でそのまま再開できるが、bossVictory（勝利
    ファンファーレ用に_stopBossBGMForVictoryで破棄）とtrueEnding（専用の
    オシレーターテーマのみでbgmSourceを使わない）はソースが存在しない前提の
-   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない */
-const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'trueEnding']);
+   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない。
+   bossVictoryOutro（飛び去り演出）も同様。ここは意図的に無音を保ち、復帰時の
+   テープ加速（tapestart）で世界が動き出す対比を作っている区間なので、
+   ポーズ→再開でBGMが鳴り出すと演出が壊れる */
+const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'bossVictoryOutro', 'trueEnding']);
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 /* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
@@ -5277,6 +5315,13 @@ function _cleanupKingBattleState() {
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
   _defeatOutro = null;
+  /* 達成側の退場演出も同様にプールへ返却する（水平展開。返し忘れると
+     _itemAllocのプールが枯れてリークになる） */
+  if (_victoryOutro) {
+    for (const g of _victoryOutro.items) g._dead = true;
+    if (_victoryOutro.seedItem) _victoryOutro.seedItem._dead = true;
+  }
+  _victoryOutro = null;
 }
 
 function _kingBattleEnd() {
@@ -5875,8 +5920,11 @@ function _renderKingBody() {
      されてしまう（実機検証で発覚: フェード完了直後の1フレームが欠落しボスが直前
      フレームのまま固まる不具合）。settledCountの増加も同様に再合成トリガーにする
      （新たに永続痕入りした焦げ跡を反映するため）。 */
+  /* 視線（gazeUp）も再合成トリガーに含める。含めないと見上げるアニメの間、
+     pct/焦げ跡が変化しないため古い顔がキャッシュされたまま瞳が動かない */
+  const gazeUp = _king.gazeUp || 0;
   if (activeCount === 0 && _king._toneRenderedPct === pct && !_king._toneHadActive &&
-      _king._settledCount === settledCount) return _king.liveOC;
+      _king._settledCount === settledCount && _king._gazeRenderedUp === gazeUp) return _king.liveOC;
   const lc = _king.liveOC.getContext('2d');
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.clearRect(0, 0, _king.liveOC.width, _king.liveOC.height);
@@ -5920,10 +5968,11 @@ function _renderKingBody() {
   lc.translate(_king.half, _king.half);
   lc.globalCompositeOperation = 'source-over';
   lc.globalAlpha = 1;
-  _drawKingFace(lc, _BOSS_S, pct);
+  _drawKingFace(lc, _BOSS_S, pct, gazeUp);
   _king._toneRenderedPct = pct;
   _king._toneHadActive = activeCount > 0;
   _king._settledCount = settledCount;
+  _king._gazeRenderedUp = gazeUp;
   return _king.liveOC;
 }
 
@@ -6468,7 +6517,9 @@ function drawBossBattle() {
 }
 
 /* こんがりゲージ: BETバーと同じ位置・寸法（戦闘中はBETバーを非表示にして差し替える） */
-function drawKingCookGauge() {
+/* achieved=true でラベルを「こんがり 達成！」に差し替える（退場演出中に使う。
+   drawBossVictoryOutro参照。戦闘中は従来どおりパーセント表示） */
+function drawKingCookGauge(achieved = false) {
   if (!_king) return;
   const pct = _king.cookPct / 100;
   const mx = IS_PORTRAIT ? 12 : 335, mw = IS_PORTRAIT ? W - 24 : 390;
@@ -6492,7 +6543,8 @@ function drawKingCookGauge() {
      クリアにならず追加で1本必要になる不整合が起きる（実機指摘）。切り捨て
      （Math.floor）にすることで、表示が100%になった時点で必ず実際にも
      100%（勝利条件成立）であることを保証する */
-  ctx.fillText(`こんがり ${Math.floor(pct * 100)}%`, mx + mw / 2, my + (mh - bh - 10) / 2 + 4);
+  ctx.fillText(achieved ? 'こんがり 達成！' : `こんがり ${Math.floor(pct * 100)}%`,
+    mx + mw / 2, my + (mh - bh - 10) / 2 + 4);
   ctx.restore();
 }
 
@@ -6652,6 +6704,185 @@ function drawBossVictory() {
   }
   if (_bossVictoryTimer > 90) {
     _drawBottomPillBadge('CONTINUE');
+  }
+  ctx.restore();
+}
+
+/* ════════════════ こんがり達成の退場演出（bossVictoryOutro） ════════════════
+   実機指摘: 「唐突にキングギヨウザモードが終わる感じになっている」。
+   原因は演出の非対称性で、こんがり失敗側は
+   bossDefeat →（縮小ブリッジ）→ bossDefeatOutro（拡散＋締め2行）→ 画面フェード
+   → tapestart（的スピンアップ＋BGM同期）と段階を踏むのに対し、達成側は
+   CONTINUEタップから_kingBattleEnd()を直接呼んでおり、次のフレームでキングが
+   消えて的が現れていた（スピンアップとBGM同期自体は_restartToTapestart経由で
+   効いていたので、足りないのは「キングが去る」中間演出と画面フェードだけ）。
+   ユーザー案「こんがりしたキングギヨウザが少し上を見て、上に飛び去る」を軸に、
+   失敗側と対になる4段構成にする:
+     step0 見上げ＋沈み込み（飛び立つ前のタメ）
+     step1 上へ加速して飛び去る（easeIn＝加速して抜ける）
+     step2 解放されたギヨウザが下から舞い上がる（失敗側の「拡散して落ちる」の対）
+     step3 締めメッセージ（失敗側と同じ呼吸・同じmsgAlpha方式）
+   その後は失敗側と完全に同じ場面転換（_startScreenFade → tapestart）。
+   初回（実績コンプリート）の真エンディングへ入る場合も、この飛び去りを見せて
+   から暗転して入る（ユーザー要望）。 */
+const _VICTORY_OUTRO_LOOKUP_FRAMES = 40; // step0: 見上げ＋タメ
+const _VICTORY_OUTRO_FLY_FRAMES    = 70; // step1: 飛び去り
+const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザの舞い上がり
+/* 締め2行。ユーザー選択のC案（周回の示唆）。文言は実際に何度か遊んでから
+   確定させる予定のため、ここだけ差し替えれば済むよう配列で持つ */
+const _VICTORY_OUTRO_LINES = ['キングは みちたりて さった……', 'ギヨウザは また あつまりはじめる……'];
+/* メッセージのフェード尺は失敗側（_DEFEAT_OUTRO_MSG_FADE_IN/HOLD/FADE_OUT）を
+   共有する。両者で「締めの呼吸」を揃えたいので、あえて別定数にしない */
+/* bossVictory の CONTINUE タップから呼ぶ。キングはまだ生きている（_king != null） */
+function _startBossVictoryOutro() {
+  if (!_king) { _finishBossVictoryOutro(); return; } // 保険: キングが居ない場合は演出を挟まず従来動作
+  phase = 'bossVictoryOutro';
+  _victoryOutro = {
+    step: 0, timer: 0, items: [], seedItem: null,
+    msgAlpha: 0, gaugeAlpha: 1,
+    baseBy: _king.by, baseScale: _king.scale,
+  };
+  _king.gazeUp = 0;
+  playSE('kingVictoryInhale');
+}
+
+/* 演出の終端。初回のみ真エンディングへ、2回目以降は通常モードへ復帰する
+   （分岐条件は従来のbossVictory分岐と同一。_pendingTrueEnding参照） */
+function _finishBossVictoryOutro() {
+  if (_victoryOutro) {
+    for (const g of _victoryOutro.items) g._dead = true; // プールへ返却（リーク防止）
+    if (_victoryOutro.seedItem) _victoryOutro.seedItem._dead = true;
+    _victoryOutro = null;
+  }
+  if (_pendingTrueEnding) { _pendingTrueEnding = false; _startTrueEnding(false); }
+  else _kingBattleEnd();
+}
+
+/* 解放されたギヨウザが舞い上がる群れを生成する。個数は解放数に応じて増やし、
+   プールを溜めてから勝ったときの見返りが視覚的にも効くようにする
+   （上限は描画負荷のため失敗側と同じ44個で打ち止め） */
+function _makeVictoryOutroItems() {
+  const n = Math.max(12, Math.min(44, 12 + Math.floor(_bossVictoryWonCoins / 100)));
+  const items = [];
+  for (let i = 0; i < n; i++) {
+    const x = W * (0.08 + Math.random() * 0.84);
+    const y = H + 40 + Math.random() * H * 0.5;      // 画面下の外から湧き上がる
+    const g = makeItem(x, y, (Math.random() - 0.5) * 0.6, -(2.6 + Math.random() * 2.2));
+    items.push(g);
+  }
+  return items;
+}
+
+function _updateBossVictoryOutro() {
+  const o = _victoryOutro;
+  if (!o) { _finishBossVictoryOutro(); return; }
+  _updateKingCommonFx();
+  o.timer++;
+
+  if (o.step === 0) {
+    /* 見上げる: 瞳を上へ寄せつつ、わずかに沈み込んでから戻る（跳ぶ前の予備動作）。
+       sin(p*π) なので step0 の終わりにはちょうど元の高さへ戻り、step1 の
+       上昇へ滑らかに繋がる */
+    const p = Math.min(1, o.timer / _VICTORY_OUTRO_LOOKUP_FRAMES);
+    if (_king) {
+      _king.gazeUp = Math.min(1, p / 0.6);           // 前半6割で見上げきる
+      const sink = 10 * Math.sin(p * Math.PI);
+      _king.by = o.baseBy + sink; _king.dby = _king.by; // イージングの遅れを挟まず直接置く
+    }
+    if (o.timer % 3 === 0 && _king) _spawnVictorySteamWisp(); // 湯気を増やす
+    if (o.timer >= _VICTORY_OUTRO_LOOKUP_FRAMES) {
+      o.step = 1; o.timer = 0;
+      playSE('kingVictoryFly');
+    }
+  } else if (o.step === 1) {
+    /* 飛び去る: easeIn で加速しながら画面上方へ抜ける。同時に縮小して遠ざかる
+       遠近感を出す。_easeKingXform の指数収束は「減速して着く」動きなので
+       ここでは使わず、by/dby・scale/dscale を直接置いて加速感を保つ */
+    const p = Math.min(1, o.timer / _VICTORY_OUTRO_FLY_FRAMES);
+    const e = _easeF(p, 'easeIn');
+    if (_king) {
+      const targetY = -_BOSS_S * 1.3;                 // 画面上端の外
+      _king.by = o.baseBy + (targetY - o.baseBy) * e; _king.dby = _king.by;
+      _king.scale = o.baseScale * (1 - 0.4 * e);      _king.dscale = _king.scale;
+    }
+    o.gaugeAlpha = Math.max(0, 1 - p * 1.6);          // ゲージは飛び去りに合わせて消す
+    if (o.timer % 2 === 0 && _king) _spawnVictorySteamWisp(); // 軌跡として湯気を残す
+    if (o.timer >= _VICTORY_OUTRO_FLY_FRAMES) {
+      o.step = 2; o.timer = 0;
+      o.gaugeAlpha = 0;
+      o.items = _makeVictoryOutroItems();
+      /* 周回の示唆: 1個だけ舞い上がらずに残り、画面下でゆっくり漂う。
+         「また集まりはじめる」という締め文（_VICTORY_OUTRO_LINES）と対応させる */
+      o.seedItem = makeItem(W / 2, H * 0.82, 0, -0.18);
+    }
+  } else if (o.step === 2 || o.step === 3) {
+    /* 解放されたギヨウザの舞い上がり。step3（メッセージ表示中）も動かし続けて
+       背景で舞っている状態を保つ */
+    for (const g of o.items) {
+      g.x += g.vx; g.y += g.vy;
+      g.vy -= 0.012;                 // ゆるやかに加速して昇っていく
+      g.rot += g.rotSpd * 0.5;
+    }
+    if (o.seedItem) {
+      const s = o.seedItem;
+      s.y += s.vy;
+      s.rot += 0.004;                // ほとんど止まって見えるゆるい回転
+    }
+    if (o.step === 2 && o.timer >= _VICTORY_OUTRO_ITEMS_FRAMES) { o.step = 3; o.timer = 0; }
+    if (o.step === 3) {
+      /* 締めメッセージ。失敗側（_updateBossDefeatOutro）と同じ
+         フェードイン→保持→フェードアウトの式・同じ定数を共有する */
+      const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE_IN + _DEFEAT_OUTRO_MSG_HOLD;
+      if (o.timer < _DEFEAT_OUTRO_MSG_FADE_IN) {
+        o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE_IN;
+      } else if (o.timer < fadeOutStart) {
+        o.msgAlpha = 1;
+      } else {
+        const q = Math.min(1, (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE_OUT);
+        o.msgAlpha = Math.max(0, 1 - _easeF(q, 'easeOut'));
+      }
+      if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE_OUT) {
+        _startScreenFade(() => _finishBossVictoryOutro());
+      }
+    }
+  }
+}
+
+function drawBossVictoryOutro() {
+  if (phase !== 'bossVictoryOutro' || !_victoryOutro) return;
+  const o = _victoryOutro;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, W, H);
+  /* 舞い上がるギヨウザはキングより先に描く（キングの手前に被らせない） */
+  for (const g of o.items) drawOneItem(g);
+  if (o.seedItem) drawOneItem(o.seedItem);
+  if (_king) {
+    ctx.save();
+    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+    ctx.restore();
+  }
+  _drawVictorySteam();
+  /* こんがりゲージの締め: 100%のまま「達成！」を出してから飛び去りに合わせて
+     消す（実機指摘: 決着した瞬間にゲージが消えるのも唐突さの一因） */
+  if (o.gaugeAlpha > 0) {
+    ctx.globalAlpha = o.gaugeAlpha;
+    drawKingCookGauge(true);
+    ctx.globalAlpha = 1;
+  }
+  if (o.step >= 3 && o.msgAlpha > 0) {
+    /* 失敗側（drawBossDefeatOutro）と同じ配置・同じ書式で、全行を1つの
+       メッセージとしてまとめて出す */
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const fsL = IS_PORTRAIT ? 26 : 30;
+    const lineDy = fsL * 2.2;
+    const lineY0 = H / 2 - lineDy * (_VICTORY_OUTRO_LINES.length - 1) / 2;
+    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
+    ctx.globalAlpha = o.msgAlpha;
+    _VICTORY_OUTRO_LINES.forEach((line, i) => {
+      outText(line, W / 2, lineY0 + i * lineDy, '#ffe9a8', 'rgba(60,20,0,0.9)', 6);
+    });
+    ctx.globalAlpha = 1;
   }
   ctx.restore();
 }
@@ -7738,6 +7969,7 @@ function draw() {
   drawBossOmen();
   drawBossBattle();
   drawBossVictory();
+  drawBossVictoryOutro();
   drawTrueEnding();
   drawBossDefeat();
   drawBossDefeatShrink();
@@ -9758,13 +9990,16 @@ function handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossVictory') {
-    if (_bossVictoryTimer > 90) {
-      /* 実績コンプリートの初回のみ真エンディングへ進む。2回目以降は
-         従来どおり即座に通常モードへ復帰する（周回プレイのテンポを尊重、
-         真エンディングは実績パネルからいつでも見返せる） */
-      if (_pendingTrueEnding) { _pendingTrueEnding = false; _startTrueEnding(false); }
-      else _kingBattleEnd();
-    }
+    /* CONTINUEタップで退場演出（見上げ→飛び去り→解放→締め）へ入る。
+       真エンディングへ進むか通常モードへ戻るかの分岐は演出の終端
+       （_finishBossVictoryOutro）へ移した。初回のエンディングでも飛び去りを
+       見せてから入る（ユーザー要望） */
+    if (_bossVictoryTimer > 90) _startBossVictoryOutro();
+    return;
+  }
+  if (phase === 'bossVictoryOutro') {
+    /* 退場演出中は入力を無視（時間経過で自動的に進む。失敗側のbossShatter・
+       bossDefeatOutroと同じ扱い） */
     return;
   }
   if (phase === 'trueEnding') {
