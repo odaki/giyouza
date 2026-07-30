@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.57';
+const VERSION = 'v5.58';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1009,6 +1009,12 @@ const PAUSE_BTN   = { x: BTN_RIGHT, y: BTN_TOP + BTN_SIZE + BTN_GAP,  w: BTN_SIZ
 /* 真エンディング再生ボタン（トロフィーの右隣・startup画面限定）。
    PAUSE_BTNはstartup中は非表示のため、この行のこの位置は常に空いている */
 const TRUE_ENDING_BTN = { x: BTN_RIGHT + BTN_SIZE + BTN_GAP, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE };
+/* エンドロール中は実績ボタンを無効にする（ユーザー要望）。全画面の演出中に実績
+   パネルが重なると演出が読めなくなる。ボタン自体も描画しない: 見えているのに
+   反応しないほうが迷わせるうえ、エンドロールはどこをタップしても段送りする画面
+   なので、この領域のタップも素直に段送りとして扱えばよい（drawの右上ボタン群と
+   各入力ハンドラの両方でこの述語を使う＝表示と当たり判定を一箇所で揃える） */
+function _achBtnEnabled() { return phase !== 'trueEnding'; }
 
 /* 全画面ボタン: Canvas 描画用（HTML button 廃止）
    Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
@@ -7116,6 +7122,13 @@ function _buildTrueEndingContent() {
 /* こんがり達成直後（自動）・タイトル画面のボタン（手動リプレイ）どちらからもここから入る */
 function _startTrueEnding(replay) {
   _trueEndingIsReplay = replay;
+  /* 実績パネルが開いたままエンドロールに入れてしまう経路があるため必ず閉じる。
+     タイトル画面のハンドラは TRUE_ENDING_BTN の判定を「パネルを閉じる」判定より
+     先に行うので、パネルを開いたまま再生ボタンを押すとshowAchievements=trueが
+     残り、drawAchOverlayがエンドロールの上に被って演出が読めなくなる。
+     エンドロール中は実績ボタン自体も無効化している（_achBtnEnabled参照）ので、
+     入口でも閉じておくことで「エンドロール中はパネルが出ない」を両側から保証する */
+  showAchievements = false;
   if (replay) {
     /* 実機報告で発覚: _stopBossBGMForVictory（120msフェード+150ms後に破棄）は
        ボス勝利演出の余韻を意図した緩やかな停止だが、_playTrueEndingThemeは
@@ -8059,7 +8072,8 @@ function draw() {
   drawAchOverlay();
 
   /* ── 右上ボタン群（トロフィー・ミュート）常時最前面 ── */
-  /* トロフィーボタン */
+  /* トロフィーボタン（エンドロール中は無効なので描かない。_achBtnEnabled参照） */
+  if (_achBtnEnabled()) {
   ctx.save();
   _drawBtnBg(ACH_TROPHY, showAchievements);
   /* トロフィーアイコン: 完全再設計 - カップ→ネック→台座の正しいシルエット */
@@ -8099,6 +8113,7 @@ function draw() {
   ctx.quadraticCurveTo(-12.5, -5, -6, -3);
   ctx.stroke();
   ctx.restore();
+  } // end _achBtnEnabled()
 
   /* ── 真エンディング再生ボタン（トロフィーの右隣・startup画面かつ視聴済みのみ） ──
      エンディング演出はゲーム途中で見るものではなく、スタートと並列の選択肢という
@@ -9799,9 +9814,12 @@ function drawStartup() {
 }
 
 /* ════════════════ Loop / Input ════════════════ */
-/* orientationchange → location.reload() 後、iOS が回転操作の touchstart を新ページに
-   引き継いで発火させることがある。そのタッチが STARTUP_BTN に重なると意図せず
-   initGame() が呼ばれるため、ページロード直後 500ms は START を受け付けない。 */
+/* ページロード直後 500ms は START を受け付けない。
+   元々は「orientationchange → location.reload() の際、iOS が回転操作の touchstart を
+   新ページに引き継いで発火させ、そのタッチが STARTUP_BTN に重なって意図せず
+   initGame() が呼ばれる」対策だった。回転はリロードせずPAUSEにする方式へ変更した
+   ため（_onOrientationChange参照）その経路は無くなったが、ロード直後の取りこぼし
+   タッチで誤スタートするのを防ぐ一般的なガードとしてそのまま残している。 */
 const _startupGuardUntil = Date.now() + 500;
 
 /* startup フェーズ: lsLoad/lsLoadAch だけ行い、画面は startup のままにする */
@@ -10265,13 +10283,13 @@ canvas.addEventListener('mousedown', e=>{
   if (isPaused) {
     /* PAUSE中はゲームループが止まっているため操作後に draw() を明示的に呼ぶ（mousedown）
        touchstart ハンドラはゲームループが動いているため draw() 不要（非対称だが意図的） */
-    if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; draw(); return; }
+    if (_achBtnEnabled() && hitTest(ACH_TROPHY, cx, cy)) { showAchievements = !showAchievements; draw(); return; }
     if (showAchievements) { showAchievements = false; draw(); return; }
     if (hitTest(MUTE_BTN, cx, cy)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
   }
   if (showAchievements) { showAchievements = false; return; }
-  if (hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
+  if (_achBtnEnabled() && hitTest(ACH_TROPHY, cx, cy)) { showAchievements = true; return; }
   if (hitTest(MUTE_BTN, cx, cy)) {
     /* AudioContextがなければ初期化してからミュート切り替え */
     if (!audioCtx) getAudioCtx();
@@ -10332,7 +10350,7 @@ document.addEventListener('touchstart', e=>{
   }
   if (hitTest(PAUSE_BTN, pt.x, pt.y)) { togglePause(); return; }
   if (isPaused) {
-    if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; draw(); return; }
+    if (_achBtnEnabled() && hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = !showAchievements; draw(); return; }
     if (showAchievements) { showAchievements = false; draw(); return; }
     if (hitTest(MUTE_BTN, pt.x, pt.y)) { if (!audioCtx) getAudioCtx(); toggleMute(); draw(); return; }
     return;
@@ -10340,7 +10358,7 @@ document.addEventListener('touchstart', e=>{
   /* 実績オーバーレイ中 */
   if (showAchievements) { showAchievements = false; return; }
   /* トロフィーボタン */
-  if (hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
+  if (_achBtnEnabled() && hitTest(ACH_TROPHY, pt.x, pt.y)) { showAchievements = true; return; }
 
   /* ミュートボタン */
   if (hitTest(MUTE_BTN, pt.x, pt.y)) {
@@ -10425,7 +10443,36 @@ function fitCanvas() {
   requestAnimationFrame(() => { _canvasRect = canvas.getBoundingClientRect(); });
 }
 window.addEventListener('resize', fitCanvas);
-window.addEventListener('orientationchange', () => setTimeout(() => location.reload(), 300));
+
+/* ── 画面回転 ──
+   以前は location.reload() でタイトル画面へ戻していた。レイアウト定数（IS_PORTRAIT・
+   W・H とそこから導かれる約20個のconst）が起動時に焼き込まれる設計のため、向きの
+   変更はリロードが唯一安全な手段だったという事情がある。
+   ユーザー要望により、リロードせずPAUSEにして続きから再開できるようにする。
+   レイアウトは回転前の論理サイズ（W×H）のまま維持し、fitCanvas()がCSSで新しい
+   ビューポートに収まるよう縮小する（＝向きに合わせた再レイアウトは行わない。
+   縦横でレイアウトを組み替える案は進行中オブジェクトの絶対座標の変換が必要で
+   別途検討とした）。通常モード・キングギヨウザモードのどちらでも同じ扱いになる
+   （togglePauseは既にボス系フェーズに対応済み）。
+   タイトル画面は進行中の状態が無く、togglePauseもstartupでは早期returnするため、
+   PAUSEにはせず表示の再フィットだけ行う。 */
+let _orientationFitTimer = null;
+function _onOrientationChange() {
+  /* 既にPAUSE中なら二重にトグルして解除してしまわないよう条件付きで呼ぶ
+     （visibilitychangeハンドラと同じ書き方） */
+  if (phase !== 'startup' && !isPaused) togglePause();
+  /* iOSはorientationchangeの時点でvisualViewportがまだ旧値を返すことがあり、
+     続けてresizeが複数回発火する。まとめて1回に束ねてから再フィットする */
+  if (_orientationFitTimer) clearTimeout(_orientationFitTimer);
+  _orientationFitTimer = setTimeout(() => {
+    _orientationFitTimer = null;
+    fitCanvas();
+    /* PAUSE中はゲームループ(rAF)が止まっているため、明示的に描き直さないと
+       回転後の画面（PAUSEオーバーレイ含む）が更新されない */
+    draw();
+  }, 300);
+}
+window.addEventListener('orientationchange', _onOrientationChange);
 /* visualViewport のリサイズ（アドレスバー出現・消滅）にも追従 */
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', fitCanvas);
