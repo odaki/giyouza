@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.55';
+const VERSION = 'v5.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6897,11 +6897,15 @@ function drawBossVictoryOutro() {
    並列の選択肢という位置づけのため、あえて実績パネルの中には置かない。
    3幕構成、いつでもタップでスキップ可（act3の締めくくりのみ
    最短表示後にCONTINUE待ち、既存のバッジ演出と同じ操作感）。 */
-const _TRUE_ENDING_OPEN_LINES = [
-  '荒ぶっていた',
-  '野生のギヨウザたちも',
-  'おだやかな心を 取り戻しました。',
-];
+/* 開幕セリフ（「荒ぶっていた／野生のギヨウザたちも／おだやかな心を取り戻しました。」）は
+   廃止した。こんがり達成の退場演出（bossVictoryOutro: 見上げ→飛び去り→解放→締め2行）を
+   追加したことで、その直後に見せる内容としてこのセリフが噛み合わなくなったため
+   （尺を詰める目的ではない）。副作用として、開幕セリフに紐づいていたキングの
+   再登場（旧_trueEndingKingAlpha）も無くなり、「飛び去ったキングがエンドロールで
+   また出てくる」という矛盾も解消している。
+   代わりに実績一覧の前に見出しを1行置く（上下を細い罫線で挟むだけの最小構成。
+   締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は文字だけに留める） */
+const _TRUE_ENDING_HEADER_TEXT = 'たっせいのあかし';
 const _TRUE_ENDING_CLOSE_LINES = [
   'ギヨウザたちは',
   'あなたの手によって',
@@ -6940,7 +6944,7 @@ const _TRUE_ENDING_BEAT = 0.6;
    ように）。結果は1.111...px/frameで、以前の指摘で落ち着かせた1.2に近い
    速度のまま、テーマ曲のリズムに正確に乗る */
 const _TRUE_ENDING_SCROLL_SPEED = _TRUE_ENDING_ROLL_ROW_H / (_TRUE_ENDING_BEAT * 60);
-const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示しておく時間（締めセリフの静止表示と対にする）
+const _TRUE_ENDING_HEADER_HOLD_FRAMES = 130; // 見出しを静止表示しておく時間（締めセリフの静止表示と対にする）
 /* 各区間の空白（何も表示されない区間）はH比で定義する。縦画面と横画面で
    H（IS_PORTRAIT ? 820 : 560）が大きく異なり、同じpx値だと縦画面では
    相対的に間延びして見え・横画面では逆に窮屈に見えるため、必ずH比で
@@ -6948,7 +6952,16 @@ const _TRUE_ENDING_OPEN_HOLD_FRAMES = 130; // 開幕セリフを静止表示し�
    SPACER_BEFORE_CLOSEは特に、締めセリフが静止した瞬間にまとめ（累計データ）
    の末尾がまだ画面に残って見えるという指摘を受け、静止位置での重なりが
    出ない値（縦横それぞれで計算済み・80px前後の余裕を持たせた）まで広げた */
-const _TRUE_ENDING_SPACER_AFTER_OPEN_RATIO  = 0.30; // 開幕セリフ〜実績ロールの間隔
+/* 見出し〜実績ロールの間隔。他の空白と違い固定のH比では持たせない。
+   見出しは静止表示（_TRUE_ENDING_HEADER_HOLD_FRAMES）してから流れ始めるので、
+   その静止中に実績の先頭行が画面内に居ると「見出しを読ませてから一覧が始まる」
+   という段取りが崩れる。かつ見出しの行高は画面比ではなくフォント基準の絶対値
+   なので、H比を固定すると縦横で「静止中に何行見えるか」が変わってしまう
+   （縦画面のほうが多く見えてしまう）。そこで「静止中は先頭行が画面下端の
+   ちょうど外に居る」位置を逆算し、縦横で同じ見え方に揃える */
+function _trueEndingSpacerAfterHeader(headerH) {
+  return Math.max(H * 0.18, H * 0.5 - _TRUE_ENDING_ROLL_ROW_H / 2 - headerH);
+}
 const _TRUE_ENDING_SPACER_BEFORE_SUMMARY_RATIO = 0.14; // 実績本編〜まとめ（累計データ）の間隔
 const _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO = 0.55; // 実績まとめ〜締めセリフの間隔
 const _TRUE_ENDING_CLOSE_LINE_DY_RATIO = 2.0; // 締めセリフの行間（フォントサイズ×この値。開幕より少し詰める）
@@ -6980,11 +6993,11 @@ const _TRUE_ENDING_FIN_LINGER_FRAMES = 150; // クレジットが出そろって
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES =
   _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES + _TRUE_ENDING_CREDIT_FADEIN_FRAMES + _TRUE_ENDING_FIN_LINGER_FRAMES;
 
-/* { stage, timer, scrollY, targetScrollY, openSceneEndScrollY,
+/* { stage, timer, scrollY, targetScrollY,
      content:{rows,rollStartIdx,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
    stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold'
-   タップ操作は上記4段階の"表示"（開幕セリフ/実績一覧/締めセリフ/タイトル）を
+   タップ操作は3段階の"表示"（見出し＋実績一覧／締めセリフ／タイトル）を
    順に1段ずつ進める（handleGameClickのphase==='trueEnding'分岐参照） */
 let _trueEnding = null;
 let _trueEndingIsReplay = false; // タイトル画面のボタンからの単体再生か（_finishTrueEndingでのキング戦state後片付けの要否に使う）
@@ -7017,27 +7030,24 @@ function _wrapTrueEndingLine(text, font, maxWidth) {
    座標に並べる。screenY = H*0.5 + row.y+row.h/2 - scrollY という共通の式で
    位置を出す（scrollY=0の時、先頭の開幕セリフがH*0.5に来る＝旧act1の見た目を継承） */
 function _buildTrueEndingContent() {
-  const fsOpen  = IS_PORTRAIT ? 22 : 26;
-  const openDy  = fsOpen * 2.2;
+  const fsHeader = IS_PORTRAIT ? 24 : 28;
+  const headerH  = fsHeader * 2.6; // 上下の罫線ぶんの余白を含む行高
   const fsClose = IS_PORTRAIT ? 20 : 24;
   const closeDy = fsClose * _TRUE_ENDING_CLOSE_LINE_DY_RATIO;
-  const spacerAfterOpen     = H * _TRUE_ENDING_SPACER_AFTER_OPEN_RATIO;
+  const spacerAfterHeader   = _trueEndingSpacerAfterHeader(headerH);
   const spacerBeforeSummary = H * _TRUE_ENDING_SPACER_BEFORE_SUMMARY_RATIO;
   const spacerBeforeClose   = H * _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO;
   const maxTextWidth = W - 48; // 左右マージン24pxずつ
 
-  const openFont  = `bold ${fsOpen}px 'Hiragino Mincho ProN',serif`;
   const closeFont = `bold ${fsClose}px 'Hiragino Mincho ProN',serif`;
-  const openDisplayLines  = _TRUE_ENDING_OPEN_LINES.flatMap(t => _wrapTrueEndingLine(t, openFont, maxTextWidth));
   const closeDisplayLines = _TRUE_ENDING_CLOSE_LINES.flatMap(t => _wrapTrueEndingLine(t, closeFont, maxTextWidth));
 
   const rows = [];
   let y = 0;
-  for (const text of openDisplayLines) {
-    rows.push({ type: 'open', text, y, h: openDy, fs: fsOpen });
-    y += openDy;
-  }
-  y += spacerAfterOpen;
+  /* 実績一覧の見出し。上下を細い罫線で挟んだ1行（_TRUE_ENDING_HEADER_TEXT参照） */
+  rows.push({ type: 'header', text: _TRUE_ENDING_HEADER_TEXT, y, h: headerH, fs: fsHeader });
+  y += headerH;
+  y += spacerAfterHeader;
 
   const rollStartIdx = rows.length;
   for (const a of ACHIEVEMENTS) {
@@ -7093,13 +7103,13 @@ function _startTrueEnding(replay) {
      折り返しで画面幅ごとに変わるため、常に実際の行数から中央行を求める */
   const midClose = content.rows[content.closeStartIdx + Math.floor(content.closeRowCount / 2)];
   const targetScrollY = H * 0.5 + (midClose.y + midClose.h / 2) - H * _TRUE_ENDING_CLOSE_REST_Y_RATIO;
-  /* タップでの「開幕セリフ→実績一覧」ジャンプ先。実績一覧の先頭行を画面中央
-     （H*0.5）に来させるスクロール位置を、targetScrollYと同じ考え方で逆算する */
-  const firstRoll = content.rows[content.rollStartIdx];
-  const openSceneEndScrollY = firstRoll.y + firstRoll.h / 2;
+  /* 旧openSceneEndScrollY（タップで「開幕セリフ→実績一覧」へ飛ばす中間地点）は
+     廃止した。開幕セリフが無くなり、見出しの直後がもう実績一覧なので、
+     この中間ジャンプは移動量がほぼ無く意味を持たない。スキップは
+     「1タップで締めセリフまで」の1段になる（handleGameClick参照） */
   _trueEnding = {
     stage: 'scroll', timer: 0,
-    scrollY: 0, targetScrollY, openSceneEndScrollY, content,
+    scrollY: 0, targetScrollY, content,
     closeAlpha: 1, titleAlpha: 0, titleGlow: 0, creditAlpha: 0, canExit: false,
   };
   _playTrueEndingTheme();
@@ -7172,9 +7182,10 @@ function _updateTrueEnding() {
   if (_king) _easeKingXform();
   o.timer++;
   if (o.stage === 'scroll') {
-    /* 開幕セリフは締めセリフと同じく「静止表示→一定時間後にスクロール開始」に
-       揃える（開幕だけいきなり流れ始めるのは締めとの見せ方の対称性を欠くため） */
-    if (o.timer > _TRUE_ENDING_OPEN_HOLD_FRAMES) {
+    /* 見出しは締めセリフと同じく「静止表示→一定時間後にスクロール開始」に揃える
+       （いきなり流れ始めると実績一覧が唐突に始まる感じが残るため、まず見出しを
+       読ませてから動かす） */
+    if (o.timer > _TRUE_ENDING_HEADER_HOLD_FRAMES) {
       o.scrollY = Math.min(o.scrollY + _TRUE_ENDING_SCROLL_SPEED, o.targetScrollY);
     }
     if (o.scrollY >= o.targetScrollY) _trueEndingEnterStage('closeLinesRest');
@@ -7240,6 +7251,24 @@ function _drawTrueEndingRows(o) {
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
       ctx.fillText(row.text, _TRUE_ENDING_ROLL_TEXT_X, screenY);
+    } else if (row.type === 'header') {
+      /* 実績一覧の見出し: 文字の上下に細い罫線を1本ずつ引くだけの最小構成
+         （締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は
+         文字と罫線のみに留める）。罫線は文字幅より少し広い固定幅で、
+         中央から左右対称に引く */
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      const ruleHalfW = Math.min(W * 0.34, ctx.measureText(row.text).width / 2 + row.fs * 1.6);
+      const ruleDy = row.fs * 1.05;
+      ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+      ctx.lineWidth = 1;
+      for (const dy of [-ruleDy, ruleDy]) {
+        ctx.beginPath();
+        ctx.moveTo(W / 2 - ruleHalfW, screenY + dy);
+        ctx.lineTo(W / 2 + ruleHalfW, screenY + dy);
+        ctx.stroke();
+      }
+      outText(row.text, W / 2, screenY, Y, 'rgba(0,0,0,0.9)', 6);
     } else {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
@@ -7249,19 +7278,12 @@ function _drawTrueEndingRows(o) {
   ctx.globalAlpha = 1;
 }
 
-/* キングの表示は「開幕セリフが画面上にある間」だけにしたい（旧act1相当）。
-   開幕セリフ2行自体の縁フェード値をそのまま流用することで、スクロールで
-   自然に画面外へ去っていくのと同じタイミング・同じ滑らかさでキングも
-   一緒にフェードアウトする（専用タイマーを持たず値を共有するだけで済む） */
-function _trueEndingKingAlpha(o) {
-  const rows = o.content.rows;
-  let a = 0;
-  for (let i = 0; i < 2; i++) { // 開幕セリフは常に先頭2行
-    const screenY = H * 0.5 + (rows[i].y + rows[i].h / 2) - o.scrollY;
-    a = Math.max(a, Math.max(0, Math.min(1, Math.min(screenY, H - screenY) / 60)));
-  }
-  return a;
-}
+/* 旧_trueEndingKingAlphaは削除した。開幕セリフの表示中だけキングを見せる演出
+   だったが、開幕セリフ自体を廃止したうえ、こんがり達成の退場演出でキングは
+   既に空へ飛び去っているため、エンドロールで再登場させると矛盾する
+   （_TRUE_ENDING_HEADER_TEXT付近のコメント参照）。
+   なおこの関数は先頭2行を「開幕セリフ」と決め打ちで参照していたため、
+   残したままだと見出し行を誤って参照する不具合になっていた */
 
 /* 崎陽軒ギヨウザのパッケージにある丸いロゴマークを模した装飾。
    黄色い円を縦3分割し、中央（やや幅広）を緑地に白文字で大きく「ギヨウザ」、
@@ -7380,16 +7402,8 @@ function drawTrueEnding() {
        いつでも終了できるが、余韻を楽しんでもらうため案内は出さず、
        静かに佇む演出のままにする */
   } else {
-    if (_king) {
-      const kingAlpha = _trueEndingKingAlpha(o);
-      if (kingAlpha > 0) {
-        ctx.save();
-        ctx.globalAlpha = kingAlpha;
-        ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-        ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-        ctx.restore();
-      }
-    }
+    /* キングはここでは描かない（旧_trueEndingKingAlphaの削除理由は同関数が
+       あった位置のコメント参照）。ロール本文だけを流す */
     _drawTrueEndingRows(o);
   }
   ctx.restore();
@@ -10009,12 +10023,10 @@ function handleGameClick(inputPerfMs) {
        場合と同じ着地位置になる */
     const o = _trueEnding;
     if (o.stage === 'scroll') {
-      if (o.scrollY < o.openSceneEndScrollY) {
-        o.scrollY = o.openSceneEndScrollY; // 開幕セリフ → 実績一覧
-      } else {
-        o.scrollY = o.targetScrollY; // 実績一覧 → 締めセリフ
-        _trueEndingEnterStage('closeLinesRest');
-      }
+      /* 見出し＋実績一覧 → 締めセリフ。開幕セリフ廃止で中間ジャンプ
+         （旧openSceneEndScrollY）が不要になったため1段に統合した */
+      o.scrollY = o.targetScrollY;
+      _trueEndingEnterStage('closeLinesRest');
     } else if (o.stage === 'closeLinesRest' || o.stage === 'closeLinesFadeOut' || o.stage === 'titleFadeIn') {
       /* 締めセリフ → タイトル＋COPYRIGHT。グロー成長・クレジットの
          フェードインを待たず、演出が出そろった状態まで一気に進める。
