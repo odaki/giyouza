@@ -217,7 +217,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.60';
+const VERSION = 'v5.61';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5098,6 +5098,20 @@ let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト�
    キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
    弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
 const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
+/* 締めメッセージ（達成側・失敗側で共通の書式）のフォントサイズ。
+   折り返し計測と実描画で必ず同じ値を使うため関数で一本化する */
+function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
+/* 締めメッセージを画面幅に収まるよう折り返す。
+   実機指摘: 縦画面（W=420）で「ギヨウザは また あつまりはじめる……」が横から
+   はみ出していた。文言は後から調整する前提なので、固定の行配列をそのまま
+   描かず必ずここを通して、どんな文言でも収まるようにする。
+   区切りは既存のエンドロールと同じく空白（半角・全角）位置。
+   ctx.measureTextを使うので演出の開始時に1度だけ実行し、結果を状態に持たせる
+   （毎フレーム計測しない） */
+function _wrapOutroLines(lines) {
+  const font = `bold ${_outroMsgFontSize()}px 'Hiragino Mincho ProN',serif`;
+  return lines.flatMap(t => _wrapTrueEndingLine(t, font, W - 48)); // 左右24pxずつの余白
+}
 let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
 /* こんがり達成側の退場演出の状態（null=非表示、drawBossVictoryOutro参照）。
    宣言をここに置くのは_cleanupKingBattleStateが両方を後片付けするため
@@ -5470,7 +5484,8 @@ function _makeDefeatOutroItems() {
     const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
     items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
-  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0 };
+  /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照） */
+  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0, msgLines: _wrapOutroLines(_DEFEAT_OUTRO_LINES) };
 }
 
 /* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
@@ -6928,6 +6943,8 @@ function _startBossVictoryOutro() {
     step: 0, timer: 0, items: [], seedItem: null,
     msgAlpha: 0, gaugeAlpha: 1,
     baseBy: _king.by, baseScale: _king.scale,
+    /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照） */
+    msgLines: _wrapOutroLines(_VICTORY_OUTRO_LINES),
   };
   _king.gazeUp = 0;
   playSE('kingVictoryInhale');
@@ -7069,12 +7086,15 @@ function drawBossVictoryOutro() {
     /* 失敗側（drawBossDefeatOutro）と同じ配置・同じ書式で、全行を1つの
        メッセージとしてまとめて出す */
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const fsL = IS_PORTRAIT ? 26 : 30;
+    const fsL = _outroMsgFontSize();
     const lineDy = fsL * 2.2;
-    const lineY0 = H / 2 - lineDy * (_VICTORY_OUTRO_LINES.length - 1) / 2;
+    /* 折り返し済みの行（o.msgLines）を使う。行数は文言と画面幅で変わるので
+       中央揃えの基準も実際の行数から求める */
+    const lines = o.msgLines;
+    const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
     ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
     ctx.globalAlpha = o.msgAlpha;
-    _VICTORY_OUTRO_LINES.forEach((line, i) => {
+    lines.forEach((line, i) => {
       outText(line, W / 2, lineY0 + i * lineDy, '#ffe9a8', 'rgba(60,20,0,0.9)', 6);
     });
     ctx.globalAlpha = 1;
@@ -7864,12 +7884,15 @@ function drawBossDefeatOutro() {
        （実機指摘）。画面に固定のボスが居ないぶん余裕があるため、全行の中心が
        画面中央(H/2)に来るよう配置し、行数が少ない分フォントも大きくする */
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const fsL = IS_PORTRAIT ? 26 : 30;
+    const fsL = _outroMsgFontSize();
     const lineDy = fsL * 2.2;
-    const lineY0 = H / 2 - lineDy * (_DEFEAT_OUTRO_LINES.length - 1) / 2;
+    /* 折り返し済みの行（o.msgLines）を使う。行数は文言と画面幅で変わるので
+       中央揃えの基準も実際の行数から求める（達成側と同じ扱い） */
+    const lines = o.msgLines;
+    const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
     ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
     ctx.globalAlpha = o.msgAlpha;
-    _DEFEAT_OUTRO_LINES.forEach((line, i) => {
+    lines.forEach((line, i) => {
       outText(line, W/2, lineY0 + i*lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
     });
     ctx.globalAlpha = 1;
