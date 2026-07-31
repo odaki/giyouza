@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.63';
+const VERSION = 'v5.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5371,6 +5371,7 @@ function _cleanupKingBattleState() {
   _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
   _bossRumblePendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
+  _kingImpactShake = 0;          // 着弾の画面揺れ残量（同上）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
@@ -5802,9 +5803,27 @@ let _kingSiftShake = 0;
    減衰する上下振動を主体にし、横はごくわずかに添えるだけ（衝突点は常に的の
    真上なので、縦に叩かれた揺れ方が自然）。的スロット単位で持つのはひび
    （_king.reelCracks）と同じ理由で、再スピンで的オブジェクトが作り直されても
-   スロットに紐づけておけば取り違えないため */
+   スロットに紐づけておけば取り違えないため。
+   実機指摘「衝撃があまり的に伝わっていないように見える／タイミングが早い気が
+   する」を受けて、初版から以下を変更した:
+   - 初版は sin(経過フレーム) だったため、セットした瞬間（経過0）の変位が
+     sin(0)=0 で、一番鋭いはずの衝突フレームに的が全く動いていなかった。
+     cosベースにして衝突フレームで最大変位になるようにする
+   - BIASぶん下方向へ偏らせる。衝突は真上からなので「まず沈んで、小さく戻る」
+     方が自然（上下等分に揺れると単なる振動に見える）
+   - 振幅を3.5→6pxへ。的の直径に対して控えめすぎた（最大変位も設定値の84%
+     しか出ていなかった） */
 const KING_REEL_SHAKE_FRAMES = 12;
-const KING_REEL_SHAKE_AMP    = 3.5;
+const KING_REEL_SHAKE_AMP    = 6;
+const KING_REEL_SHAKE_FREQ   = 1.05; // 約6フレーム周期
+const KING_REEL_SHAKE_BIAS   = 0.35; // 下方向への偏り（0=上下等分、1=沈むだけ）
+/* 衝突の瞬間だけ入れる短い画面揺れ。振り下ろし時の画面揺れ（_kingSiftShake）は
+   衝突より9〜16フレーム早く終わるため、そちらを「当たった衝撃」と誤認して
+   「タイミングが早い」と感じられていた。振り下ろし側を弱めるとキングの打撃感が
+   死ぬので、本番（衝突）側にも揺れを入れて印象を取り戻す */
+const KING_IMPACT_SHAKE_FRAMES = 3;
+const KING_IMPACT_SHAKE_AMP    = 2.5;
+let _kingImpactShake = 0;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -6392,11 +6411,20 @@ function _kingReelShakeOffset(idx) {
   if (!_king || !_king.reelShake || idx == null) return null;
   const r = _king.reelShake[idx];
   if (!r) return null;
-  const t = KING_REEL_SHAKE_FRAMES - r;          // 経過フレーム
-  const decay = r / KING_REEL_SHAKE_FRAMES;      // 1→0
+  const t = KING_REEL_SHAKE_FRAMES - r;          // 経過フレーム（衝突フレームで0）
+  /* 2乗で減衰させる。線形だと減衰後半にもう一度3px級の沈みが出て「2回叩かれた」
+     ように見えたため、1発目を保ったまま以降を素早く収束させる */
+  const lin   = r / KING_REEL_SHAKE_FRAMES;      // 1→0
+  const decay = lin * lin;
+  /* cosベースなので t=0（衝突した瞬間）に最大変位＝下向きへ沈む。
+     BIASを足して下方向へ偏らせ、戻りの上向きは小さくする（KING_REEL_SHAKE_*参照） */
+  const osc = KING_REEL_SHAKE_BIAS
+            + (1 - KING_REEL_SHAKE_BIAS) * Math.cos(t * KING_REEL_SHAKE_FREQ);
   return {
-    x: Math.sin(t * 1.7) * KING_REEL_SHAKE_AMP * 0.35 * decay,
-    y: Math.sin(t * 1.15) * KING_REEL_SHAKE_AMP * decay,
+    /* 横は衝突フレームで0から始めて後追いで揺れる（真上からの衝突なので、
+       まず縦に沈み、横揺れは余韻として付いてくる方が自然） */
+    x: Math.sin(t * 1.7) * KING_REEL_SHAKE_AMP * 0.22 * decay,
+    y: osc * KING_REEL_SHAKE_AMP * decay,
   };
 }
 
@@ -6457,6 +6485,9 @@ function _addKingReelCrackAtCollision(f) {
   _king.reelCracks[f.reelIdx].push({ poly: _createKingCrackWedge(localAngle), angle: localAngle });
   /* 当たった衝撃でその的だけを小さく揺らす（_kingReelShakeOffset参照） */
   if (_king.reelShake) _king.reelShake[f.reelIdx] = KING_REEL_SHAKE_FRAMES;
+  /* 衝突の瞬間だけ画面も短く揺らす（KING_IMPACT_SHAKE_*参照）。4文字は同じ
+     フレームに着弾するので、加算せず同じ値をセットして暴れないようにする */
+  _kingImpactShake = KING_IMPACT_SHAKE_FRAMES;
 }
 
 /* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
@@ -8150,6 +8181,12 @@ function draw() {
     shakeX += (Math.random()-0.5) * 3 * k;
     shakeY += (Math.random()-0.5) * 5 * k;
     _kingSiftShake--;
+  }
+  if (_kingImpactShake > 0) { // 文字が的に着弾した瞬間の衝撃（KING_IMPACT_SHAKE_*参照）
+    const k = _kingImpactShake / KING_IMPACT_SHAKE_FRAMES;
+    shakeX += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * k;
+    shakeY += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * 1.6 * k;
+    _kingImpactShake--;
   }
 
   ctx.save();
