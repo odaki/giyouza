@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.64';
+const VERSION = 'v5.65';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2118,9 +2118,20 @@ function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
    AudioBufferSourceNodeごと差し替える。地鳴り以外の内容は全段階で同一の
    ため、継ぎ目での差し替えはクロスフェード無しで聞こえない。 */
 
-/* cookPct(0-100)から対応する段階（0〜RUMBLE_TIER_COUNT-1）を返す */
+/* cookPct(0-100)から対応する段階（0〜RUMBLE_TIER_COUNT-1）を返す。
+   実機指摘「表情は50%未満が怒りでその後優しくなるのに、地鳴りは25%あたりから
+   マイルドになり始めていて噛み合わない」への対応。
+   旧実装は floor(pct/25) で 25/50/75% の等間隔だったため、表情の知覚的な
+   転換点（口が「への字」から「U字」へ反転する ちょうど50%）とずれていた。
+   表情と同じ基準（_kingGentleness）に従わせる。ceilを使うのは、優しさが
+   0を超えた瞬間＝口が笑顔へ反転した瞬間に地鳴りの1段目を必ず踏ませるため
+   （表情の変化と音の変化が同じフレームで起きるので結びつきが分かりやすい）。
+   結果の境界: 〜50%=tier0（最も凶暴）、50〜66.7%=tier1、66.7〜83.3%=tier2、
+   83.3%〜=tier3（最もマイルド）
+   ※ RUMBLE_TIER_COUNTを変えても_kingGentlenessから自動で割り直される */
 function _rumbleTierForCookPct(pct) {
-  return Math.min(RUMBLE_TIER_COUNT - 1, Math.floor(pct / (100 / RUMBLE_TIER_COUNT)));
+  const g = _kingGentleness(pct / 100);
+  return Math.min(RUMBLE_TIER_COUNT - 1, Math.ceil(g * (RUMBLE_TIER_COUNT - 1)));
 }
 
 /* 次にループが先頭（=地鳴りが鳴る瞬間）に戻るaudioCtx.currentTimeを返す。
@@ -5156,6 +5167,25 @@ function _spawnOmenGhost() {
   };
 }
 
+/* 口の形を決める比率（本体サイズsに対する比）。表情の知覚的な要はこの口の
+   反転で、制御点Yが端点Yを下回れば「への字（怒り）」・上回れば「U字（笑顔）」。
+   地鳴りのマイルド化もこの同じ値から導くため（_kingGentleness参照）、
+   マジックナンバーで散らさず定数として一箇所に置く */
+const KING_MOUTH_END_Y   = 0.26; // 口の両端のY
+const KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
+const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
+
+/* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
+   上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
+   実機指摘「表情の変化と地鳴りがマッチしていない」への対応で、地鳴りの
+   マイルド化（_rumbleTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
+   動かす。口の定数から導いているので、口の形を変えれば地鳴りも自動で追従する
+   （別々のしきい値を持たせるとまた食い違うため） */
+function _kingGentleness(pct01) {
+  const ctrl = KING_MOUTH_CTRL_Y0 + (KING_MOUTH_CTRL_Y1 - KING_MOUTH_CTRL_Y0) * pct01;
+  return Math.max(0, Math.min(1, (ctrl - KING_MOUTH_END_Y) / (KING_MOUTH_CTRL_Y1 - KING_MOUTH_END_Y)));
+}
+
 /* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
 /* 表情（白目+黒瞳+眉+口）。呼び出し側で scale(_dpr)+translate(half,half)
    適用済みの論理座標系であること前提（_buildBossOC から分離。理由は _buildBossOC
@@ -5204,12 +5234,14 @@ function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
     c.lineTo(sx*innerX, innerY);
     c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02; c.lineCap = 'round'; c.stroke();
   }
-  /* 口: 制御点Yが端点Y(0.26s)を下回れば「への字」(不満げ)、上回れば「U字」(笑顔)。
-     pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s下回るU字＝への字と対称の笑顔) */
-  const mouthCtrlY = s * (0.19 + 0.14 * pct);
+  /* 口: 制御点Yが端点Y(KING_MOUTH_END_Y)を下回れば「への字」(不満げ)、
+     上回れば「U字」(笑顔)。pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s
+     上回るU字＝への字と対称の笑顔)。ちょうどpct=0.5で平ら＝怒りと笑顔の反転点 */
+  const mouthCtrlY = s * (KING_MOUTH_CTRL_Y0
+    + (KING_MOUTH_CTRL_Y1 - KING_MOUTH_CTRL_Y0) * pct);
   c.beginPath();
-  c.moveTo(-s*0.09, s*0.26);
-  c.quadraticCurveTo(0, mouthCtrlY, s*0.09, s*0.26);
+  c.moveTo(-s*0.09, s*KING_MOUTH_END_Y);
+  c.quadraticCurveTo(0, mouthCtrlY, s*0.09, s*KING_MOUTH_END_Y);
   c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
 }
 
