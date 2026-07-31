@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.62';
+const VERSION = 'v5.63';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3260,7 +3260,16 @@ function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面�
    同じ「1本ずつ順番にタップして止める」操作感にする（OffscreenCanvas必須環境限定のため
    フォールバック描画は持たない：ボス戦自体が非対応環境では発生しない） */
 function _createKingReel(x, y, weights) {
-  const chars = [...KING_CHARS].sort(() => Math.random() - 0.5);
+  /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。
+     実機指摘: 以前はここで毎回シャッフルしていたため、的ごと・再スピンごとに
+     並び順が変わって「こんがり」と読めなかった。角度は0から昇順に積むので、
+     canvasの座標系（y下向き＝正の角度が時計回り）では時計回りに
+     こ→ん→が→りと並ぶ。
+     並びを固定してもゲーム性は落ちない: どの文字がポインタに来るかは的の初期
+     回転（rot）と回転速度で決まるため、ランダム性は並び順ではなく回転が担う。
+     文字ごとの当たりやすさの偏り（_adjustKingCharWeight）もspanで表現するので
+     並び順とは独立に機能する */
+  const chars = KING_CHARS;
   /* weights（%、KING_CHARS各文字→数値）が渡されればその配分で角度を割る
      （的ごとの命中履歴で偏らせる。_king.charWeights・_adjustKingCharWeight参照）。
      合計は理論上100だが、加減算の丸め誤差を吸収するため実際の合計で正規化する
@@ -3297,7 +3306,10 @@ function _createKingReel(x, y, weights) {
 const KING_CRACK_ANCHOR_CHAR = 'こ';
 
 /* 的ローカル座標系（w.rotを含まない、segs.startと同じ系）における
-   基準文字エリアの開始角。segsは必ず4文字すべてを含むが、防御的に0で代替する */
+   基準文字エリアの開始角。segsは必ず4文字すべてを含むが、防御的に0で代替する。
+   文字の並びを固定した現在（_createKingReel参照）「こ」は常に先頭＝この関数は
+   常に0を返すが、「ひびは基準文字エリアを原点とする」という不変条件を明示する
+   ために残している（並び順を変えたくなった時にひびの位置が壊れない） */
 function _kingReelAnchorAngle(w) {
   const seg = w && w.segs && w.segs.find(s => s.char === KING_CRACK_ANCHOR_CHAR);
   return seg ? seg.start : 0;
