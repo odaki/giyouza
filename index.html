@@ -40,6 +40,18 @@ canvas {
   touch-action: none; /* スクロール・ズームを完全に無効化してタッチ遅延を排除 */
   will-change: filter; /* filter変化をGPUレイヤーで処理してメインスレッドへの影響を軽減 */
 }
+/* ブラウザ標準のフォーカスリングを消す。
+   実機指摘: 黄色い枠のさらに外側に、うっすら緑がかった枠（PC Safariでは
+   テキスト入力欄のフォーカス枠のような見た目）が出て目障りだった。
+   canvasはBluetoothキーボードのkeydownをページへ配送させるために
+   tabIndex=-1でフォーカス可能にし_ensureCanvasFocus()で明示的にフォーカスを
+   当てている（その経緯は同関数のコメント参照）。フォーカス自体は機能上
+   必要なので外さず、輪郭の描画だけを止める。
+   tabIndex=-1でキーボードのTab移動では到達しない要素なので、フォーカス表示を
+   消してもキーボード操作の手がかりは失われない。
+   focus-visibleも併記するのはブラウザによってどちらが効くかが異なるため */
+canvas:focus,
+canvas:focus-visible { outline: none; }
 /* 横向き小型画面: タイトルを非表示にしてキャンバスを最大化 */
 @media (max-height: 480px) and (orientation: landscape) {
   h1 { display: none; }
@@ -217,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.61';
+const VERSION = 'v5.62';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
