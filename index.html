@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.66';
+const VERSION = 'v5.68';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1062,6 +1062,9 @@ let audioCtx = null;
 let _pendingInitGame = false; // touchstart で START ボタンを検出し touchend で initGame() するためのフラグ
 let _pendingTrueEndingReplay = false; // touchstart で真エンディング再生ボタンを検出し touchend で開始するためのフラグ
 let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
+/* BGM専用のハイシェルフ。こんがり度に応じて高域を持ち上げる（_updateBgmToneShelf
+   参照）。SEは_seDest経由でmasterGainに直結するのでこのフィルターを通らない */
+let bgmToneShelf = null;
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
 let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版）ループバッファ（tier0、既存コード互換用）
 /* ボス戦BGMの地鳴りマイルド化段階バッファ（ユーザー要望: 「こんがり度が上がる
@@ -1315,6 +1318,64 @@ function _createMasterLimiter(ctx) {
   return limiter;
 }
 
+/* BGM系の接続を組む: bgmGain → bgmToneShelf → masterGain。
+   getAudioCtx() と _recreateAudioGraph()（iOS interrupted からの復帰）の
+   2箇所がそれぞれ独立にこの配線を持っていたため、ノードを1つ挟むだけでも
+   片方を直し忘れると「復帰後だけ音色が違う」という再現しにくい不具合になる。
+   _bgmIsBoss の残留バグ（project_king_battle_7_4_bgm メモ参照）と同じ構図
+   なので、最初から配線を1箇所に集約する */
+function _buildBgmGainChain(ctx, outNode) {
+  bgmGain = ctx.createGain();
+  bgmGain.gain.value = 1;
+  bgmToneShelf = ctx.createBiquadFilter();
+  bgmToneShelf.type = 'highshelf';
+  bgmToneShelf.frequency.value = BGM_TONE_SHELF_HZ;
+  bgmToneShelf.gain.value = 0; // 0dB = 完全に透過（下記コメント参照）
+  bgmGain.connect(bgmToneShelf);
+  bgmToneShelf.connect(outNode);
+}
+
+/* ── ボス戦BGMの音色をこんがり度で連続的に開く（ライブ処理） ──
+   ユーザー要望「こんがり度が進むにつれ音楽的にもっと変化させたい」に対する
+   3つ目の要素。地鳴り（4段階）・和声（最終段のみ）が段階的な変化なのに対し、
+   こちらはこんがり度に対して連続的に動くので、段の間も表情に合わせて
+   じわじわ変化し続ける。
+   ローパスを「閉じた状態から開く」方式にしなかった理由: それだとこんがり度0%
+   （＝ユーザーが現状の音として了承済みの状態）が今より曇った音に変わって
+   しまう。ハイシェルフはゲイン0dBのとき伝達関数が厳密に1（係数がそのまま
+   打ち消し合う）なので、0%では現状の音に一切手を加えず、こんがるほど高域が
+   持ち上がって「開けていく」方向にだけ働かせられる。
+   実際に持ち上がるのは主にハイハット（シェイカー/ラトル役）なので、
+   聞こえ方としては「踊りの鳴り物が前に出てくる」＝和太鼓の増加（推し②）と
+   同じ方向を向く。 */
+const BGM_TONE_SHELF_HZ    = 2600; // この周波数より上を持ち上げる
+const BGM_TONE_SHELF_MAX_DB = 5;   // こんがり度100%での持ち上げ量
+const BGM_TONE_SHELF_TAU   = 0.12; // setTargetAtTimeの時定数（段差を作らない）
+
+/* こんがり度から目標シェイプ量(dB)を返す。口の制御点はこんがり度に対して
+   線形に動く（_kingGentleness参照）ので、こちらも線形にしてスライダーの
+   動きを表情と一致させる。0%で0dB＝透過、100%でBGM_TONE_SHELF_MAX_DB。
+   ※_kingGentlenessを使わないのは意図的: あれは「50%で反転」を表す量で、
+     50%未満が全て0になる。連続変化が売りのこの要素では battle 前半でも
+     動いてほしいため、口の制御点そのものと同じ線形量を使う */
+function _bgmToneShelfDbForCookPct(pct) {
+  return BGM_TONE_SHELF_MAX_DB * Math.max(0, Math.min(1, pct / 100));
+}
+
+/* update()から毎フレーム無条件に呼ぶ。「ボス戦を抜けたら戻す」処理を別経路に
+   持たせず、毎フレーム現在のphaseとこんがり度から目標値を導出するので、
+   終了経路（勝利・敗北・真エンディング・ポーズ・中断）が増えても戻し忘れが
+   構造的に起きない。_bgmIsBoss の残留バグと同じ轍を踏まないための形
+   （project_king_battle_7_4_bgm メモの「状態を作る唯一の箇所で導出する」）。
+   ボス戦以外では常に0dBへ戻るため、通常プレイの音色は変化しない */
+function _updateBgmToneShelf() {
+  if (!audioCtx || !bgmToneShelf) return;
+  const target = (_king && _isBossBattlePhase())
+    ? _bgmToneShelfDbForCookPct(_king.cookPct) : 0;
+  if (Math.abs(bgmToneShelf.gain.value - target) < 0.01) return; // ほぼ到達済みなら何もしない
+  bgmToneShelf.gain.setTargetAtTime(target, audioCtx.currentTime, BGM_TONE_SHELF_TAU);
+}
+
 function getAudioCtx() {
   if (!audioCtx) {
     audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
@@ -1328,9 +1389,8 @@ function getAudioCtx() {
        呼ばれない）ため、ここで直接audioMutedを反映すれば安全かつ確実 */
     masterGain.gain.value = audioMuted ? 0 : 1;
     masterGain.connect(_createMasterLimiter(audioCtx));
-    bgmGain  = audioCtx.createGain();
-    bgmGain.gain.value = 1;
-    bgmGain.connect(masterGain); // BGM: bgmGain → masterGain → destination
+    /* BGM: bgmGain → bgmToneShelf → masterGain → destination（_buildBgmGainChain参照） */
+    _buildBgmGainChain(audioCtx, masterGain);
     /* BGMループを非同期でオフラインレンダリング（完了後 bgmBuffer にセット）
        startBGM() がバッファ未完状態で呼ばれていた場合は完了後に起動する */
     renderBGMBuffer(audioCtx.sampleRate).then(buf => {
@@ -1358,6 +1418,8 @@ function getAudioCtx() {
         melArr: tier === BGM_BRIGHT_TIER ? BGM_MEL_BOSS_BRIGHT : BGM_MEL_BOSS,
         hatArr: BGM_HAT_BOSS, kickSet: BGM_KICK_BOSS,
         taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
+        /* こんがり度が上がるほど合いの手の食い込みを増やす（BGM_TAIKO_PICKUP_TIERS参照） */
+        taikoPickupSet: _taikoPickupSetForTier(tier),
         bassDurMul: 0.85, bassDecay: 0.05,
         useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
         useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
@@ -1397,9 +1459,7 @@ function _recreateAudioGraph() {
   masterGain = audioCtx.createGain();
   masterGain.gain.value = audioMuted ? 0 : 1;
   masterGain.connect(_createMasterLimiter(audioCtx));
-  bgmGain = audioCtx.createGain();
-  bgmGain.gain.value = 1;
-  bgmGain.connect(masterGain);
+  _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
   _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
 }
 
@@ -1684,6 +1744,36 @@ const BGM_KICK_BOSS = new Set([0,2,4,6,8,10,12,14,16,18,20,22,24,26]);
    複数の打楽器が層になって踏み鳴らすような密度にする */
 const BGM_TAIKO_STRONG_BOSS   = new Set([0, 8, 14, 22]);
 const BGM_TAIKO_FLOURISH_BOSS = new Set([4, 12, 18, 26]);
+/* こんがり度が上がるほど和太鼓の合いの手を増やす（ユーザー要望「こんがり度が
+   進むにつれ音楽的にもっと変化させたい」）。「狩りの前の鼓舞する踊り」という
+   コンセプトのまま、儀式が成功に近づくほど踊り手が増えて盛り上がっていく、
+   という筋にする。
+   足す位置は既存アクセントの直前の裏拍（8分の食い込み）に限定する:
+     ステップ8/22（拍5の強打）  ← 7/21
+     ステップ12/26（拍7の合いの手）← 11/25
+     ステップ4/18（拍3の合いの手）← 3/17
+   表拍（偶数ステップ）を選ばない理由: キック（BGM_KICK_BOSS）が全拍＝全偶数
+   ステップで鳴っているため、表拍に太鼓を足すとキックと重なって濁るだけで
+   密度が上がって聞こえない。裏拍は現在ハイハットしか居ないので空いている。
+   また「アクセントの直前」に置くことで単なる連打ではなく食い込み（アンティ
+   シペーション）になり、4+3のグルーピング感を壊さずに推進力だけが増す。
+   段階が進むごとに前段の集合を含む（累積）ので、密度は単調増加する。
+   tier0は現状の聞こえ方をそのまま維持する（ユーザー了承済みの音を変えない） */
+const BGM_TAIKO_PICKUP_TIERS = [
+  [],            // tier0（最も凶暴）: 追加なし＝従来と完全に同一
+  [7, 21],       // tier1: 4+3の折り返し（拍5の強打）への食い込み
+  [11, 25],      // tier2: 各小節末（拍7）への食い込みを追加
+  [3, 17],       // tier3: 拍3への食い込みも追加し、全6アクセントに食い込みが付く
+];
+/* tierごとの食い込み集合（前段を累積）。BGM_TAIKO_PICKUP_TIERSから導出するので
+   段数を変えても自動で追従する（RUMBLE_TIER_COUNTと段数が食い違った場合は
+   存在する分だけ累積され、足りない段は最後の集合が使われる） */
+const BGM_TAIKO_PICKUP_SETS = BGM_TAIKO_PICKUP_TIERS.map(
+  (_, i) => new Set(BGM_TAIKO_PICKUP_TIERS.slice(0, i + 1).flat())
+);
+function _taikoPickupSetForTier(tier) {
+  return BGM_TAIKO_PICKUP_SETS[Math.min(tier, BGM_TAIKO_PICKUP_SETS.length - 1)];
+}
 const BGM_LOOP_DUR_BOSS = BGM_BEAT * 0.5 * BGM_MEL_BOSS.length; // 14拍 ≈5.526s
 
 /* ピッチスライド系ワンショットの共通実装: type波形のオシレーターを
@@ -1719,12 +1809,16 @@ function _playKick(ctx, t, dest, vol) {
 
 /* 和太鼓風の合いの手（低音オシレーターのピッチダウンで模した打撃音。
    キック用のシンセ手法を流用しつつ、キックより低い開始ピッチ・長めの
-   余韻にして「ドン」という締太鼓の響きに寄せている。strong=強打、
-   flourish=ループ終端の素早い2連用に短め・やや高めに調整。
+   余韻にして「ドン」という締太鼓の響きに寄せている。
+   kind='strong'=強打、'flourish'=ループ終端の素早い2連用に短め・やや高め、
+   'pickup'=アクセント直前の裏拍に置く食い込み（BGM_TAIKO_PICKUP_TIERS参照）。
+   食い込みはflourishよりさらに小さく短くする: 直後の本命アクセントより
+   目立つと「つまずき」に聞こえてしまうため、あくまで前触れの音量に留める。
    音量はユーザー要望で倍量済み（強打0.5→1.0・弱打0.32→0.64） */
-function _playTaikoHit(ctx, t, dest, strong) {
-  if (strong) _playSlideOsc(ctx, dest, t, 'sine', 130, 50, 0.14, [[0, 1.0,  'set'], [0.30, 0.0001]], 0.34);
-  else        _playSlideOsc(ctx, dest, t, 'sine', 170, 70, 0.07, [[0, 0.64, 'set'], [0.16, 0.0001]], 0.20);
+function _playTaikoHit(ctx, t, dest, kind) {
+  if (kind === 'strong')        _playSlideOsc(ctx, dest, t, 'sine', 130, 50, 0.14, [[0, 1.0,  'set'], [0.30, 0.0001]], 0.34);
+  else if (kind === 'flourish') _playSlideOsc(ctx, dest, t, 'sine', 170, 70, 0.07, [[0, 0.64, 'set'], [0.16, 0.0001]], 0.20);
+  else                          _playSlideOsc(ctx, dest, t, 'sine', 200, 90, 0.05, [[0, 0.30, 'set'], [0.10, 0.0001]], 0.13);
 }
 
 /* ソフトクリップ歪みカーブ（TB-303風アシッドベースの「凶悪」な唸りに使う） */
@@ -1995,9 +2089,12 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
                   （通常BGM_MEL等）。ステップ数はmelArr.lengthから動的に決まる
                   （ボス戦7拍子化でmelArr等の長さが通常と異なるため。
                   BGM_MEL_BOSS定義部参照）
-     taikoStrongSet/taikoFlourishSet: 和太鼓を鳴らすステップ集合（useTaiko時のみ
-                  参照）。和太鼓を使うのはボス戦だけなので既定値は持たせず、
-                  使う側が必ず明示的に渡す
+     taikoStrongSet/taikoFlourishSet/taikoPickupSet: 和太鼓を鳴らすステップ集合
+                  （useTaiko時のみ参照）。和太鼓を使うのはボス戦だけなので既定値は
+                  持たせず、使う側が必ず明示的に渡す。優先順は強打>合いの手>食い込み
+                  （同じステップが複数集合に入っていても二重発音しない）。
+                  taikoPickupSetはこんがり度で密度を上げるための段階別集合
+                  （_taikoPickupSetForTier参照）
      bassDurMul/bassDecay: ベース音符の長さ・減衰（ボスは全ステップ連打の
                   オスティナートのため、通常より短く切ってオーバーラップに
                   よる濁りを防ぐ）
@@ -2018,6 +2115,7 @@ async function renderBGMBuffer(sampleRate, {
   kickSet    = BGM_KICK,
   taikoStrongSet   = null,
   taikoFlourishSet = null,
+  taikoPickupSet   = null,
   bassDurMul = 1.6,
   bassDecay  = 0.10,
   useTaiko   = false,
@@ -2078,8 +2176,9 @@ async function renderBGMBuffer(sampleRate, {
     playNoise(offCtx, t, 0.04, hatArr[s], 8000, dest);
     if (kickSet.has(s)) _playKick(offCtx, t, dest, kickVol);
     if (useTaiko) {
-      if (taikoStrongSet?.has(s))        _playTaikoHit(offCtx, t, dest, true);
-      else if (taikoFlourishSet?.has(s)) _playTaikoHit(offCtx, t, dest, false);
+      if (taikoStrongSet?.has(s))        _playTaikoHit(offCtx, t, dest, 'strong');
+      else if (taikoFlourishSet?.has(s)) _playTaikoHit(offCtx, t, dest, 'flourish');
+      else if (taikoPickupSet?.has(s))   _playTaikoHit(offCtx, t, dest, 'pickup');
     }
   }
   return offCtx.startRendering();
@@ -2498,7 +2597,7 @@ function playSE(name, atTime) {
       /* こんがり不一致時、キングが文字を篩い落とす振り下ろしの音。
          和太鼓の強打（_playTaikoHit）で「ドスッ」という一撃を作り、直後に
          こもったノイズを重ねて「ザッ」と振り落ちる質感を足す */
-      _playTaikoHit(ctx, t, _seDest(ctx), true);
+      _playTaikoHit(ctx, t, _seDest(ctx), 'strong');
       playNoise(ctx, t + 0.02, 0.18, 0.10, 700);
       break;
     }
@@ -3548,6 +3647,11 @@ function update() {
      呼ばれずphaseが切り替わらなかったのが原因）。関数の最初に置くことで
      どのphase分岐が早期returnしても必ず1回だけ実行されるようにする。 */
   if (_screenFade) _updateScreenFade();
+  /* BGMのハイシェルフ（こんがり度連動の音色変化）。ボス戦以外では0dBへ戻す役目も
+     兼ねているため、boss系phase分岐の早期returnに巻き込まれない位置＝ここに置く
+     必要がある（下記コメントと同じ理由。ボス戦を抜けた瞬間に呼ばれなくなると
+     高域が持ち上がったまま通常プレイへ持ち越されてしまう） */
+  _updateBgmToneShelf();
   /* ────────────────────────────────────────────────
      大ゲームスコープ: phaseをまたいで常時更新すべきもの
      （↑の_screenFadeと同じ理由でここに置く。以前は関数末尾寄りに置いていたが、
