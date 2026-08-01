@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.71';
+const VERSION = 'v5.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2078,8 +2078,8 @@ function _playDoraHit(ctx, t, dest) {
       （金属打撃特有の「ピン」という煌めき）を1本追加し、基音・明るい
       オーバートーンは長く伸びる「チーン」の芯として残す（高次倍音ほど
       速く減衰するのは実際の金属共鳴体の物理特性と一致する）
-   3. 仕上げのきらめき（実績解除'ach'と同じ動機を使い、「最後の実績」
-      であることを音楽的にも結びつける） */
+   以前はこの後に3.仕上げのきらめきがあったが、ユーザー要望で廃止して
+   チーンで終わる構成にした（関数末尾のコメント参照） */
 function _playKongariCompleteFanfare(ctx, t, dest) {
   const d = _seDest(ctx, dest);
   const fanfare = [
@@ -2097,9 +2097,15 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
   const strikeT = t + 1.6;
   playNoise(ctx, strikeT, 0.008, 0.22, 6000, d); // ソレノイドがベルに接触する瞬間の金属クリック
   const base = noteHz('C', 7); // アルペジオの頂点(C6)より1オクターブ上、チーン特有の高く澄んだ音高
+  /* 減衰時間はユーザー要望「チンの音も少しだけ残響を長くしてください」で延長した
+     （基音1.5→2.1秒・オーバートーン0.9→1.3秒）。高次倍音の0.12秒はそのまま:
+     高い倍音ほど速く減衰するのが実際の金属共鳴体の物理で、ここを伸ばすと
+     打撃の「ピン」が居座って濁り、チーンの芯がぼやける。伸ばすべきは残響＝
+     長く伸びる側だけ。後ろで鳴っていたきらめきを廃止した（下記コメント参照）ため、
+     空いた時間を残響が自然に埋める形になる */
   const partials = [
-    { ratio: 1,   vol: 0.28, decay: 1.5 },  // 基音: 長く伸びる「チーン」の芯
-    { ratio: 2.4, vol: 0.11, decay: 0.9 },  // 明るいオーバートーン
+    { ratio: 1,   vol: 0.28, decay: 2.1 },  // 基音: 長く伸びる「チーン」の芯
+    { ratio: 2.4, vol: 0.11, decay: 1.3 },  // 明るいオーバートーン
     { ratio: 5.2, vol: 0.07, decay: 0.12 }, // 打撃直後だけ光る高次倍音（金属打撃特有の「ピン」）
   ];
   partials.forEach(({ ratio, vol, decay }) => {
@@ -2115,11 +2121,13 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
     osc.start(strikeT); osc.stop(stopAt);
     if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
   });
-  /* 仕上げのきらめき: チーンの打撃が単独で聞こえるよう、アタックから
-     0.6秒後（打撃直後の余韻の途中）に開始する（以前はファンファーレ基準の
-     t+1.0だったが、チーンをt+1.6へ移動したため位置もチーン基準に合わせた） */
-  [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)].forEach((f, i) =>
-    playOsc(ctx, 'sine', f, strikeT + 0.6 + i*0.07, 0.16, 0.22, 0.10, null, null, d));
+  /* 以前はここでチーンの0.6秒後に「仕上げのきらめき」（実績解除'ach'と同じ
+     E5-G5-A5-E6の動機を4音）を鳴らしていたが、ユーザー要望で廃止した:
+     「チーンという音の後になる短い効果音が余計。チン音で終わらせたい」。
+     きらめきがチーンの残響の真上に重なって余韻を断ち切っていた（「最後の実績」
+     であることを音楽的に結びつける意図で足したものだったが、締めの一音として
+     チーンを最後まで聞かせるほうが優先）。代わりに基音・オーバートーンの
+     減衰を延ばして、チーンそのものの残響で終わるようにしている（上記partials） */
 }
 
 /* ── BGMループをオフラインレンダリングしてAudioBufferを返す ──
@@ -2795,7 +2803,7 @@ function playSE(name, atTime) {
     }
     case 'kongari_complete': {
       /* こんがり達成（キング撃破）の瞬間専用（_playKongariCompleteFanfare参照）:
-         上昇アルペジオ＋明るいベルの残響＋実績解除のきらめき */
+         上昇アルペジオ＋明るいベルの残響（チーンで終わる） */
       _playKongariCompleteFanfare(ctx, t);
       break;
     }
@@ -5692,7 +5700,15 @@ const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同�
    今回と同じ「文言だけ変えて尺を直し忘れる」不具合が再発しない。 */
 const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
 const _OUTRO_MSG_HOLD_BASE     = 22;    // 読み始めるまでの反応ぶん
-const _OUTRO_MSG_HOLD_PER_CHAR = 3.2;   // 1文字あたりの読解時間（≒53ms）
+/* 1文字あたりの読解時間。3.2（≒53ms）では実機でまだ短いという指摘を受け、
+   「キングクリア時で現在より1秒長く」という指定に合わせて5.13（≒86ms）へ。
+   達成側は31文字なので 31×(5.13-3.2)≒60フレーム＝ちょうど1秒ぶん伸びる
+   （縦画面260→320フレーム、横画面244→304フレーム）。
+   これは両者共通の係数なので失敗側も18文字ぶん伸びる（184→218フレーム、+0.57秒）。
+   達成側だけ伸ばしたい場合は _OUTRO_MSG_HOLD_BASE を34下げれば失敗側を
+   184フレームに固定できるが、読解速度の想定自体を変えた（＝失敗側も同じだけ
+   読むのに時間がかかる）と解釈して共通のまま上げている */
+const _OUTRO_MSG_HOLD_PER_CHAR = 5.13;
 const _OUTRO_MSG_HOLD_PER_LINE = 8;     // 改行ごとの視線移動ぶん
 const _OUTRO_MSG_FADE_OUT_BASE     = 40;
 const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
