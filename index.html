@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.68';
+const VERSION = 'v5.69';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1961,6 +1961,27 @@ function _playKingBeamHit(ctx, t, dest) {
   playNoise(ctx, t + 0.11, 0.26, 0.11,  500, d); // 残響エコー2
 }
 
+/* 的にひびが入る瞬間の「キン」（硬い金属を叩いた音）。ユーザー要望:
+   「文字が揃わずマーク文字がルーレットに飛んできて、ルーレットにヒビが入る
+   瞬間に、高い『キン』という金属音が欲しい。硬い金属を叩いた時のような音」。
+   硬い金属の打撃音が「鐘」や「単音」と違って聞こえる要因は倍音が整数倍でない
+   こと（自由端の金属棒の振動モードは 1 : 2.76 : 5.40 … と非整数）なので、
+   サイン波を非整数比で積んで模す。上の倍音ほど小さく・速く減衰させると
+   「カン」ではなく硬く締まった「キン」に寄る。
+   基音だけはCメジャーペンタトニック（D7）に乗せて他のSEと調性を合わせ、
+   上の倍音は意図的に音階から外す（外さないと金属ではなく和音に聞こえる）。
+   先頭にごく短い高域ノイズを置いて、接触の瞬間の「カッ」という立ち上がりを作る。
+   playOscは包絡線がsetValueAtTimeで即座に最大値になる＝アタックが0なので、
+   打撃音にはそのまま向いている */
+function _playKingCrackKin(ctx, t, dest) {
+  const d = _seDest(ctx, dest);
+  const f0 = noteHz('D', 7); // ≈2349Hz: 「高いキン」の芯
+  playNoise(ctx, t, 0.012, 0.16, 9000, d);                        // 接触の瞬間の立ち上がり
+  playOsc(ctx, 'sine', f0,        t, 0.05, 0.34, 0.26, null, null, d); // 第1モード（芯・最も長く残る）
+  playOsc(ctx, 'sine', f0 * 2.76, t, 0.03, 0.15, 0.10, null, null, d); // 第2モード（非整数比）
+  playOsc(ctx, 'sine', f0 * 4.10, t, 0.02, 0.07, 0.05, null, null, d); // 第3モード（さらに短く・小さく）
+}
+
 /* キングギヨウザ登場（誕生）の瞬間専用、ドラ（銅鑼）風の派手な一撃音
    （ユーザー要望: 「バーン、とドラが鳴るような派手な感じにしたい」。
    従来はboss_flash（雷鳴: ノイズ+A2単音）を流用していたが、boss_flashは
@@ -2591,6 +2612,11 @@ function playSE(name, atTime) {
     case 'kingBeam': {
       /* キングギヨウザ戦、ビーム発射音（スネアドラム風、_playKingBeamHit参照） */
       _playKingBeamHit(ctx, t);
+      break;
+    }
+    case 'kingCrack': {
+      /* キングギヨウザ戦、的にひびが入る瞬間の金属音（_playKingCrackKin参照） */
+      _playKingCrackKin(ctx, t);
       break;
     }
     case 'kingSift': {
@@ -3943,7 +3969,13 @@ function update() {
         }
         /* ハズレ判定 */
         if (!_isJackpot && !_isMedium) {
-          playSE('miss', _arrowStartAudioTime + ARROW_FLIGHT_SEC); // 4射目着弾と同タイミング
+          /* 通常モードのハズレでは効果音を鳴らさない（ユーザー要望「4的目を打った後、
+             文字列が揃わずにハズレたときの効果音が耳障り」）。'miss'SE（ズコーという
+             ノコギリ波の下降スライド）は通常プレイで最も頻繁に鳴るSEであり、
+             ハズレのたびに毎回鳴ると耳につく。ハズレ自体はポップアップ（missPopups）
+             と画面演出で十分伝わるため、音は落とす。
+             ※'miss'SE自体はキングギヨウザ戦の失敗時（頻度が低く演出上の意味がある）
+               で引き続き使うので、playSEのcaseは残す */
           isMissResult = true;
           missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
         }
@@ -5989,6 +6021,11 @@ const KING_REEL_SHAKE_BIAS   = 0.35; // 下方向への偏り（0=上下等分�
 const KING_IMPACT_SHAKE_FRAMES = 3;
 const KING_IMPACT_SHAKE_AMP    = 2.5;
 let _kingImpactShake = 0;
+/* ひびの金属音（_playKingCrackKin）の多重発音を間引くための最終発音時刻。
+   4文字がほぼ同フレームに着弾するため、この窓の中の呼び出しは1発にまとめる
+   （_addKingReelCrackAtCollision参照）。ミリ秒・wall-clock基準 */
+const KING_CRACK_KIN_MIN_GAP_MS = 60;
+let _kingCrackKinLastMs = -Infinity;
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -6391,8 +6428,13 @@ function _kingFireAttack() {
          ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が
          的へ衝突した瞬間（_startKingCharBounce、_updateKingCharFlights参照。
          ユーザー要望: 「クラックが入るタイミングがおかしい。文字が衝突した瞬間
-         という話をしたはず」）。playSE('miss')は_kingApplyHit内の外れ演出と
-         同じSEを流用（既存の「外れ」の聞こえ方と統一するため新規SEは追加しない） */
+         という話をしたはず」）。
+         playSE('miss')（ズコーという下降スライド）は当初「通常モードの外れと
+         聞こえ方を統一する」ために流用したものだが、その後ユーザー要望で通常
+         モード側は無音化したため（該当箇所のコメント参照）、現在このSEが鳴るのは
+         キング戦の失敗時だけになっている。頻度が低く演出上の意味があるので
+         ここでは維持する。なお実際にひびが入る瞬間には別途金属音が鳴る
+         （_playKingCrackKin参照） */
       _king.cookPct = Math.max(0, _king.cookPct - KING_MISS_PCT_PENALTY);
       _king.failCount = Math.min(KING_MAX_FAILS, _king.failCount + 1);
       /* 6回目の失敗は即座に敗北確定にはせず、今回の4文字が全て的へ衝突（ひびが
@@ -6653,6 +6695,22 @@ function _addKingReelCrackAtCollision(f) {
   /* 衝突の瞬間だけ画面も短く揺らす（KING_IMPACT_SHAKE_*参照）。4文字は同じ
      フレームに着弾するので、加算せず同じ値をセットして暴れないようにする */
   _kingImpactShake = KING_IMPACT_SHAKE_FRAMES;
+  /* ひびが入る瞬間の金属音（ユーザー要望。_playKingCrackKin参照）。
+     揺れと同じ理由で多重発音を避ける: この関数は文字1体ごとに呼ばれ、4体は
+     ほぼ同じフレームに着弾するため、素直に鳴らすと同じ音が4重になって音量が
+     跳ね上がり「キン」ではなく潰れた濁音になる。直前の発音からの経過時間で
+     間引いて1発にまとめる。
+     フレームカウンタではなく wall-clock を使う理由: これは「実時間で失効すべき
+     ガード」であり、rAFが止まる状況（タブ非表示など）でフレームが進まないと
+     永久に失効せず、復帰後の最初のひびが無音になってしまう（CLAUDE.mdの
+     時間条件の実装規約）。
+     間隔が空いて着弾がばらけた場合は個別に鳴る（そのほうが自然）ため、
+     窓は「同一フレーム群をまとめる」のに足る最小限に留める */
+  const nowMs = performance.now();
+  if (nowMs - _kingCrackKinLastMs >= KING_CRACK_KIN_MIN_GAP_MS) {
+    _kingCrackKinLastMs = nowMs;
+    playSE('kingCrack');
+  }
 }
 
 /* 反発落下中（fall）の文字が画面外まで出たか（余白付き）。出ていれば表示終了してよい */
