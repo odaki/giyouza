@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.69';
+const VERSION = 'v5.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5640,9 +5640,71 @@ const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同�
    受け、イン側と分離して3倍の長さでゆっくり消えるようにした。さらに
    easeOutカーブ（_easeF参照）を掛けることで、消え際の薄い状態が長く尾を
    引くようにしている（線形だと最後まで一定速度で消えて余韻が出にくい） */
-const _DEFEAT_OUTRO_MSG_FADE_IN  = 22;
-const _DEFEAT_OUTRO_MSG_FADE_OUT = 66;
-const _DEFEAT_OUTRO_MSG_HOLD = 96;
+/* ── 締めメッセージの尺は「文章量」から算出する ──
+   実機指摘: こんがり達成側のメッセージが表示時間が短く余韻が足りない。失敗側の
+   感じを参考にしてほしい。文字列が長く単語が多いほど、読んで理解するまでに
+   より時間を要する点を意識すること。
+   原因: 達成側は失敗側の定数（HOLD=96等）をそのまま共有していたが、両者の
+   文章量が大きく違っていた。実測すると
+     失敗「ちからが とけて……／かえっていった……」    = 18文字・3単語・縦画面2行
+     達成「キングは みちたりて さった……／ギヨウザは また あつまりはじめる……」
+                                                       = 31文字・6単語・縦画面4行
+   と達成側は文字数で約1.7倍・単語数で2倍、しかも縦画面では折り返しで4行になる。
+   同じ96フレームでは読み終わらないのが当然だった。
+   対策: 固定値をやめ、表示行（折り返し済み）の文字数と行数から保持時間と
+   フェードアウト長を算出する。係数は「失敗側の現在の尺をそのまま再現する」
+   よう較正してあるので、参考にしている失敗側の呼吸は一切変わらない。
+   フェードインだけは両者固定にする（登場の所作は演出上の定数として揃えたい。
+   ここを伸ばすと読み始めが遅れるだけで読解時間は稼げない）。
+   フェードアウトも文章量で伸ばすのは、余韻＝消え際の尾も所作全体の一部として
+   一緒にスケールさせたいため（長い文なら締めもゆったりするのが自然）。
+   導出式にしてあるので、達成側の文言を後から差し替えても（そういう前提で
+   配列に切り出してある。_VICTORY_OUTRO_LINES参照）尺が自動で追従する＝
+   今回と同じ「文言だけ変えて尺を直し忘れる」不具合が再発しない。 */
+const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
+const _OUTRO_MSG_HOLD_BASE     = 22;    // 読み始めるまでの反応ぶん
+const _OUTRO_MSG_HOLD_PER_CHAR = 3.2;   // 1文字あたりの読解時間（≒53ms）
+const _OUTRO_MSG_HOLD_PER_LINE = 8;     // 改行ごとの視線移動ぶん
+const _OUTRO_MSG_FADE_OUT_BASE     = 40;
+const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
+
+/* 表示行の総文字数（空白は読解負荷に数えないので除く。「……」は意図した
+   一拍の間なので1文字ぶんずつ数える） */
+function _outroMsgCharCount(lines) {
+  return lines.reduce((n, t) => n + t.replace(/[\s　]/g, '').length, 0);
+}
+/* 折り返し済みの表示行から尺を確定させる。演出開始時に1度だけ呼んで状態に
+   持たせる（毎フレーム計算しない。折り返し自体も同じ方針。_wrapOutroLines参照） */
+function _makeOutroMsgTiming(msgLines) {
+  const chars = _outroMsgCharCount(msgLines);
+  return {
+    fadeIn: _OUTRO_MSG_FADE_IN,
+    hold: Math.round(_OUTRO_MSG_HOLD_BASE
+      + _OUTRO_MSG_HOLD_PER_CHAR * chars + _OUTRO_MSG_HOLD_PER_LINE * msgLines.length),
+    fadeOut: Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars),
+  };
+}
+/* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、
+   o.msgAlpha を確定させる（update で状態を決めて draw は読むだけ、という
+   このプロジェクトの分離方針）。戻り値=消えきったか。
+   達成側・失敗側で同一の式だったものを一本化した。以前は同じ式を2箇所へ
+   コピーしていたため、達成側が失敗側の尺をそのまま引き継いでいることに
+   気づきにくく、実際に今回の「読む時間が足りない」不具合につながった。
+   消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で
+   消えてしまい余韻が出ない） */
+function _advanceOutroMsg(o) {
+  const T = o.msgTiming;
+  const fadeOutStart = T.fadeIn + T.hold;
+  if (o.timer < T.fadeIn) {
+    o.msgAlpha = o.timer / T.fadeIn;
+  } else if (o.timer < fadeOutStart) {
+    o.msgAlpha = 1;
+  } else {
+    const p = Math.min(1, (o.timer - fadeOutStart) / T.fadeOut);
+    o.msgAlpha = Math.max(0, 1 - _easeF(p, 'easeOut'));
+  }
+  return o.timer > fadeOutStart + T.fadeOut;
+}
 
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
    KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
@@ -5706,8 +5768,12 @@ function _makeDefeatOutroItems() {
     const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
     items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
-  /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照） */
-  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0, msgLines: _wrapOutroLines(_DEFEAT_OUTRO_LINES) };
+  /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
+     尺は折り返し後の表示行から算出する＝縦横で行数が変われば尺も変わる
+     （_makeOutroMsgTiming参照） */
+  const msgLines = _wrapOutroLines(_DEFEAT_OUTRO_LINES);
+  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0,
+           msgLines, msgTiming: _makeOutroMsgTiming(msgLines) };
 }
 
 /* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
@@ -5796,27 +5862,13 @@ function _updateBossDefeatOutro() {
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
   } else {
     /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
-       行ごとの出し分けはしない（_DEFEAT_OUTRO_MSG_FADE_IN/OUT・HOLD の定義部参照）。
-       描画側が判断に迷わないよう、透明度はここで確定させて o.msgAlpha に持たせる
-       （update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針） */
-    const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE_IN + _DEFEAT_OUTRO_MSG_HOLD;
-    if (o.timer < _DEFEAT_OUTRO_MSG_FADE_IN) {
-      o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE_IN;
-    } else if (o.timer < fadeOutStart) {
-      o.msgAlpha = 1;
-    } else {
-      /* 消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で
-         消えてしまい余韻が出ない）。p=消化率0〜1に対し 1-sin(p*π/2) */
-      const p = Math.min(1, (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE_OUT);
-      o.msgAlpha = Math.max(0, 1 - _easeF(p, 'easeOut'));
-    }
+       行ごとの出し分けはしない。尺は文章量から算出済み（_makeOutroMsgTiming参照） */
+    const done = _advanceOutroMsg(o);
     /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ
        戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
        _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレーム
        この条件を満たし続けて構わない */
-    if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE_OUT) {
-      _startScreenFade(() => _kingBattleEnd());
-    }
+    if (done) _startScreenFade(() => _kingBattleEnd());
   }
 }
 
@@ -7211,18 +7263,24 @@ const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザ�
 /* 締め2行。ユーザー選択のC案（周回の示唆）。文言は実際に何度か遊んでから
    確定させる予定のため、ここだけ差し替えれば済むよう配列で持つ */
 const _VICTORY_OUTRO_LINES = ['キングは みちたりて さった……', 'ギヨウザは また あつまりはじめる……'];
-/* メッセージのフェード尺は失敗側（_DEFEAT_OUTRO_MSG_FADE_IN/HOLD/FADE_OUT）を
-   共有する。両者で「締めの呼吸」を揃えたいので、あえて別定数にしない */
+/* メッセージのフェード式は失敗側と共有する（_advanceOutroMsg）。ただし尺は
+   固定値の共有ではなく文言の量から算出する（_makeOutroMsgTiming参照）。
+   「締めの呼吸を揃える」ことは大事だが、失敗側と同じフレーム数にすることが
+   呼吸を揃えることではなかった（こちらは文字数1.7倍・縦画面では4行になるため
+   同じ尺では読み終わらない、という実機指摘があった） */
 /* bossVictory の CONTINUE タップから呼ぶ。キングはまだ生きている（_king != null） */
 function _startBossVictoryOutro() {
   if (!_king) { _finishBossVictoryOutro(); return; } // 保険: キングが居ない場合は演出を挟まず従来動作
   phase = 'bossVictoryOutro';
+  /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
+     尺は折り返し後の表示行から算出する＝縦画面で4行になるぶんも尺に反映される
+     （_makeOutroMsgTiming参照） */
+  const msgLines = _wrapOutroLines(_VICTORY_OUTRO_LINES);
   _victoryOutro = {
     step: 0, timer: 0, items: [], seedItem: null,
     msgAlpha: 0, gaugeAlpha: 1,
     baseBy: _king.by, baseScale: _king.scale,
-    /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照） */
-    msgLines: _wrapOutroLines(_VICTORY_OUTRO_LINES),
+    msgLines, msgTiming: _makeOutroMsgTiming(msgLines),
   };
   _king.gazeUp = 0;
   playSE('kingVictoryInhale');
@@ -7320,20 +7378,10 @@ function _updateBossVictoryOutro() {
     }
     if (o.step === 2 && o.timer >= _VICTORY_OUTRO_ITEMS_FRAMES) { o.step = 3; o.timer = 0; }
     if (o.step === 3) {
-      /* 締めメッセージ。失敗側（_updateBossDefeatOutro）と同じ
-         フェードイン→保持→フェードアウトの式・同じ定数を共有する */
-      const fadeOutStart = _DEFEAT_OUTRO_MSG_FADE_IN + _DEFEAT_OUTRO_MSG_HOLD;
-      if (o.timer < _DEFEAT_OUTRO_MSG_FADE_IN) {
-        o.msgAlpha = o.timer / _DEFEAT_OUTRO_MSG_FADE_IN;
-      } else if (o.timer < fadeOutStart) {
-        o.msgAlpha = 1;
-      } else {
-        const q = Math.min(1, (o.timer - fadeOutStart) / _DEFEAT_OUTRO_MSG_FADE_OUT);
-        o.msgAlpha = Math.max(0, 1 - _easeF(q, 'easeOut'));
-      }
-      if (o.timer > fadeOutStart + _DEFEAT_OUTRO_MSG_FADE_OUT) {
-        _startScreenFade(() => _finishBossVictoryOutro());
-      }
+      /* 締めメッセージ。失敗側（_updateBossDefeatOutro）と同じ実装を共有する
+         （_advanceOutroMsg）。尺は文言の量から算出されるので、こちらは
+         失敗側より文章が長いぶん自動的に長く表示される（_makeOutroMsgTiming参照） */
+      if (_advanceOutroMsg(o)) _startScreenFade(() => _finishBossVictoryOutro());
     }
   }
 }
