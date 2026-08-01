@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.74';
+const VERSION = 'v5.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5677,71 +5677,36 @@ const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同�
    受け、イン側と分離して3倍の長さでゆっくり消えるようにした。さらに
    easeOutカーブ（_easeF参照）を掛けることで、消え際の薄い状態が長く尾を
    引くようにしている（線形だと最後まで一定速度で消えて余韻が出にくい） */
-/* ── 締めメッセージの尺は「文章量」から算出する ──
-   実機指摘: こんがり達成側のメッセージが表示時間が短く余韻が足りない。失敗側の
-   感じを参考にしてほしい。文字列が長く単語が多いほど、読んで理解するまでに
-   より時間を要する点を意識すること。
-   原因: 達成側は失敗側の定数（HOLD=96等）をそのまま共有していたが、両者の
-   文章量が大きく違っていた。実測すると
-     失敗「ちからが とけて……／かえっていった……」    = 18文字・3単語・縦画面2行
-     達成「キングは みちたりて さった……／ギヨウザは また あつまりはじめる……」
-                                                       = 31文字・6単語・縦画面4行
-   と達成側は文字数で約1.7倍・単語数で2倍、しかも縦画面では折り返しで4行になる。
-   同じ96フレームでは読み終わらないのが当然だった。
-   対策: 固定値をやめ、表示行（折り返し済み）の文字数と行数から保持時間と
-   フェードアウト長を算出する。係数は「失敗側の現在の尺をそのまま再現する」
-   よう較正してあるので、参考にしている失敗側の呼吸は一切変わらない。
-   フェードインだけは両者固定にする（登場の所作は演出上の定数として揃えたい。
-   ここを伸ばすと読み始めが遅れるだけで読解時間は稼げない）。
-   フェードアウトも文章量で伸ばすのは、余韻＝消え際の尾も所作全体の一部として
-   一緒にスケールさせたいため（長い文なら締めもゆったりするのが自然）。
-   導出式にしてあるので、達成側の文言を後から差し替えても（そういう前提で
-   配列に切り出してある。_VICTORY_OUTRO_LINES参照）尺が自動で追従する＝
-   今回と同じ「文言だけ変えて尺を直し忘れる」不具合が再発しない。 */
+/* ── 締めメッセージの尺は「目標の表示秒数」を直接持つ ──
+   ここは変遷が長いので経緯を残す。もともと失敗側の固定値（保持96フレーム等）を
+   達成側がそのまま共有していたため、文章量が1.7倍ある達成側が読み終わらない
+   という実機指摘があった（失敗18文字・縦画面2行／達成31文字・縦画面4行）。
+   そこで一度は「文字数と行数から読解時間を算出する」モデルに変えたが、その後
+   「失敗はおよそ3秒、達成はおよそ6秒」という目標尺の指定を重ねて受けた結果、
+   2つの目標を2つの係数で通すために1文字186ms・下駄-125という意味を持たない
+   値になり、モデルとして破綻した（文字数比1.72倍に対して時間が2倍という関係を
+   直線で通そうとしたため）。
+   そこで係数による間接的な調整をやめ、目標の表示秒数そのものを定数として持つ形に
+   組み替えた。保持時間は
+     保持 = 目標フレーム数 - フェードイン - フェードアウト
+   の引き算で求める。利点:
+   - 定数がそのまま仕様（「達成は6秒」）を表すので、次に尺を変えたいときは
+     この秒数だけ触ればよく、係数を連立で解き直す必要がない。
+   - 文言を差し替えても目標秒数は変わらない＝尺が勝手にずれない。
+     （文字数に応じて動くのはフェードアウトの長さだけになり、その分だけ保持が
+      自動的に詰まって合計は目標どおりに保たれる） */
 const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
-/* ── 係数の較正（ユーザー指定の目標尺から逆算） ──
-   最終的な指定は「失敗側はおよそ3秒、達成側はおよそ6秒」。
-   フェードイン22とフェードアウト（40+1.45*文字数）は固定なので、目標合計から
-   必要な保持時間が決まり、そこからBASEとPER_CHARを連立で解いている:
-     失敗   18文字2行 → fadeOut=66、合計180(=3.00秒) → 保持 92 が必要
-     達成縦 31文字4行 → fadeOut=85、合計360(=6.00秒) → 保持253 が必要
-     BASE + 18*PER_CHAR + 8*2 =  92
-     BASE + 31*PER_CHAR + 8*4 = 253
-     → 13*PER_CHAR = 145 → PER_CHAR ≒ 11.15、BASE ≒ -125
-   横画面の達成側は行数が2なので344フレーム(5.73秒)になる。指定は「およそ6秒」
-   なので許容範囲とし、行数の項（PER_LINE）は残す判断をした。行数を無視すれば
-   縦横とも6.00秒に揃うが、縦画面は折り返しで4行になる＝実際に読むのに時間が
-   かかるので、その差は尺に反映されるべきという考え。
-   ※この式の限界について: 2つの目標尺（18文字で3秒／31文字で6秒）は文字数の比
-     1.72倍に対して時間が2倍という関係で、しかも合計のうち固定分（フェードイン+
-     フェードアウト）が大きいため、それを2つの係数で無理に通すと
-     PER_CHARが1文字186msという非現実的な読解速度、BASEが-125という意味を
-     持たない値になる。実質「2点を通る直線」でしかなく、
-     「1文字あたりの読解時間」というモデルとしては既に破綻している。
-     現在の2つの文言に対しては指定どおりの尺が出るが、文言を大きく短く
-     差し替えると下限（_OUTRO_MSG_HOLD_MIN）に張り付く（15文字未満はすべて下限）。
-     文言を変える予定があるなら、係数で調整するのをやめて
-     「失敗3秒・達成6秒」のような目標尺そのものを定数として持ち、
-     保持 = 目標 - フェードイン - フェードアウト で逆算する形に組み替えたほうが
-     素直で予測しやすい。 */
-/* 文章量によらず一律に足す下駄。当初は「読み始めるまでの反応ぶん」という
-   意味づけで22にしていたが、上記の連立を解いた結果マイナスになったため、
-   もはや物理的な意味は持たず、読解時間（PER_CHAR）を基準にしたときの
-   較正オフセットとして扱う。
-   ※マイナスの下駄なので、極端に短い文言では保持が0以下になりうる。現在の文言は
-     どちらも十分長いが、達成側の文言は差し替える前提なので下限を設けてある
-     （_OUTRO_MSG_HOLD_MIN参照） */
-const _OUTRO_MSG_HOLD_BASE     = -125;
-/* 保持時間の下限。将来もっと短い文言に差し替えたときに一瞬で消えないための保険
-   （マイナスの下駄と組み合わせると計算上0以下になりうるため）。現在の文言は
-   失敗92・達成253フレームでどちらもここには当たらない */
+/* 目標の表示秒数（フェードイン開始からフェードアウト終了まで）。ユーザー指定。
+   ここが仕様の本体なので、尺を変えたいときはこの2つだけを触る */
+const _OUTRO_MSG_TARGET_SEC_DEFEAT  = 3.0; // こんがり失敗の締め
+const _OUTRO_MSG_TARGET_SEC_VICTORY = 6.0; // こんがり達成（キングクリア）の締め
+/* 保持時間の下限。フェードだけで目標秒数を食い潰すほど極端に長い文言に
+   差し替えた場合の保険（引き算の結果が0以下になりうる）。その場合だけは
+   合計が目標秒数を超える＝読ませることを優先する */
 const _OUTRO_MSG_HOLD_MIN      = 40;
-/* 名目上は1文字あたりの読解時間。3.2（≒53ms）→5.13→6.54→11.15と実機の指摘に
-   合わせて段階的に引き上げてきた。現在の値は上記の目標尺（失敗3秒・達成6秒）
-   から逆算したもので、1文字186msは読解速度としては既に非現実的
-   （上記「この式の限界について」参照） */
-const _OUTRO_MSG_HOLD_PER_CHAR = 11.15;
-const _OUTRO_MSG_HOLD_PER_LINE = 8;     // 改行ごとの視線移動ぶん
+/* フェードアウト（余韻）の長さは文章量で伸ばす。長い文なら締めもゆったりする
+   のが自然なため。合計は目標秒数に固定されるので、ここが伸びたぶんは保持から
+   引かれる（＝余韻と静止表示の配分が文章量で変わる） */
 const _OUTRO_MSG_FADE_OUT_BASE     = 40;
 const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
 
@@ -5750,15 +5715,20 @@ const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
 function _outroMsgCharCount(lines) {
   return lines.reduce((n, t) => n + t.replace(/[\s　]/g, '').length, 0);
 }
-/* 折り返し済みの表示行から尺を確定させる。演出開始時に1度だけ呼んで状態に
-   持たせる（毎フレーム計算しない。折り返し自体も同じ方針。_wrapOutroLines参照） */
-function _makeOutroMsgTiming(msgLines) {
-  const chars = _outroMsgCharCount(msgLines);
+/* 折り返し済みの表示行と目標秒数から尺を確定させる。演出開始時に1度だけ呼んで
+   状態に持たせる（毎フレーム計算しない。折り返し自体も同じ方針。_wrapOutroLines参照）。
+   targetSec は _OUTRO_MSG_TARGET_SEC_DEFEAT / _VICTORY のどちらかを呼び出し側が渡す。
+   保持は目標からフェード2つを引いた残りなので、合計は必ず目標秒数に一致する
+   （唯一の例外はフェードだけで目標を超えてしまう極端に長い文言で、その場合は
+   下限が効いて目標を超える＝読ませることを優先する） */
+function _makeOutroMsgTiming(msgLines, targetSec) {
+  const chars   = _outroMsgCharCount(msgLines);
+  const fadeIn  = _OUTRO_MSG_FADE_IN;
+  const fadeOut = Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars);
+  const total   = Math.round(targetSec * 60); // 60fps基準のフレーム数へ
   return {
-    fadeIn: _OUTRO_MSG_FADE_IN,
-    hold: Math.max(_OUTRO_MSG_HOLD_MIN, Math.round(_OUTRO_MSG_HOLD_BASE
-      + _OUTRO_MSG_HOLD_PER_CHAR * chars + _OUTRO_MSG_HOLD_PER_LINE * msgLines.length)),
-    fadeOut: Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars),
+    fadeIn, fadeOut,
+    hold: Math.max(_OUTRO_MSG_HOLD_MIN, total - fadeIn - fadeOut),
   };
 }
 /* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、
@@ -5846,11 +5816,11 @@ function _makeDefeatOutroItems() {
     items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
-     尺は折り返し後の表示行から算出する＝縦横で行数が変われば尺も変わる
-     （_makeOutroMsgTiming参照） */
+     尺は目標秒数（_OUTRO_MSG_TARGET_SEC_DEFEAT）から逆算する。折り返し後の
+     文字数はフェードアウト長にだけ効く（_makeOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_DEFEAT_OUTRO_LINES);
   return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0,
-           msgLines, msgTiming: _makeOutroMsgTiming(msgLines) };
+           msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
 }
 
 /* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
@@ -5939,7 +5909,7 @@ function _updateBossDefeatOutro() {
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
   } else {
     /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
-       行ごとの出し分けはしない。尺は文章量から算出済み（_makeOutroMsgTiming参照） */
+       行ごとの出し分けはしない。尺は目標秒数から逆算済み（_makeOutroMsgTiming参照） */
     const done = _advanceOutroMsg(o);
     /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ
        戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
@@ -7341,7 +7311,7 @@ const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザ�
    確定させる予定のため、ここだけ差し替えれば済むよう配列で持つ */
 const _VICTORY_OUTRO_LINES = ['キングは みちたりて さった……', 'ギヨウザは また あつまりはじめる……'];
 /* メッセージのフェード式は失敗側と共有する（_advanceOutroMsg）。ただし尺は
-   固定値の共有ではなく文言の量から算出する（_makeOutroMsgTiming参照）。
+   共有せず、こちら専用の目標秒数（_OUTRO_MSG_TARGET_SEC_VICTORY = 6秒）を渡す。
    「締めの呼吸を揃える」ことは大事だが、失敗側と同じフレーム数にすることが
    呼吸を揃えることではなかった（こちらは文字数1.7倍・縦画面では4行になるため
    同じ尺では読み終わらない、という実機指摘があった） */
@@ -7350,14 +7320,14 @@ function _startBossVictoryOutro() {
   if (!_king) { _finishBossVictoryOutro(); return; } // 保険: キングが居ない場合は演出を挟まず従来動作
   phase = 'bossVictoryOutro';
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
-     尺は折り返し後の表示行から算出する＝縦画面で4行になるぶんも尺に反映される
-     （_makeOutroMsgTiming参照） */
+     尺は目標秒数から逆算するので縦横で合計は変わらない（縦画面は折り返しで
+     4行になるが、合計6秒は同じ。_makeOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_VICTORY_OUTRO_LINES);
   _victoryOutro = {
     step: 0, timer: 0, items: [], seedItem: null,
     msgAlpha: 0, gaugeAlpha: 1,
     baseBy: _king.by, baseScale: _king.scale,
-    msgLines, msgTiming: _makeOutroMsgTiming(msgLines),
+    msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
   };
   _king.gazeUp = 0;
   playSE('kingVictoryInhale');
@@ -7456,8 +7426,8 @@ function _updateBossVictoryOutro() {
     if (o.step === 2 && o.timer >= _VICTORY_OUTRO_ITEMS_FRAMES) { o.step = 3; o.timer = 0; }
     if (o.step === 3) {
       /* 締めメッセージ。失敗側（_updateBossDefeatOutro）と同じ実装を共有する
-         （_advanceOutroMsg）。尺は文言の量から算出されるので、こちらは
-         失敗側より文章が長いぶん自動的に長く表示される（_makeOutroMsgTiming参照） */
+         （_advanceOutroMsg）。尺は _startBossVictoryOutro で目標6秒から逆算済み
+         （失敗側は3秒。_makeOutroMsgTiming参照） */
       if (_advanceOutroMsg(o)) _startScreenFade(() => _finishBossVictoryOutro());
     }
   }
