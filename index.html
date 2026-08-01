@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.70';
+const VERSION = 'v5.71';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -518,6 +518,25 @@ const _predWheelShown = w => !w.result || w.resultPop >= 1;
 /* 発射SE用: Cメジャーアルペジオ音程テーブル（4本の矢 = C→E→G→C'）
    モジュールスコープに置いて playSE 呼び出しごとの配列生成を排除 */
 const _SHOOT_ARPEGIO = [noteHz('C',5), noteHz('E',5), noteHz('G',5), noteHz('C',6)];
+/* 着弾SE（'lock'のコツン）用: 矢1本ごとの2音ペア。
+   ユーザー要望「1的から3的まで的を射た時の音が上がっていくので、4的目もその
+   延長で同じようにしたい。BGMと合う音で、BGMと効果音があいまって心地よい
+   音楽になるようにしたい」に対応して2点変えた:
+   (1) 4的目にも着弾音を鳴らす（従来は curIdx<3 の条件で4本目だけ無音だった）。
+   (2) 従来はどの矢もE4→G3固定で、実際に上昇していたのは発射音のアルペジオ
+       （_SHOOT_ARPEGIO）だけだったため、着弾音も矢ごとに上昇させて発射音と
+       同じ「積み上がっていく」流れに乗せる。
+   上声はCメジャーペンタトニック上の上昇（E4→G4→A4→C5）で、4本目がちょうど
+   主音Cに着地する。発射音も4本目がC6なので、最後の一射だけ上下でオクターブの
+   主音が重なり、フレーズが解決して聞こえる（=「心地よい音楽」の核）。
+   下声は打撃感を作るための跳ね返り。全音がペンタトニック内なのでBGMのどの
+   タイミングに重なっても濁らない（音程は必ずnoteHzで書く方針） */
+const _LOCK_PAIRS = [
+  [noteHz('E',4), noteHz('G',3)], // 1本目（従来と同じ音程＝既存の聞こえ方を起点に保つ）
+  [noteHz('G',4), noteHz('A',3)], // 2本目
+  [noteHz('A',4), noteHz('C',4)], // 3本目
+  [noteHz('C',5), noteHz('E',4)], // 4本目: 主音Cへ着地
+];
 /* 超大当たり連続コイン音: Cメジャーペンタトニック上昇走句（BGMの調に整合） */
 const _COIN_RUN = [noteHz('C',6), noteHz('D',6), noteHz('E',6), noteHz('G',6),
                    noteHz('A',6), noteHz('C',7), noteHz('D',7), noteHz('E',7)];
@@ -2596,9 +2615,13 @@ function playSE(name, atTime) {
       break;
     }
     case 'lock': {
-      /* コツン（E4→G3: 打撃感を保ちつつ音程だけ調内に調律） */
-      playOsc(ctx, 'square', noteHz('E',4), t, 0.04, 0.22, 0.04);
-      playOsc(ctx, 'square', noteHz('G',3), t+0.025, 0.03, 0.15, 0.04);
+      /* コツン（打撃感を保ちつつ音程は調内。矢ごとに上昇して4本目で主音Cへ
+         着地する。_LOCK_PAIRS参照。curIdx は着弾した矢の番号0〜3で、'shoot'と
+         同じくインクリメント前のグローバル変数を参照する＝同じ矢の発射音と
+         着弾音が必ず同じ段の音程になる） */
+      const [lkHi, lkLo] = _LOCK_PAIRS[Math.min(curIdx, 3)];
+      playOsc(ctx, 'square', lkHi, t, 0.04, 0.22, 0.04);
+      playOsc(ctx, 'square', lkLo, t+0.025, 0.03, 0.15, 0.04);
       break;
     }
     case 'kingShoot': {
@@ -3875,9 +3898,15 @@ function update() {
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
-      /* 1〜3文字目: 着弾音を発射時刻+飛行時間で固定スケジュール（ビートスナップ廃止）
-         shoot音との間隔が常に ARROW_FLIGHT_SEC（≈67ms）で一定になる */
-      if (curIdx < 3) playSE('lock', _arrowStartAudioTime > 0 ? _arrowStartAudioTime + ARROW_FLIGHT_SEC : undefined);
+      /* 着弾音を発射時刻+飛行時間で固定スケジュール（ビートスナップ廃止）。
+         shoot音との間隔が常に ARROW_FLIGHT_SEC（≈67ms）で一定になる。
+         4本目も鳴らす（ユーザー要望。_LOCK_PAIRS参照）: 以前は curIdx<3 として
+         4本目だけ無音にし、代わりにハズレのズコー音を置いていたが、そのSEを
+         廃止した結果4本目の着弾だけ音が抜けてしまい、1〜3本目からの流れが
+         途切れていた。当たり時は直後に配当SE（jackpot/coin等）が重なるが、
+         こちらは40msの小さなコツンなので邪魔にならず、むしろ矢が刺さった
+         手触りが揃う。等間隔スケジュールも4本目まで保たれる＝リズムが崩れない */
+      playSE('lock', _arrowStartAudioTime > 0 ? _arrowStartAudioTime + ARROW_FLIGHT_SEC : undefined);
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
