@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.78';
+const VERSION = 'v5.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1086,6 +1086,18 @@ let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制�
 /* BGM専用のハイシェルフ。こんがり度に応じて高域を持ち上げる（_updateBgmToneShelf
    参照）。SEは_seDest経由でmasterGainに直結するのでこのフィルターを通らない */
 let bgmToneShelf = null;
+/* 上のシェルフへ最後に指示した目標dBのJS側ミラー。
+   当初は再設定の要否を bgmToneShelf.gain.value と比較して判定していたが、それは
+   このプロジェクトが既に痛い目を見ている「自動化中のAudioParam.valueは信用できない」
+   規約（_getBgmRateJS の定義部コメント参照）に反していた。実測（Chromium）でも
+   setTargetAtTime(5, now, 0.12) の60ms後の理論値1.97に対し .value は4.997を返し、
+   進行中のランプの現在値としては読めていない。.value が旧値のまま留まる実装では
+   ガードが永久に成立せず、戦闘中ずっと毎フレーム（60回/秒）setTargetAtTimeを
+   発行し続けることになる（ワンショットノードのdisconnect漏れで「BGMがブツ切れ」に
+   なった件と同系統の蓄積）。レートを_setBgmRateJS/_getBgmRateJSでミラーしている
+   のと同じ方式に揃える。宣言をここに置くのは_buildBgmGainChainが代入するため
+   （letはホイストされないので使用箇所より後で宣言するとTDZになる） */
+let _bgmToneShelfTargetDb = 0;
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
 let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版）ループバッファ（tier0、既存コード互換用）
 /* ボス戦BGMの地鳴りマイルド化段階バッファ（ユーザー要望: 「こんがり度が上がる
@@ -1352,6 +1364,11 @@ function _buildBgmGainChain(ctx, outNode) {
   bgmToneShelf.type = 'highshelf';
   bgmToneShelf.frequency.value = BGM_TONE_SHELF_HZ;
   bgmToneShelf.gain.value = 0; // 0dB = 完全に透過（下記コメント参照）
+  /* JS側ミラーもここで0に戻す。ノードを作る唯一の箇所で両方を確定させることで、
+     iOS interrupted からの復帰でノードが作り直されたときにミラーだけ古い値が
+     残る（→ガードが成立して二度と設定されない）事故を構造的に防ぐ
+     （_updateBgmToneShelf参照） */
+  _bgmToneShelfTargetDb = 0;
   bgmGain.connect(bgmToneShelf);
   bgmToneShelf.connect(outNode);
 }
@@ -1393,7 +1410,9 @@ function _updateBgmToneShelf() {
   if (!audioCtx || !bgmToneShelf) return;
   const target = (_king && _isBossBattlePhase())
     ? _bgmToneShelfDbForCookPct(_king.cookPct) : 0;
-  if (Math.abs(bgmToneShelf.gain.value - target) < 0.01) return; // ほぼ到達済みなら何もしない
+  /* 比較はノードの.valueではなくJS側ミラーと行う（上記コメント参照） */
+  if (Math.abs(_bgmToneShelfTargetDb - target) < 0.01) return; // 目標が変わっていなければ何もしない
+  _bgmToneShelfTargetDb = target;
   bgmToneShelf.gain.setTargetAtTime(target, audioCtx.currentTime, BGM_TONE_SHELF_TAU);
 }
 
@@ -5335,9 +5354,12 @@ let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト�
    キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
    弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
 const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
-/* 締めメッセージ（達成側・失敗側で共通の書式）のフォントサイズ。
-   折り返し計測と実描画で必ず同じ値を使うため関数で一本化する */
+/* 締めメッセージ（達成側・失敗側で共通の書式）のフォント。
+   折り返しの計測（_wrapOutroLines）と実描画（_drawOutroMsg）で必ず同じ書式を
+   使わないと、計測結果と実際の幅がずれてそのまま横はみ出しになる（実機で一度
+   発生済み）。サイズだけでなくフォント文字列そのものを一本化しておく */
 function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
+function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px 'Hiragino Mincho ProN',serif`; }
 /* 締めメッセージを画面幅に収まるよう折り返す。
    実機指摘: 縦画面（W=420）で「ギヨウザは また あつまりはじめる……」が横から
    はみ出していた。文言は後から調整する前提なので、固定の行配列をそのまま
@@ -5346,8 +5368,7 @@ function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
    ctx.measureTextを使うので演出の開始時に1度だけ実行し、結果を状態に持たせる
    （毎フレーム計測しない） */
 function _wrapOutroLines(lines) {
-  const font = `bold ${_outroMsgFontSize()}px 'Hiragino Mincho ProN',serif`;
-  return lines.flatMap(t => _wrapTrueEndingLine(t, font, W - 48)); // 左右24pxずつの余白
+  return lines.flatMap(t => _wrapTrueEndingLine(t, _outroMsgFont(), W - 48)); // 左右24pxずつの余白
 }
 let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
 /* こんがり達成側の退場演出の状態（null=非表示、drawBossVictoryOutro参照）。
@@ -5751,6 +5772,33 @@ function _advanceOutroMsg(o) {
     o.msgAlpha = Math.max(0, 1 - _easeF(p, 'easeOut'));
   }
   return o.timer > fadeOutStart + T.fadeOut;
+}
+
+/* 締めメッセージを描く（達成側・失敗側で共通）。色だけが呼び出し側の指定で、
+   フォント・行間・中央揃えの基準・透明度の扱いはすべて共通。
+   一本化した理由: 以前はdrawBossDefeatOutroとdrawBossVictoryOutroに色以外
+   まったく同一のブロックが複製されていた。update側（_advanceOutroMsg）は
+   一本化済みだったが描画側が残っており、実際にこの重複が原因の不具合を
+   一度出している（達成側の文言が縦画面で横からはみ出た＝片側しか折り返しを
+   考慮していなかった）。配置やフォントを変えるときに片側だけ直す事故を
+   構造的に防ぐ。
+   誕生予告（drawBossOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、
+   こちらは全行を1つのメッセージとして同時に出す（ユーザー要望）。
+   位置も誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から始めるが、
+   こちらは行数が少なく同じ開始位置だと画面上寄りに偏って見える（実機指摘）。
+   画面に固定のボスが居ないぶん余裕があるため、全行の中心が画面中央(H/2)に
+   来るよう配置し、行数が少ない分フォントも大きくする。
+   行数は文言と画面幅で変わるので、中央揃えの基準は実際の行数から求める */
+function _drawOutroMsg(o, fillColor, shadowColor) {
+  if (!(o.msgAlpha > 0)) return;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lineDy = _outroMsgFontSize() * 2.2;
+  const lines  = o.msgLines;
+  const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
+  ctx.font = _outroMsgFont(); // 折り返し計測と同一の書式（_outroMsgFont参照）
+  ctx.globalAlpha = o.msgAlpha;
+  lines.forEach((line, i) => outText(line, W / 2, lineY0 + i * lineDy, fillColor, shadowColor, 6));
+  ctx.globalAlpha = 1;
 }
 
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
@@ -7455,22 +7503,9 @@ function drawBossVictoryOutro() {
     drawKingCookGauge(true);
     ctx.globalAlpha = 1;
   }
-  if (o.step >= 3 && o.msgAlpha > 0) {
-    /* 失敗側（drawBossDefeatOutro）と同じ配置・同じ書式で、全行を1つの
-       メッセージとしてまとめて出す */
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const fsL = _outroMsgFontSize();
-    const lineDy = fsL * 2.2;
-    /* 折り返し済みの行（o.msgLines）を使う。行数は文言と画面幅で変わるので
-       中央揃えの基準も実際の行数から求める */
-    const lines = o.msgLines;
-    const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
-    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
-    ctx.globalAlpha = o.msgAlpha;
-    lines.forEach((line, i) => {
-      outText(line, W / 2, lineY0 + i * lineDy, '#ffe9a8', 'rgba(60,20,0,0.9)', 6);
-    });
-    ctx.globalAlpha = 1;
+  if (o.step >= 3) {
+    /* 描画本体は失敗側と共通で、色だけが違う（_drawOutroMsg参照） */
+    _drawOutroMsg(o, '#ffe9a8', 'rgba(60,20,0,0.9)');
   }
   ctx.restore();
 }
@@ -8248,27 +8283,10 @@ function drawBossDefeatOutro() {
   ctx.fillStyle = 'rgba(2,4,8,0.7)';
   ctx.fillRect(0, 0, W, H);
   for (const g of o.items) drawOneItem(g);
-  if (o.step >= 1 && o.msgAlpha > 0) {
-    /* 誕生予告（drawBossOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、
-       こちらは全行を1つのメッセージとして同時に出す（ユーザー要望）。
-       透明度は全行共通で o.msgAlpha（_updateBossDefeatOutro が確定させる）。
-       位置・サイズも誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から
-       始めるが、こちらは2行しかなく同じ開始位置だと画面上寄りに偏って見える
-       （実機指摘）。画面に固定のボスが居ないぶん余裕があるため、全行の中心が
-       画面中央(H/2)に来るよう配置し、行数が少ない分フォントも大きくする */
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const fsL = _outroMsgFontSize();
-    const lineDy = fsL * 2.2;
-    /* 折り返し済みの行（o.msgLines）を使う。行数は文言と画面幅で変わるので
-       中央揃えの基準も実際の行数から求める（達成側と同じ扱い） */
-    const lines = o.msgLines;
-    const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
-    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
-    ctx.globalAlpha = o.msgAlpha;
-    lines.forEach((line, i) => {
-      outText(line, W/2, lineY0 + i*lineDy, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
-    });
-    ctx.globalAlpha = 1;
+  if (o.step >= 1) {
+    /* 透明度は_updateBossDefeatOutroが確定させたo.msgAlphaを読むだけ。
+       描画本体は達成側と共通（_drawOutroMsg参照） */
+    _drawOutroMsg(o, '#e8e2d0', 'rgba(0,0,0,0.9)');
   }
   /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない
      （ユーザー要望） */
