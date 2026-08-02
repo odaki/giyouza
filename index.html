@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.79';
+const VERSION = 'v5.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1100,17 +1100,23 @@ let bgmToneShelf = null;
 let _bgmToneShelfTargetDb = 0;
 let bgmBuffer = null;       // レンダリング済みBGMループバッファ
 let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版）ループバッファ（tier0、既存コード互換用）
-/* ボス戦BGMの地鳴りマイルド化段階バッファ（ユーザー要望: 「こんがり度が上がる
-   に従って、マイルドな音に変化していくようにしたい」）。地鳴りはループ先頭に
-   1回だけ焼き込まれる仕様上、リアルタイムに音色を連続変化させることはできない
-   ため、段階ごとに丸ごと事前レンダリングし、こんがり度がその段階へ達したら
-   ループの継ぎ目（地鳴り以外は全段階で同一内容のため無音で切り替わる）で
-   バッファを差し替える方式にした（_rumbleTierForCookPct・_updateBossRumbleTier・
-   _scheduleBossRumbleTierSwap参照）。 */
-const RUMBLE_TIER_COUNT = 4;
+/* ボス戦BGMの段階別バッファ（ユーザー要望: 「こんがり度が上がるに従って、
+   マイルドな音に変化していくようにしたい」「こんがり度が進むにつれ音楽的に
+   もっと変化させたい」）。これらはループ先頭に焼き込まれる要素なので
+   リアルタイムに連続変化させることができず、段階ごとに丸ごと事前レンダリング
+   し、こんがり度がその段階へ達したらループの継ぎ目でバッファを差し替える
+   （_bgmTierForCookPct・_updateBossBgmTier・_swapBossBgmBuffer参照）。
+   段階で変わるのは以下の3要素（当初は地鳴りだけだったので命名が
+   RUMBLE_TIER_* だったが、実態に合わせてBGM_TIER_*へ改名した）:
+     1. 地鳴りの質感（rumbleMellow → _playGroundRumble）
+     2. 和太鼓の合いの手の密度（_taikoPickupSetForTier）
+     3. 最終段のみ和声をAメジャー化（BGM_MEL_BOSS_BRIGHT）
+   差し替えはループ先頭ぴったりで行うので位相が連続し、内容が違ってもクリックは
+   出ない（詳細は_updateBossBgmTierの定義部コメント参照）。 */
+const BGM_TIER_COUNT = 4;
 let bossBgmBuffers = null;  // [tier0(最も凶暴)..tierN-1(最もマイルド)]
-let _bossRumbleTier = 0;        // 現在再生中バッファの段階
-let _bossRumblePendingTier = null; // 次のループ境界間近になったら切り替える予約段階
+let _bossBgmTier = 0;        // 現在再生中バッファの段階
+let _bossBgmPendingTier = null; // 次のループ境界間近になったら切り替える予約段階
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
 let _bgmIsBoss = false;     // 現在鳴っているのがboss用バッファかどうか（_createBGMSourceがbufferから導出。直接代入しないこと）
 let bgmPendingStart = false;// バッファ未完時にstartBGMが呼ばれた場合のフラグ
@@ -1444,17 +1450,18 @@ function getAudioCtx() {
     /* ボス戦用（暗黒版）バッファも並行してレンダリング。通常BGMと独立に
        完了するため、起動タイミングは_initBossBattle側でbossBgmBufferの
        有無を確認する（未完なら通常BGMで代用。startBossBGMTape参照）。
-       地鳴りのマイルド化段階ぶん（RUMBLE_TIER_COUNT個）を並行して事前レンダリング
-       し、こんがり度の上昇に合わせてループの継ぎ目で差し替える
-       （_updateBossRumbleTier参照）。tier0は従来のbossBgmBufferと同一内容 */
-    bossBgmBuffers = new Array(RUMBLE_TIER_COUNT).fill(null);
-    for (let tier = 0; tier < RUMBLE_TIER_COUNT; tier++) {
-      const mellow = tier / (RUMBLE_TIER_COUNT - 1);
+       こんがり度の段階ぶん（BGM_TIER_COUNT個）を並行して事前レンダリングし、
+       こんがり度の上昇に合わせてループの継ぎ目で差し替える（段階で変わる3要素は
+       BGM_TIER_COUNTの定義部、切り替えの仕組みは_updateBossBgmTierを参照）。
+       tier0は従来のbossBgmBufferと同一内容 */
+    bossBgmBuffers = new Array(BGM_TIER_COUNT).fill(null);
+    for (let tier = 0; tier < BGM_TIER_COUNT; tier++) {
+      const mellow = tier / (BGM_TIER_COUNT - 1);
       renderBGMBuffer(audioCtx.sampleRate, {
         bassArr: BGM_BASS_BOSS_7,
         /* 最終段だけメロディ層を長3度へ持ち上げてAメジャー化（BGM_MEL_BOSS_BRIGHT参照）。
            差し替えはループ先頭ぴったりで行うため、段階間で内容が違っても位相は
-           連続しクリックは出ない（_swapBossRumbleBuffer参照） */
+           連続しクリックは出ない（_swapBossBgmBuffer参照） */
         melArr: tier === BGM_BRIGHT_TIER ? BGM_MEL_BOSS_BRIGHT : BGM_MEL_BOSS,
         hatArr: BGM_HAT_BOSS, kickSet: BGM_KICK_BOSS,
         taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
@@ -1758,9 +1765,9 @@ const BGM_MEL_BOSS_BRIGHT = BGM_MEL_BOSS.map(
   n => (n && n[0] === 'C') ? ['C#', n[1], n[2]] : n
 );
 /* 和声を明るくする段階（＝最もマイルドな地鳴りと同じ最終段）。
-   _rumbleTierForCookPct の境界に乗るので、表情・地鳴り・和声の3つが
+   _bgmTierForCookPct の境界に乗るので、表情・地鳴り・和声の3つが
    同じこんがり度で同時に切り替わる */
-const BGM_BRIGHT_TIER = RUMBLE_TIER_COUNT - 1;
+const BGM_BRIGHT_TIER = BGM_TIER_COUNT - 1;
 const BGM_BASS_BOSS_7 = [
   // 小節1・グループA（拍1-4）: ルート(A2)と完全5度(E2)のパワーコード連打
   ['A',2,0.36], ['E',2,0.26], ['A',2,0.28], ['E',2,0.24], ['A',2,0.30], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24],
@@ -1806,7 +1813,7 @@ const BGM_TAIKO_PICKUP_TIERS = [
   [3, 17],       // tier3: 拍3への食い込みも追加し、全6アクセントに食い込みが付く
 ];
 /* tierごとの食い込み集合（前段を累積）。BGM_TAIKO_PICKUP_TIERSから導出するので
-   段数を変えても自動で追従する（RUMBLE_TIER_COUNTと段数が食い違った場合は
+   段数を変えても自動で追従する（BGM_TIER_COUNTと段数が食い違った場合は
    存在する分だけ累積され、足りない段は最後の集合が使われる） */
 const BGM_TAIKO_PICKUP_SETS = BGM_TAIKO_PICKUP_TIERS.map(
   (_, i) => new Set(BGM_TAIKO_PICKUP_TIERS.slice(0, i + 1).flat())
@@ -1908,7 +1915,7 @@ function _acidChain(ctx, dest, distAmount) {
    仕上げにソフトクリップ歪みを軽くかけて凶悪さを足す */
 /* mellow: 0(通常・最も凶暴)〜1(最もマイルド)。ユーザー要望「こんがり度が
    上がるに従って、マイルドな音に変化していくようにしたい」に対応するため
-   引数化した（_rumbleTierForCookPct・_updateBossRumbleTier参照）。
+   引数化した（_bgmTierForCookPct・_updateBossBgmTier参照）。
    歪み量・スライド幅・フィルターのレゾナンス/掃引幅を同時に弱めることで、
    単に音量を下げるのではなく質感そのものを柔らかくする。mellow=0では
    従来と完全に同一の値になる */
@@ -2176,7 +2183,7 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
      kickVol    : キックの音量（_playKick参照）
      rumbleMellow: 地鳴りのマイルド化係数0〜1（_playGroundRumble参照。
                   こんがり度に応じた複数段階のボスBGMバッファを事前レンダ
-                  リングするために引数化した。_rumbleTierForCookPct参照） */
+                  リングするために引数化した。_bgmTierForCookPct参照） */
 async function renderBGMBuffer(sampleRate, {
   bassArr    = BGM_BASS,
   melArr     = BGM_MEL,
@@ -2255,16 +2262,16 @@ async function renderBGMBuffer(sampleRate, {
 
 /* ── BGMソース管理ユーティリティ ── */
 /* 差し替え直後、まだ止まっていない旧地鳴りソースへの参照
-   （_swapBossRumbleBuffer参照）。差し替え完了前にバトルが終わって
+   （_swapBossBgmBuffer参照）。差し替え完了前にバトルが終わって
    _destroyBGMSourceが呼ばれた場合、こちらも一緒に止めて後始末する */
-let _pendingRumbleOldSrc = null;
+let _pendingBgmTierOldSrc = null;
 
 function _destroyBGMSource() {
-  if (_pendingRumbleOldSrc) {
-    _pendingRumbleOldSrc.onended = null;
-    try { _pendingRumbleOldSrc.stop(); } catch(e) {}
-    try { _pendingRumbleOldSrc.disconnect(); } catch(e) {}
-    _pendingRumbleOldSrc = null;
+  if (_pendingBgmTierOldSrc) {
+    _pendingBgmTierOldSrc.onended = null;
+    try { _pendingBgmTierOldSrc.stop(); } catch(e) {}
+    try { _pendingBgmTierOldSrc.disconnect(); } catch(e) {}
+    _pendingBgmTierOldSrc = null;
   }
   if (bgmSource) {
     bgmSource.onended = null;
@@ -2301,21 +2308,20 @@ function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
   return src;
 }
 
-/* ── ボス戦BGMの地鳴りマイルド化（こんがり度連動） ──
+/* ── ボス戦BGMの段階切り替え（こんがり度連動） ──
    ユーザー要望: 「こんがり度が上がるに従って、マイルドな音に変化していく
-   ようにしたい」。地鳴りはループ先頭に1回だけ焼き込まれる仕様上、鳴って
-   いる最中に音色を連続変化させることはできない。段階ごとに丸ごと事前
-   レンダリングしたbossBgmBuffers（tier0=最も凶暴〜tierN-1=最もマイルド、
-   getAudioCtx参照）を、こんがり度が対応する段階に達したらループの継ぎ目で
-   AudioBufferSourceNodeごと差し替える。
+   ようにしたい」「こんがり度が進むにつれ音楽的にもっと変化させたい」。
+   これらはループ先頭に焼き込まれる要素なので、鳴っている最中に連続変化させる
+   ことはできない。段階ごとに丸ごと事前レンダリングしたbossBgmBuffers
+   （tier0=最も凶暴〜tierN-1=最もマイルド、getAudioCtx参照）を、こんがり度が
+   対応する段階に達したらループの継ぎ目でAudioBufferSourceNodeごと差し替える。
+   段階で変わる3要素の一覧はBGM_TIER_COUNTの定義部コメントを参照。
    差し替えはループ先頭ぴったり（_nextBossLoopBoundaryTime）で行うため位相が
    連続し、クロスフェード無しでも継ぎ目のクリックは出ない。したがって段階間で
-   変えて良いのは地鳴りだけではなく、ループ先頭から始まる内容なら何でも差を
-   付けられる（実際に最終段はメロディ層をAメジャー化している。
-   BGM_MEL_BOSS_BRIGHT参照）。逆にループ末尾をまたいで鳴り続ける音を足すと
-   差し替えで切られるので、そこだけは注意。 */
+   差を付けて良いのは、ループ先頭から始まる内容なら何でもよい。逆にループ末尾を
+   またいで鳴り続ける音を足すと差し替えで切られるので、そこだけは注意。 */
 
-/* cookPct(0-100)から対応する段階（0〜RUMBLE_TIER_COUNT-1）を返す。
+/* cookPct(0-100)から対応する段階（0〜BGM_TIER_COUNT-1）を返す。
    実機指摘「表情は50%未満が怒りでその後優しくなるのに、地鳴りは25%あたりから
    マイルドになり始めていて噛み合わない」への対応。
    旧実装は floor(pct/25) で 25/50/75% の等間隔だったため、表情の知覚的な
@@ -2325,16 +2331,16 @@ function _createBGMSource(startRate = 1.0, buffer = bgmBuffer) {
    （表情の変化と音の変化が同じフレームで起きるので結びつきが分かりやすい）。
    結果の境界: 〜50%=tier0（最も凶暴）、50〜66.7%=tier1、66.7〜83.3%=tier2、
    83.3%〜=tier3（最もマイルド）
-   ※ RUMBLE_TIER_COUNTを変えても_kingGentlenessから自動で割り直される */
-function _rumbleTierForCookPct(pct) {
+   ※ BGM_TIER_COUNTを変えても_kingGentlenessから自動で割り直される */
+function _bgmTierForCookPct(pct) {
   const g = _kingGentleness(pct / 100);
-  return Math.min(RUMBLE_TIER_COUNT - 1, Math.ceil(g * (RUMBLE_TIER_COUNT - 1)));
+  return Math.min(BGM_TIER_COUNT - 1, Math.ceil(g * (BGM_TIER_COUNT - 1)));
 }
 
 /* 次にループが先頭（=地鳴りが鳴る瞬間）に戻るaudioCtx.currentTimeを返す。
    _bgmAccumAudioTime（レート変動を考慮したバッファ内積算位置）と
    _bgmQuantizedLoopDurBossから算出する（呼び出し元がボスBGM再生中のみ
-   呼ぶため、常にボス側の量子化ループ長を直接使う。_updateBossRumbleTier参照） */
+   呼ぶため、常にボス側の量子化ループ長を直接使う。_updateBossBgmTier参照） */
 function _nextBossLoopBoundaryTime() {
   if (!audioCtx || !bgmSource || _bgmQuantizedLoopDurBoss <= 0) return null;
   const rate = _getBgmRateJS();
@@ -2345,7 +2351,7 @@ function _nextBossLoopBoundaryTime() {
 
 /* tierのバッファへ、直近のループ境界（boundaryT、audioCtx.currentTime基準）で
    差し替える */
-function _swapBossRumbleBuffer(tier, boundaryT) {
+function _swapBossBgmBuffer(tier, boundaryT) {
   const buf = bossBgmBuffers && bossBgmBuffers[tier];
   if (!buf || !audioCtx || !bgmSource) return;
   const rate = _getBgmRateJS();
@@ -2359,13 +2365,13 @@ function _swapBossRumbleBuffer(tier, boundaryT) {
   newSrc.start(boundaryT, 0);
   oldSrc.onended = null;
   try { oldSrc.stop(boundaryT); } catch(e) {}
-  _pendingRumbleOldSrc = oldSrc;
+  _pendingBgmTierOldSrc = oldSrc;
   oldSrc.onended = () => {
     try { oldSrc.disconnect(); } catch(e) {}
-    if (_pendingRumbleOldSrc === oldSrc) _pendingRumbleOldSrc = null;
+    if (_pendingBgmTierOldSrc === oldSrc) _pendingBgmTierOldSrc = null;
   };
   bgmSource = newSrc;
-  _bossRumbleTier = tier;
+  _bossBgmTier = tier;
 }
 
 /* _updateBossBattleから毎フレーム呼ぶ。こんがり度が新しい段階に入ったら
@@ -2376,19 +2382,19 @@ function _swapBossRumbleBuffer(tier, boundaryT) {
    待ってから確定させることでその隙間を短く抑える。
    レートランプ中（テープ演出）は新ソース側にランプが引き継がれないため、
    ランプ完了まで保留する */
-function _updateBossRumbleTier() {
+function _updateBossBgmTier() {
   if (!_king || !audioCtx || !bgmSource || !_bgmIsBoss || !bossBgmBuffers) return;
-  const desired = _rumbleTierForCookPct(_king.cookPct);
-  if (desired !== _bossRumbleTier && _bossRumblePendingTier !== desired && bossBgmBuffers[desired]) {
-    _bossRumblePendingTier = desired;
+  const desired = _bgmTierForCookPct(_king.cookPct);
+  if (desired !== _bossBgmTier && _bossBgmPendingTier !== desired && bossBgmBuffers[desired]) {
+    _bossBgmPendingTier = desired;
   }
-  if (_bossRumblePendingTier === null) return;
+  if (_bossBgmPendingTier === null) return;
   if (_bgmRateDur > 0 && (audioCtx.currentTime - _bgmRateStart) < _bgmRateDur) return; // ランプ中は保留
   const boundaryT = _nextBossLoopBoundaryTime();
   if (boundaryT == null) return;
   if (boundaryT - audioCtx.currentTime > 0.2) return; // 境界がまだ遠い→次フレームで再確認
-  _swapBossRumbleBuffer(_bossRumblePendingTier, boundaryT);
-  _bossRumblePendingTier = null;
+  _swapBossBgmBuffer(_bossBgmPendingTier, boundaryT);
+  _bossBgmPendingTier = null;
 }
 
 /* ── BGM制御API ── */
@@ -5401,7 +5407,7 @@ const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
 /* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
    上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
    実機指摘「表情の変化と地鳴りがマッチしていない」への対応で、地鳴りの
-   マイルド化（_rumbleTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
+   マイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
    動かす。口の定数から導いているので、口の形を変えれば地鳴りも自動で追従する
    （別々のしきい値を持たせるとまた食い違うため） */
 function _kingGentleness(pct01) {
@@ -5624,7 +5630,7 @@ function _cleanupKingBattleState() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null; _kingLasers = []; _kingCharFlights = [];
   _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
-  _bossRumblePendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
+  _bossBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
   _kingImpactShake = 0;          // 着弾の画面揺れ残量（同上）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
@@ -6348,11 +6354,11 @@ function _initBossBattle() {
   _kingLasers = [];
   _kingCharFlights = [];
   phase = 'boss';
-  /* 地鳴りマイルド化段階をtier0（最も凶暴）にリセットする。startBossBGMTapeが
+  /* BGMの段階をtier0（最も凶暴）にリセットする。startBossBGMTapeが
      bossBgmBuffer（tier0と同一内容）で新規ソースを作るため、ここでの状態
-     リセットと実際の再生内容が一致する（_updateBossRumbleTier参照） */
-  _bossRumbleTier = 0;
-  _bossRumblePendingTier = null;
+     リセットと実際の再生内容が一致する（_updateBossBgmTier参照） */
+  _bossBgmTier = 0;
+  _bossBgmPendingTier = null;
   startBossBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰、ボス戦は暗黒版BGM）
 }
 
@@ -6965,7 +6971,7 @@ function _updateKingCharFlights() {
 function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   _updateKingCommonFx();
-  _updateBossRumbleTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
+  _updateBossBgmTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
   /* 篩い落としの発動判定: 予約済みかつ「降ろす対象の文字が全員キングへ到着済み」
      になったら振り始める（ユーザー選択の案(b)）。到着済みの判定は
      bounce予定の文字が1つも'fly'に残っていないこと。最速発射でも常に
@@ -10557,10 +10563,10 @@ function togglePause() {
            再開後もボス用バッファを使い回す（_bgmIsBoss参照）。
            これを省略すると _createBGMSource() のデフォルト引数（通常バッファ）が
            使われてしまい、ボス戦中にポーズ→再開すると音色が通常BGMに戻ってしまう。
-           地鳴りの現在の段階（_bossRumbleTier）も維持し、ポーズ→再開で
+           地鳴りの現在の段階（_bossBgmTier）も維持し、ポーズ→再開で
            マイルド化が振り出しに戻らないようにする（水平展開） */
         const _resumeBgmBuf = _bgmIsBoss
-          ? ((bossBgmBuffers && bossBgmBuffers[_bossRumbleTier]) || bossBgmBuffer)
+          ? ((bossBgmBuffers && bossBgmBuffers[_bossBgmTier]) || bossBgmBuffer)
           : bgmBuffer;
         if (!_resumeBgmBuf) { return; }
         /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
