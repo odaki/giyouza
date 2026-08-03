@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.83';
+const VERSION = 'v5.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2848,13 +2848,52 @@ function lsLoadAch() {
     medAchieved = m ? JSON.parse(m) : {};
   } catch(e) { unlockedAch = {}; medAchieved = {}; }
 }
-const _idle = window.requestIdleCallback
-  ? f => requestIdleCallback(f, { timeout: 1000 })
-  : f => setTimeout(f, 0);
+/* ── localStorage書き込みの合流（実機指摘への対応） ──
+   実機指摘: 「まれに1的目がひっかかる。4的目のあとに入力が遅延する感じ。
+   連続してハズレが何十回も続いた後に起きている気がする」（macOS Safari）。
+
+   原因: 書き込みは _idle() でアイドル時に回してフレーム予算を守る設計だったが、
+   requestIdleCallback が無い環境ではフォールバックが setTimeout(f, 0) であり、
+   「アイドル時」ではなく直後のマクロタスクで同期的に走っていた。
+   macOS Safari は requestIdleCallback を 17.4 まで実装しておらず、まさに
+   このフォールバック経路に入る。つまりこの環境では設計意図が成立していない。
+   さらに書き込みは1射ごとに予約される（lsSaveStatsは1的目だけ2回呼ばれ、
+   結果確定時にlsSaveも走るので1トライ最低5回）。ハズレが連続すると
+   トライが速く回るぶん書き込み頻度も上がり、Safariのストレージ書き込みが
+   詰まったときにメインスレッドが止まって入力の取りこぼしに見える。
+   1的目に集中して見えるのは、そこだけ書き込み予約が2倍あるため。
+
+   対策: キーごとに「最新の値」だけを保持してまとめて書く。同じキーへの
+   連続した書き込みは1回に畳まれるので、ハズレ連続でも書き込み回数が
+   トライ数に比例して増えない。フォールバックも setTimeout(0) をやめて
+   実際に間を空ける（0だと結局同じフレームの直後に走ってしまう）。
+   取りこぼし防止のため、離脱時（pagehide/visibilitychange）に同期フラッシュする。 */
+const _LS_FLUSH_DELAY_MS = 400;   // 合流のための待ち（この間の同一キーへの書き込みは畳まれる）
+const _lsPending = new Map();     // key → 最新の値
+let _lsFlushScheduled = false;
+
+function _lsFlush() {
+  _lsFlushScheduled = false;
+  if (_lsPending.size === 0) return;
+  try { for (const [k, v] of _lsPending) localStorage.setItem(k, v); } catch(e) {}
+  _lsPending.clear();
+}
+/* 値を予約する。実際の書き込みはまとめて後で行う */
+function _lsQueue(key, value) {
+  _lsPending.set(key, value);
+  if (_lsFlushScheduled) return;
+  _lsFlushScheduled = true;
+  if (window.requestIdleCallback) requestIdleCallback(_lsFlush, { timeout: _LS_FLUSH_DELAY_MS });
+  else setTimeout(_lsFlush, _LS_FLUSH_DELAY_MS);
+}
+/* 離脱・バックグラウンド化で確実に書き出す（予約が残ったまま失われないように）。
+   visibilitychangeはiOSでpagehideが発火しないケースの保険 */
+window.addEventListener('pagehide', _lsFlush);
+document.addEventListener('visibilitychange', () => { if (document.hidden) _lsFlush(); });
+
 function lsSaveAch() {
-  const ach = JSON.stringify(unlockedAch);
-  const med = JSON.stringify(medAchieved);
-  _idle(() => { try { localStorage.setItem(LS_ACH, ach); localStorage.setItem(LS_MED, med); } catch(e) {} });
+  _lsQueue(LS_ACH, JSON.stringify(unlockedAch));
+  _lsQueue(LS_MED, JSON.stringify(medAchieved));
 }
 function lsLoadStats() {
   try {
@@ -2874,8 +2913,9 @@ function lsLoadStats() {
   if (_KING_DEBUG !== null) kingGyozaMeter = _KING_DEBUG;
 }
 function lsSaveStats() {
-  const s = JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen });
-  _idle(() => { try { localStorage.setItem(LS_STATS, s); } catch(e) {} });
+  /* 1射ごとに呼ばれる（1的目は2回）。_lsQueueが同一キーへの連続書き込みを
+     1回に畳むので、ここでの呼び出し頻度がそのまま書き込み回数にはならない */
+  _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen }));
 }
 /* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数
    （既定0=従来通り即時）。cheatpanelのACH一括解除（最大18件）で同じ
@@ -2916,15 +2956,11 @@ const LS_BET   = 'game_bet';
 /* LS_COINS 等が確定した後に定義（TDZ回避） */
 const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_BET, LS_ACH, LS_MED, LS_STATS];
 function lsSave() {
-  /* _idle でアイドル時に書き込み（ゲームループのフレーム予算を削らない） */
-  const _c = coins, _b = bet;
-  if (_c > bestCoins) bestCoins = _c; // bestCoins は同期更新（表示に使うため）
-  const _best = bestCoins;
-  _idle(() => { try {
-    localStorage.setItem(LS_COINS, _c);
-    localStorage.setItem(LS_BET, _b);
-    localStorage.setItem(LS_BEST, _best);
-  } catch(e) {} });
+  /* 書き込みは _lsQueue でまとめて後送り（ゲームループのフレーム予算を削らない） */
+  if (coins > bestCoins) bestCoins = coins; // bestCoins は同期更新（表示に使うため）
+  _lsQueue(LS_COINS, coins);
+  _lsQueue(LS_BET, bet);
+  _lsQueue(LS_BEST, bestCoins);
 }
 function lsLoad() {
   try {
