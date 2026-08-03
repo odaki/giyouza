@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.81';
+const VERSION = 'v5.82';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -751,7 +751,11 @@ function swapRemove(arr, pred, onRemove) {
 /* ════════════════ ゲーム状態 ════════════════ */
 let wheels, curIdx, phase, particles;
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
-let _arrowStartAudioTime = 0; // 発射時の audioCtx.currentTime（着弾音スケジュール用）
+/* 発射時の audioCtx.currentTime。着弾音を発射時刻+飛行時間へスケジュールする
+   ために持っていたが、着弾音の廃止により現在は代入のみで読み手がいない
+   （update()の着弾処理のコメント参照）。着弾音を戻す判断になったらそのまま
+   使えるので残してある */
+let _arrowStartAudioTime = 0;
 let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニメ用: suspended中も進む）
 let _arrowProgressAtPause = -1; // ポーズ時に shooting 中だった場合のarrowProgress保存値
 const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
@@ -2650,7 +2654,9 @@ function playSE(name, atTime) {
       break;
     }
     case 'lock': {
-      /* コツン（E4→G3: 打撃感を保ちつつ音程だけ調内に調律）。4本すべて同じ
+      /* ※現在このcaseはどこからも呼ばれていない（矢の着弾音を廃止したため。
+         update()の着弾処理のコメント参照）。戻す可能性を考えて定義だけ残してある。
+         コツン（E4→G3: 打撃感を保ちつつ音程だけ調内に調律）。4本すべて同じ
          音程で、上昇感は発射音のアルペジオだけに担わせる（上の経緯コメント参照。
          矢ごとに音程を変える案は実機評価で2度否とされている） */
       playOsc(ctx, 'square', noteHz('E',4), t, 0.04, 0.22, 0.04);
@@ -3968,15 +3974,25 @@ function update() {
     if (arrowProgress >= 1) {
       spawnImpact(arrowTX, arrowTY);
       wheels[curIdx].hasArrow = true;
-      /* 着弾音を発射時刻+飛行時間で固定スケジュール（ビートスナップ廃止）。
-         shoot音との間隔が常に ARROW_FLIGHT_SEC（≈67ms）で一定になる。
-         4本目も鳴らす（ユーザー要望。'lock'の定義部の経緯コメント参照）: 以前は curIdx<3 として
-         4本目だけ無音にし、代わりにハズレのズコー音を置いていたが、そのSEを
-         廃止した結果4本目の着弾だけ音が抜けてしまい、1〜3本目からの流れが
-         途切れていた。当たり時は直後に配当SE（jackpot/coin等）が重なるが、
-         こちらは40msの小さなコツンなので邪魔にならず、むしろ矢が刺さった
-         手触りが揃う。等間隔スケジュールも4本目まで保たれる＝リズムが崩れない */
-      playSE('lock', _arrowStartAudioTime > 0 ? _arrowStartAudioTime + ARROW_FLIGHT_SEC : undefined);
+      /* 着弾音は鳴らさない（ユーザー要望）。矢の到着は spawnImpact の映像だけが
+         担い、音はプレイヤーが打った瞬間の発射音（'shoot'）だけになる。
+
+         経緯: 元は着弾音'lock'（矩形波のコツン E4→G3）を発射時刻+飛行時間で
+         固定スケジュールしていたが、実機で「発射音の軽快さをスポイルしている。
+         上から雑音が被さっているかのよう」という指摘を受けて実測したところ、
+         比喩ではなく文字通りだった:
+         - 矩形波は倍音の減衰がほとんど無く、発射音の軽快さを担う3〜5kHz帯で
+           着弾音の倍音が発射音自身の2.8〜10倍鳴っていた（3626Hzで10倍）。
+         - エネルギー（RMS）も着弾0.02259に対し発射0.01356で、着弾音のほうが
+           1.67倍大きい。「ピーク0.21だから小さくて邪魔にならない」という以前の
+           判断はピークで見たのが誤りだった（持続エネルギーでは逆転していた）。
+         波形変更や減衰で和らげる案もあったが、着弾音は発射の67ms後に機械的に
+         鳴る固定のこだまであり、「正確なタイミングで打てたことが音で報われる」
+         というこのゲームの核（feedback_rhythm_design memory参照）には何も足して
+         いない。消すことで残る音がすべてプレイヤーのタイミングで鳴る音になる。
+         「1〜3本目にはあるのに4本目だけ違う」という非対称の問題も同時に消える
+         （その非対称で2度作り直している。'lock'の定義部コメント参照）。
+         'lock'のcase自体は残してある（他から鳴らす可能性と、経緯の記録のため） */
       curIdx++;
       if (curIdx >= 4) {
         phase = 'done'; endTimer = 0;
