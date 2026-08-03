@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.80';
+const VERSION = 'v5.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3153,9 +3153,30 @@ function initGame() {
      startBGMTapeのフォールバック（新規ソースを極低速から加速）が演出を担う。
    - interrupted状態はresume()では復帰できないため必ず_resumeAudioCtx()経由
      （feedback_ios_safari_audio memory参照） */
+/* bgmSourceがまだ無い間、的を止めたまま待つ上限時刻（performance.now()基準）。
+   実機指摘「こんがり達成で通常モードへ戻るとき、いきなりルーレットがスピンして
+   いる。失敗後と同じようにスピンアップさせたい」への対応。
+   原因: tapestartの回転係数は tapeRate = bgmSource ? _getBgmRateJS() : 1 で、
+   ソースが無い場合は1（全速）にフォールバックする。失敗側はstopBGMTapeが
+   ソースを極低速で生かしたまま保持するので該当しないが、達成側は
+   NO_BGM_SOURCE_PHASES（bossVictory等）でソースを破棄済みのため該当していた。
+   さらに startBGMTape は _resumeAudioCtx 経由で必ず非同期に走るので、その前に
+   update()が動くと1フレーム目でtapeRate=1になり、的が全速で回ったうえ
+   即座にidleへ移行してスピンアップが丸ごと飛んでいた（実測で確認）。
+   対策として「audioCtxはあるがソース生成待ち」の間だけ回転係数を0に held する。
+   ただし bgmBuffer 未完成などで startBGMTape がソースを作らずに return する
+   経路があるため、待ちには必ず上限を設けて永久に止まらないようにする。
+   フレームカウンタではなくwall-clockで書くのはCLAUDE.mdの時間条件の規約どおり
+   （実時間で失効すべきガードであり、rAFが止まると永久に失効しないため） */
+const TAPESTART_SRC_WAIT_MS = 1500;
+let _tapestartSrcWaitUntil = 0;
+
 function _restartToTapestart() {
   init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
   phase = 'tapestart';
+  /* audioCtxがある場合のみ待つ。無音起動（audioCtxなし）ではソースが永久に
+     生成されないので、従来どおり即座に回り出す（待つと固まってしまう） */
+  _tapestartSrcWaitUntil = audioCtx ? performance.now() + TAPESTART_SRC_WAIT_MS : 0;
   /* グレースケール解除。startBGMTape側でも設定されるが非同期（_resumeAudioCtx
      のコールバック）のため、無音起動（audioCtxなし）でも確実に解除されるよう
      ここで同期的に設定する */
@@ -3234,8 +3255,20 @@ function init(fromStartup, fromGameOver) {
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
     /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
-       ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ） */
-    if (audioCtx && !bgmSource && !jingleScheduler) startBGM();
+       ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ）。
+       fromGameOver（=_restartToTapestart経由の復帰）では開始しない: そちらは
+       BGMをテープ加速（startBGMTape）で入れるのが演出の本体で、ここでstartBGM()を
+       呼ぶと即時フルテンポで鳴り出してテープ加速が丸ごと飛ぶ。
+       実機指摘「こんがり達成で通常モードへ戻るとき、いきなりルーレットがスピン
+       している。失敗後と同じようにスピンアップさせたい」の直接原因がこれだった。
+       失敗側は stopBGMTape がソースを極低速で生かしたまま保持するので !bgmSource が
+       偽になりここを通らず、達成側だけが NO_BGM_SOURCE_PHASES（bossVictory等）で
+       ソースを破棄済みのため発火していた。
+       この関数の上のコメント（_restartToTapestart）が「init()内の即時フルテンポ再生が
+       誤発動するとテープ加速演出をスキップする」と警告していた事故そのもので、
+       呼び出し順という別の経路だけを塞いでいたため達成側で再発した。
+       条件ではなく引数で明示的に抑制することで、どの経路から来ても再発しない */
+    if (audioCtx && !bgmSource && !jingleScheduler && !fromGameOver) startBGM();
   }
   /* feverPending を isSlowSpin より先に処理（isFever=true になることでスローハンド抽選を正しく抑制） */
   if (feverPending) {
@@ -3870,8 +3903,12 @@ function update() {
   }
   if (phase === 'tapestart') {
     /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期
-       .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算 */
-    const tapeRate = bgmSource ? Math.max(0, Math.min(1, _getBgmRateJS())) : 1;
+       .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算。
+       ソースがまだ無い場合は、生成待ち（startBGMTapeが非同期で走る）の間だけ0で
+       止めて待ち、上限を過ぎたら従来どおり1で即座に回り出す
+       （_tapestartSrcWaitUntil の定義部コメント参照） */
+    const tapeRate = bgmSource ? Math.max(0, Math.min(1, _getBgmRateJS()))
+      : (performance.now() < _tapestartSrcWaitUntil ? 0 : 1);
     for (const w of wheels) w.rot += w.speed * tapeRate;
     /* テープ加速完了（色が完全に戻った）ら射撃解放 */
     if (tapeRate >= 0.99) {
