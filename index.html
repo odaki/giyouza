@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.99';
+const VERSION = 'v6.00';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1715,15 +1715,20 @@ function _elevateAudioSession() {
      Promiseの解決を前提にした制御を書かないこと。呼び出しコストの心配より、
      音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった */
   if (_iosSessionElevated) return;
-  /* 昇格できたかどうかをPromiseで判定しない。実機では解決も拒否もしないまま
-     128回呼び続け、しかも1回あたり最大55msかかっていた（?perfの sess 0/128try と
-     unlk 55.0ms で判明。これがタップ時の引っかかりの正体だった）。
-     代わりに要素が実際に再生された痕跡を見る: 44バイトの無音WAVは再生開始と
-     ほぼ同時に終わるので、endedかcurrentTime>0になっていれば鳴った＝昇格済み。
-     痕跡が無いうちは従来どおり毎タップ試み続けるので、諦めて無音になることはない。
+  /* 昇格できたかどうかをPromiseで判定しない。実機ではPromiseが解決も拒否もしないまま
+     100回以上呼び続け、しかも1回あたり最大57msかかっていた（?perfの sess 0/128try と
+     elev 57.0ms で判明。これがタップ時の引っかかりの正体だった）。
+     判定材料は要素の再生状態。ここも一度間違えた: ended/currentTime>0 を見たが、
+     埋め込みWAVはdataチャンク長0＝サンプルを持たないため currentTime は 0 のままで
+     ended にもならず、実機で永久に成功と判定できなかった（el p0e0t0.00 で判明）。
+     paused===false なら play() は受理されている＝AVAudioSessionは昇格済みとみなす。
+     どれも真でないうちは毎タップ試み続けるので、諦めて無音になる経路は無い。
      音声グラフを作り直したとき（interruptedからの復帰）は_recreateAudioGraphが
      このフラグを倒して再武装する */
-  if (_iosAudioEl.ended || _iosAudioEl.currentTime > 0) { _iosSessionElevated = true; return; }
+  if (!_iosAudioEl.paused || _iosAudioEl.ended || _iosAudioEl.currentTime > 0) {
+    _iosSessionElevated = true;
+    return;
+  }
   _iosSessionTries++;
   _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
 }
