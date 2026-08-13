@@ -228,7 +228,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.88';
+const VERSION = 'v5.89';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3239,6 +3239,119 @@ function gameOverReset() {
   _restartToTapestart();
 }
 
+/* ════════════════ 中当たりエフェクトの退場（アウトロ） ════════════════
+   ユーザー要望: 中当たりの演出から通常ゲームへ戻るとき、これまではトライの
+   切り替わりでギヨウザが一瞬で消えていた。次のゲームが始まるのと並行して、
+   それぞれが画面外へ抜けていくところまで見せる。
+   実現方法: トライ切り替え（init）でエフェクトの中身を捨てず、この_fxOutroへ
+   所有権ごと移す（元の配列は空にするので、_clearTrialFxStateのプール返却
+   ループとは競合しない）。以降はphaseに関係なく_updateFxOutro/_drawFxOutroが
+   面倒を見て、画面外に出たものからプールへ返す。
+   退場の方向は演出ごとに変える（ユーザー指定）:
+     ウヨウヨ = そのままの進行方向へ／ヨヨヨヨ = 上へ引き上げられて飛んでいく
+     ウウウウ = 上へ／ギョギョ = そのままの進行方向へ（壁で跳ね返らせない）
+   次のトライで当たりが出たらrushを立てて加速させ、新しい演出と混ざり続ける
+   時間を短くする（ユーザー要望）。
+   ギウギウは対象外: 落下ギヨウザ（items）を使う演出で、もともとトライを
+   またいで物理で転がり画面外へ抜けていくため、この仕組みを通す必要がない */
+const _fxOutro = { worms: [], yoyos: [], ghosts: [], fish: [], rush: false, timer: 0 };
+const _FX_OUTRO_RUSH_MULT    = 3;     // 次トライで当たりが出たときの加速倍率
+const _FX_OUTRO_WORM_ACCEL   = 0.06;  // ウヨウヨ: 進行方向への加速(px/frame²)
+const _FX_OUTRO_WORM_SPD_MAX = 14;    // ウヨウヨ: 速度上限（速すぎるとワープして見える）
+const _FX_OUTRO_YOYO_ACCEL   = 0.35;  // ヨヨヨヨ: 上方向への加速
+const _FX_OUTRO_YOYO_SPD0    = -1.5;  // ヨヨヨヨ: 退場開始時の上向き初速
+const _FX_OUTRO_GHOST_ACCEL  = 0.06;  // ウウウウ: 上昇の加速
+const _FX_OUTRO_FISH_ACCEL   = 0.08;  // ギョギョ: 進行方向への加速
+/* 画面外判定（毎フレームのクロージャ生成を避けてモジュールスコープに置く）。
+   余白はそれぞれの見た目の大きさに合わせる */
+const _predFxWorm  = w => w.x > -80 && w.x < W + 80 && w.y > -80 && w.y < H + 80;
+const _predFxYoyo  = y => y.y > -80;
+const _predFxGhost = g => g.y > -g.r * 3;
+const _predFxFish  = f => f.x > -f.size * 2.5 && f.x < W + f.size * 2.5;
+
+/* トライ切り替えの直前に呼ぶ。生きているエフェクトを退場モードへ移す */
+function _startFxOutro() {
+  for (const w of worms)  _fxOutro.worms.push(w);
+  worms = [];
+  for (const y of yoyos) {
+    y.outroV = _FX_OUTRO_YOYO_SPD0; // 糸に引き上げられる形で上へ抜けていく
+    _fxOutro.yoyos.push(y);
+  }
+  yoyos = [];
+  for (const g of ghosts) _fxOutro.ghosts.push(g);
+  ghosts = [];
+  for (const f of gyogyoFish) _fxOutro.fish.push(f);
+  gyogyoFish = [];
+  _fxOutro.rush = false; // 加速指定は「次のトライで当たりが出たら」なので毎回リセット
+}
+
+/* 退場中のエフェクトを進める。phaseを問わず毎フレーム呼ぶ（update()冒頭の
+   常時更新セクション。done以外でも動き続ける必要があるため） */
+function _updateFxOutro() {
+  const o = _fxOutro;
+  if (!o.worms.length && !o.yoyos.length && !o.ghosts.length && !o.fish.length) {
+    o.timer = 0;
+    return;
+  }
+  o.timer++;
+  const rush = o.rush ? _FX_OUTRO_RUSH_MULT : 1;
+  /* ウヨウヨ: 這っている向きのまま加速して画面外へ（updateWormsと同じ蛇行を維持） */
+  for (const w of o.worms) {
+    w.wiggle += w.wiggleSpd;
+    w.angle  += Math.sin(w.wiggle) * w.wiggleAmp;
+    w.speed   = Math.min(_FX_OUTRO_WORM_SPD_MAX, w.speed + _FX_OUTRO_WORM_ACCEL * rush);
+    w.x      += Math.cos(w.angle) * w.speed;
+    w.y      += Math.sin(w.angle) * w.speed;
+    w.rot     = w.angle;
+  }
+  swapRemove(o.worms, _predFxWorm, _deadify);
+  /* ヨヨヨヨ: 上向きに加速し続ける（上下運動で戻ってきた延長で飛んでいく見え方） */
+  for (const y of o.yoyos) {
+    y.outroV -= _FX_OUTRO_YOYO_ACCEL * rush;
+    y.y      += y.outroV;
+    y.rot    += y.spinSpd;
+  }
+  swapRemove(o.yoyos, _predFxYoyo, _deadify);
+  /* ウウウウ: もともと上昇しているので、その速度をさらに上げる（vyは負） */
+  for (const g of o.ghosts) {
+    g.vy -= _FX_OUTRO_GHOST_ACCEL * rush;
+    g.y  += g.vy;
+    g.wobble += g.wobbleSpd;
+    g.x  += Math.sin(g.wobble) * 0.9;
+    /* 濃度の増減はupdateUuuuと同じ規則（上端付近で消える） */
+    const fadeZone = 80;
+    if (g.y > H - fadeZone)   g.alpha = Math.min(0.80, g.alpha + 0.04);
+    else if (g.y < fadeZone)  g.alpha = Math.max(0, g.alpha - 0.025);
+  }
+  swapRemove(o.ghosts, _predFxGhost, _releaseGhost);
+  /* ギョギョ: updateGyogyoの壁反射を外し、泳いでいる向きへ加速して画面外へ */
+  for (const f of o.fish) {
+    f.vx += Math.sign(f.vx) * _FX_OUTRO_FISH_ACCEL * rush;
+    f.x  += f.vx;
+    f.y  += f.vy;
+  }
+  swapRemove(o.fish, _predFxFish);
+}
+
+/* 退場中のエフェクトを描く。通常の演出と同じレイヤーに重ねる */
+function _drawFxOutro() {
+  const o = _fxOutro;
+  if (o.worms.length)  drawWorms(o.worms);
+  if (o.yoyos.length)  drawYoyoyoyo(o.yoyos, true);
+  if (o.ghosts.length) drawUuuu(o.ghosts, true);
+  if (o.fish.length)   drawGyogyo(o.fish, true, o.timer);
+}
+
+/* キングギヨウザ突入時など、退場アニメごと消し去りたい場合に呼ぶ */
+function _clearFxOutro() {
+  const o = _fxOutro;
+  for (const w of o.worms) w._dead = true;
+  for (const y of o.yoyos) y._dead = true;
+  for (const g of o.ghosts) _releaseGhost(g);
+  o.worms.length = 0; o.yoyos.length = 0; o.ghosts.length = 0; o.fish.length = 0;
+  o.rush = false; o.timer = 0;
+}
+
 /* トライ終了時のエフェクト系状態を一括で後始末する（init()と_startBossOmen
    の共通処理として抽出）。以前は_startBossOmenが一部（items/missPopups/
    payoutPopups/ghost）しかクリアしておらず、hitType別の演出（ギヨギヨの
@@ -3355,6 +3468,10 @@ function init(fromStartup, fromGameOver) {
   } else {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
+  /* 中当たりエフェクトは消さずに退場モードへ渡す（_startFxOutro参照）。
+     _clearTrialFxStateより先に呼ぶこと: あちらは worms/yoyos/ghosts/gyogyoFish を
+     プールへ返して空にするため、順序が逆だと退場させる中身が残らない */
+  _startFxOutro();
   _clearTrialFxState();
   shootGuardUntil = performance.now() + 100; // 約100ms間 射撃ブロック（wall-clock基準）
   /* done フェーズ中に経過したビートをミスとして数えないようリセット */
@@ -3823,6 +3940,9 @@ function update() {
     p.r  *= 0.97; p.life--;
   }
   swapRemove(particles, _predParticle, _deadify);
+  /* 中当たりエフェクトの退場: 次のトライと並行して画面外へ抜けていくので、
+     phaseをまたいで常時更新する必要がある（_fxOutro参照） */
+  _updateFxOutro();
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
@@ -4097,6 +4217,10 @@ function update() {
           kingGyozaMeter += _kingGain;
           lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
         }
+        /* 前トライのエフェクトがまだ退場しきっていないうちに次の当たりが出た場合は、
+           退場を加速して早く画面から抜けさせる（ユーザー要望: 新しい当たり演出と
+           混ざり続けないように）。ハズレでは加速しない＝そのままの速度で流れていく */
+        if (hitType !== 'none') _fxOutro.rush = true;
         /* 配当計算 */
         const payout = calcPayout();
         if (payout > 0) {
@@ -4312,9 +4436,10 @@ function updateWorms() {
   if (endTimer % 18 === 0 && worms.length < 22) spawnWorm();
 }
 
-function drawWorms() {
+/* list省略時は現トライのworms。退場中のリストを渡すと同じ見た目で描ける（_drawFxOutro参照） */
+function drawWorms(list) {
   ctx.save();
-  for (const w of worms) {
+  for (const w of (list ?? worms)) {
     drawOneItem(w);
   }
   ctx.globalAlpha = 1;
@@ -4933,19 +5058,26 @@ function updateYoyoyoyo() {
   }
 }
 
-function drawYoyoyoyo() {
-  if (hitType !== 'yoyoyoyo' || endTimer < 50) return;
-  for (const y of yoyos) {
-    const age = endTimer - 50 - y.delay;
-    if (age <= 0) continue;
-    const a = Math.min(1, age / 22);
+/* outro=true のときは退場中のリストを描く（フェードインは済んでいるので不透明、
+   画面上端より上に出た糸は描かない）。省略時は現トライのyoyos */
+function drawYoyoyoyo(list, outro) {
+  if (!outro && (hitType !== 'yoyoyoyo' || endTimer < 50)) return;
+  for (const y of (list ?? yoyos)) {
+    let a = 1;
+    if (!outro) {
+      const age = endTimer - 50 - y.delay;
+      if (age <= 0) continue;
+      a = Math.min(1, age / 22);
+    }
 
     /* 糸 */
-    ctx.save();
-    ctx.globalAlpha = a * 0.7;
-    ctx.beginPath(); ctx.moveTo(y.x, 0); ctx.lineTo(y.x, y.y);
-    ctx.strokeStyle = 'rgba(220,220,200,0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.restore();
+    if (y.y > 0) {
+      ctx.save();
+      ctx.globalAlpha = a * 0.7;
+      ctx.beginPath(); ctx.moveTo(y.x, 0); ctx.lineTo(y.x, y.y);
+      ctx.strokeStyle = 'rgba(220,220,200,0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+    }
 
     /* ギヨウザ */
     ctx.save();
@@ -5069,10 +5201,11 @@ function updateUuuu() {
   swapRemove(ghosts, _predAlive, _releaseGhost); // キャンバスをプールへ返却
 }
 
-function drawUuuu() {
-  if (hitType !== 'uuuu' || endTimer < 50) return;
+/* outro=true のときは退場中のリストを描く（_drawFxOutro参照）。省略時は現トライのghosts */
+function drawUuuu(list, outro) {
+  if (!outro && (hitType !== 'uuuu' || endTimer < 50)) return;
   ctx.save();
-  for (const g of ghosts) {
+  for (const g of (list ?? ghosts)) {
     if (g.alpha <= 0.01) continue;
     ctx.globalAlpha = g.alpha;
     if (g._oc) {
@@ -5312,15 +5445,19 @@ function updateGyogyo() {
   }
 }
 
-function drawGyogyo() {
-  if (hitType !== 'gyogyo' || endTimer < 45) return;
-  const t = endTimer;
-  const fadeIn = Math.min(1, (t - 45) / 40);
+/* outro=true のときは退場中の魚だけを描く（_drawFxOutro参照）。
+   時間軸には退場用のタイマーを渡す: endTimerは次トライで0に戻るため、
+   そのまま使うと尾ひれの揺れや「ギョギョ！」の明滅が止まってしまう。
+   「ギョギョ！」テキストは当たり演出そのものなので退場中は出さない */
+function drawGyogyo(list, outro, timer) {
+  if (!outro && (hitType !== 'gyogyo' || endTimer < 45)) return;
+  const t = outro ? timer : endTimer;
+  const fadeIn = outro ? 1 : Math.min(1, (t - 45) / 40);
 
   ctx.save();
   ctx.globalAlpha = fadeIn;
 
-  for (const f of gyogyoFish) {
+  for (const f of (list ?? gyogyoFish)) {
     drawFish(f, t);
 
     /* ！エクスクラメーション（exclamTimer更新はupdateGyogyo()で実施） */
@@ -5344,9 +5481,9 @@ function drawGyogyo() {
     }
   }
 
-  /* 「ギョギョ！」テキストを散らす */
-  const msgs = ['ギョ！', 'ギョギョ！', 'ギョッ！', '！！！', 'ギョッ'];
-  for (let k = 0; k < 5; k++) {
+  /* 「ギョギョ！」テキストを散らす（退場中は出さない: 上のコメント参照） */
+  const msgs = outro ? [] : ['ギョ！', 'ギョギョ！', 'ギョッ！', '！！！', 'ギョッ'];
+  for (let k = 0; k < msgs.length; k++) {
     const beat = Math.sin(t * 0.13 + k * 1.3);
     const scale2 = 0.7 + Math.abs(beat) * 0.5;
     const alpha3 = (0.35 + Math.abs(beat) * 0.55) * fadeIn;
@@ -5627,6 +5764,9 @@ function _startBossOmen() {
      ここが手薄だったため、当たり演出の途中でキングギヨウザが発動すると
      その演出がキングギヨウザ画面の下に透けて残っていた） */
   _clearTrialFxState();
+  /* 退場中のエフェクトも同じ理由で消す（トライを越えて生き残る仕組みなので、
+     クリアし忘れるとキングギヨウザ画面の上をギヨウザが飛んでいくことになる） */
+  _clearFxOutro();
   /* isSlowSpin等はトライ限定の演出だが_clearTrialFxStateの対象外だったため、
      スローハンド中にキング戦へ突入すると発動状態・ランプ終了時刻が戦闘中
      ずっと残留していた（実機報告の調査で発覚した水平展開漏れ。他のトライ
@@ -8762,6 +8902,9 @@ function draw() {
 
   /* 2. エフェクト面 */
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
+  /* 前トライの中当たりエフェクトの退場（_fxOutro参照）。現トライの演出と同じ
+     レイヤーに重ねる。両者が同時に出るのは意図どおり（並行して進む） */
+  _drawFxOutro();
   /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
   if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
