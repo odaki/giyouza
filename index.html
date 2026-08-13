@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.00';
+const VERSION = 'v6.01';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1675,9 +1675,10 @@ function _recreateAudioGraph() {
   _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
   _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
   /* AVAudioSessionの昇格も作り直しで失われうるので再武装する（_elevateAudioSession参照）。
-     消音モードではこの昇格が唯一の発音経路なので、取りこぼすと無音になる */
+     消音モードではこの昇格が唯一の発音経路なので、取りこぼすと無音になる。
+     無音要素がまだ鳴り続けていれば次のタップで即座に「昇格済み」と再判定され、
+     割り込みで止められていれば play() から再開される */
   _iosSessionElevated = false;
-  _iosAudioEl.currentTime = 0;
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
@@ -1695,11 +1696,37 @@ function _resumeAudioCtx(callback) {
 
 /* iOS マナーモード対策: <audio>要素をユーザーアクティベーション内で再生すると
    AVAudioSession カテゴリが Ambient → Playback に昇格し、マナーモードをバイパスする。
-   無音の最小WAV(44バイト)をdata URIで埋め込み、ファイル不要でインライン実現。
-   成功後は再呼び出しをスキップ（フラグで管理）。 */
+   以前は44バイトの「dataチャンク長0」のWAVを使っていたが、これはサンプルを1つも
+   持たない退化したファイルで、次の2つの実害があった（いずれも実機で発覚）:
+     ・再生が一瞬で終わる（というより始まらない）ためセッションがすぐ元に戻り、
+       毎タップ play() を呼び続けないと消音モードで音が出なかった。その play() が
+       1回あたり最大57msかかっており、これがタップ時の引っかかりの正体だった。
+     ・currentTimeが進まずendedにもならないので「昇格できたか」を判定できなかった。
+       pausedはplay()を呼んだ瞬間にfalseになる仕様のため判定に使えない（これで
+       1回だけ呼んで無音になる退行を出した）。
+   そこで実時間を持つ無音WAV（8kHz・8bit・モノラル・0.5秒）を実行時に組み立て、
+   loop再生で鳴らし続ける。再生が途切れないのでセッションはPlaybackのまま保たれ、
+   play()は最初の1回で済む。8bit PCMの無音は0x80。 */
+const _SILENT_WAV_URI = (() => {
+  const rate = 8000, n = rate / 2;            // 0.5秒
+  const bytes = new Uint8Array(44 + n);
+  const dv = new DataView(bytes.buffer);
+  const ascii = (off, s) => { for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i); };
+  ascii(0, 'RIFF');  dv.setUint32(4, 36 + n, true);   ascii(8, 'WAVE');
+  ascii(12, 'fmt '); dv.setUint32(16, 16, true);      dv.setUint16(20, 1, true); // PCM
+  dv.setUint16(22, 1, true);                          dv.setUint32(24, rate, true);
+  dv.setUint32(28, rate, true);                       dv.setUint16(32, 1, true);
+  dv.setUint16(34, 8, true);                          ascii(36, 'data');
+  dv.setUint32(40, n, true);
+  bytes.fill(0x80, 44);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return 'data:audio/wav;base64,' + btoa(s);
+})();
 const _iosAudioEl = document.createElement('audio');
-_iosAudioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+_iosAudioEl.src = _SILENT_WAV_URI;
 _iosAudioEl.setAttribute('playsinline', '');
+_iosAudioEl.loop   = true; // 鳴り続けることでAVAudioSessionをPlaybackのまま保つ
 _iosAudioEl.volume = 0;
 let _iosSessionElevated = false;
 let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確認用。挙動には影響しない）
@@ -1715,17 +1742,16 @@ function _elevateAudioSession() {
      Promiseの解決を前提にした制御を書かないこと。呼び出しコストの心配より、
      音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった */
   if (_iosSessionElevated) return;
-  /* 昇格できたかどうかをPromiseで判定しない。実機ではPromiseが解決も拒否もしないまま
-     100回以上呼び続け、しかも1回あたり最大57msかかっていた（?perfの sess 0/128try と
-     elev 57.0ms で判明。これがタップ時の引っかかりの正体だった）。
-     判定材料は要素の再生状態。ここも一度間違えた: ended/currentTime>0 を見たが、
-     埋め込みWAVはdataチャンク長0＝サンプルを持たないため currentTime は 0 のままで
-     ended にもならず、実機で永久に成功と判定できなかった（el p0e0t0.00 で判明）。
-     paused===false なら play() は受理されている＝AVAudioSessionは昇格済みとみなす。
-     どれも真でないうちは毎タップ試み続けるので、諦めて無音になる経路は無い。
-     音声グラフを作り直したとき（interruptedからの復帰）は_recreateAudioGraphが
-     このフラグを倒して再武装する */
-  if (!_iosAudioEl.paused || _iosAudioEl.ended || _iosAudioEl.currentTime > 0) {
+  /* 昇格できたかの判定は「実際に再生位置が進んでいて、かつ止まっていない」ことで見る。
+     判定材料の選定を2度間違えた記録（どちらも実機で無音の退行を出した）:
+       ・Promiseの解決 → iOSでは解決も拒否もしないことがあり、永久に判定できない
+       ・paused===false → play()を呼んだ瞬間にfalseになる仕様なので、実際には
+         鳴っていなくても成功と誤認する（1回だけ呼んで無音になった）
+     currentTime>0 は実時間を持つWAVに変えて初めて意味を持つようになった
+     （_SILENT_WAV_URI参照）。pausedも併せて見るのは、システム側の割り込みで
+     止められた場合に再開できるようにするため。
+     判定が真にならないうちは毎タップ試み続けるので、諦めて無音になる経路は無い */
+  if (_iosAudioEl.currentTime > 0 && !_iosAudioEl.paused) {
     _iosSessionElevated = true;
     return;
   }
