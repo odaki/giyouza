@@ -288,17 +288,29 @@ function drawPerf() {
    その場で切り分けられるようにするための手段。縦画面420×820をdpr3で確保すると
    実ピクセルは1260×2460＝約310万画素あり、dpr2にすれば約45%に減る。
    本番の既定は従来どおり端末のdevicePixelRatio */
+/* 上限を2に定めた根拠（iPhone 16実機・縦画面・?perf計測）:
+     dpr3 (1260x2460): frame work 5.0ms / gap 33ms / rAF 60fps
+     dpr2 ( 840x1640): frame work 6.0ms / gap 56ms / rAF 59fps
+     dpr1 ( 420x 820): frame work 2.0ms / gap 34ms / rAF 60fps
+   rAFは3パターンともほぼ60fpsを返しており、こちらのupdate()+draw()も常に予算内。
+   にもかかわらずgapの最大値が跳ねるのは、ときどき来る遅延フレーム（塗り直しと
+   GPU転送が間に合わない回）が原因で、dprを下げるとその頻度が下がって体感の
+   引っかかりがほぼ消える、というのが実機評価の結論。
+   dpr3は310万画素で、2にすれば138万画素（45%）まで減る。ゲームの絵は大きな
+   ベクタ図形と文字が主体なので、2でも実用上の粗さは出ない。
+   デスクトップ（Mac）は元から2なのでこの上限では何も変わらない */
+const _DPR_CAP = 2;
 const _dpr = (() => {
-  const auto = Math.max(1, Math.round(window.devicePixelRatio || 1));
+  const auto = Math.min(_DPR_CAP, Math.max(1, Math.round(window.devicePixelRatio || 1)));
   const v = parseFloat(new URLSearchParams(location.search).get('dpr'));
-  return isNaN(v) ? auto : Math.max(1, Math.min(3, v));
+  return isNaN(v) ? auto : Math.max(1, Math.min(3, v)); // ?dpr=3で上限を外して比較できる
 })();
 canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.93';
+const VERSION = 'v5.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
