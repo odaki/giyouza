@@ -303,6 +303,8 @@ function drawPerf() {
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     `drawOnly ${n(_perf.drawOnly.last)}  max ${n(_perf.drawOnly.max)}  (追加フレームのdraw)`,
     `tap ${n(_perf.tap.max)}  touch ${n(_perf.touch.max)}  unlk ${n(_perf.unlk.max)}  foc ${n(_perf.focus.max)} (max)`,
+    /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提 */
+    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try  route ${_speakerRouteEstablished ? 1 : 0}  ctx ${audioCtx ? audioCtx.state : '-'}  mute ${audioMuted ? 1 : 0}`,
     `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
     `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
     `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
@@ -350,7 +352,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.96';
+const VERSION = 'v5.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1694,16 +1696,18 @@ _iosAudioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIh
 _iosAudioEl.setAttribute('playsinline', '');
 _iosAudioEl.volume = 0;
 let _iosSessionElevated = false;
-let _iosSessionTries = 0;      // play()の試行回数（失敗し続けたときの打ち切り用）
+let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確認用）
 let _iosSessionInFlight = false; // 直前のplay()がまだ解決していない
-const _IOS_SESSION_MAX_TRIES = 8;
 function _elevateAudioSession() {
-  /* 成功後はスキップ。加えて「まだ解決していない」「何度も失敗している」場合も呼ばない。
-     HTMLMediaElement.play() はiOSではオーディオセッションに触れるため、毎タップ
-     無条件に呼ぶと稀に数十msかかる。成功すれば1回で済むが、何らかの理由で
-     失敗し続ける端末では毎タップ呼び続けることになるため、上限を設ける
-     （実機のスパイク記録で、タップしたフレームだけ止まる事象を追った結果の対策） */
-  if (_iosSessionElevated || _iosSessionInFlight || _iosSessionTries >= _IOS_SESSION_MAX_TRIES) return;
+  /* 成功するまでタップのたびに試み続ける。ここで打ち切ってはいけない。
+     一度「失敗が続くなら8回で打ち切る」に変えたところ、消音モードの実機で
+     ミュート解除しても音が鳴らなくなった（実機報告）。この昇格はAVAudioSessionを
+     Ambient→Playbackに上げて消音スイッチをバイパスするためのもので、
+     昇格できないまま諦めると消音モードでは一切音が出ない。play()は最初の数回が
+     失敗しても後のタップで成功しうるため、上限は付けない。
+     残しているのは再入防止だけ（解決前に重ねて呼ばない）。これは挙動を変えずに
+     無駄な呼び出しだけを減らす */
+  if (_iosSessionElevated || _iosSessionInFlight) return;
   _iosSessionTries++;
   _iosSessionInFlight = true;
   _iosAudioEl.play()
