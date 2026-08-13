@@ -231,12 +231,37 @@ function drawKeyDebug() {
 const PERF_ON = new URLSearchParams(location.search).has('perf');
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 const _perf = {
-  tap:      { last: 0, max: 0, at: 0 },
-  resOC:    { last: 0, max: 0, at: 0 },
-  pre:      { last: 0, max: 0, at: 0 },
-  ls:       { last: 0, max: 0, at: 0 },
-  drawOnly: { last: 0, max: 0, at: 0 }, // 60fps tick以外の追加フレーム（draw()だけ走る側）
+  tap:      { last: 0, max: 0, at: 0, ranAt: 0 },
+  resOC:    { last: 0, max: 0, at: 0, ranAt: 0 },
+  pre:      { last: 0, max: 0, at: 0, ranAt: 0 },
+  ls:       { last: 0, max: 0, at: 0, ranAt: 0 },
+  drawOnly: { last: 0, max: 0, at: 0, ranAt: 0 }, // 60fps tick以外の追加フレーム（draw()だけ走る側）
 };
+/* 突出したフレーム間隔（スパイク）だけを、そのとき何が起きていたかと一緒に残す。
+   「ごく稀に1的目の発射で引っかかる」のような低頻度の事象は、最大値だけ見ていても
+   前後関係が分からないため。直近3件を新しい順に表示する。
+   sinceInit＝トライ開始からの経過msなので、1的目付近で起きているかがそれで分かる。
+   tags＝そのスパイクと同じ時間帯に走っていた計測対象（何も付かなければ、
+   詰まっていたのはこちらのJSの外側＝GCやブラウザ側の処理） */
+const _PERF_SPIKE_MS = 25;   // これを超えるフレーム間隔を記録する（通常は16.7）
+const _PERF_SPIKE_KEEP = 3;
+const _perfSpikes = [];
+let _lastInitAt = 0;         // 直近のinit()時刻（トライ開始）
+function _perfLogSpike(gapMs) {
+  const now = performance.now();
+  const tags = [];
+  for (const k of ['tap', 'resOC', 'pre', 'ls', 'drawOnly']) {
+    if (_perf[k].ranAt > 0 && now - _perf[k].ranAt <= gapMs + 4) tags.push(k);
+  }
+  _perfSpikes.unshift({
+    gap: gapMs,
+    phase: phase,
+    idx: curIdx,
+    since: _lastInitAt > 0 ? Math.round(now - _lastInitAt) : -1,
+    tags: tags.join(','),
+  });
+  if (_perfSpikes.length > _PERF_SPIKE_KEEP) _perfSpikes.length = _PERF_SPIKE_KEEP;
+}
 /* rAFが実際に何回/秒呼ばれているかを数える。update()+draw()が5〜7msなのに
    フレーム間隔が31〜47msという実機報告の切り分け用: JSの合計とrAFの実測レートを
    突き合わせれば、残りがブラウザ側（塗り直し・GPU転送・合成）だと確定できる */
@@ -251,7 +276,7 @@ function _perfCountFrame(t) {
 }
 function _perfMark(key, t0) {
   const e = _perf[key], now = performance.now(), ms = now - t0;
-  e.last = ms;
+  e.last = ms; e.ranAt = now;
   if (ms >= e.max || now - e.at > _PERF_MAX_HOLD_MS) { e.max = ms; e.at = now; }
 }
 function drawPerf() {
@@ -271,6 +296,10 @@ function drawPerf() {
     `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
     `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
   ];
+  /* スパイク履歴（新しい順）。tagsが空なら詰まりはこちらのJSの外側 */
+  for (const s of _perfSpikes) {
+    lines.push(`spike ${n(s.gap)}ms ${s.phase}#${s.idx} +${s.since}ms [${s.tags || '-'}]`);
+  }
   ctx.save();
   ctx.font = '11px monospace';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
@@ -310,7 +339,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.94';
+const VERSION = 'v5.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3012,9 +3041,11 @@ const _LS_FLUSH_DELAY_MS = 1500;  // 保険のタイマー（拍と一致しな�
 const _LS_FLUSH_SAFE_SEC = 0.1;   // 発射からこれだけ経った安全な時点で書き出す（次のタップは約1拍先）
 const _lsPending = new Map();     // key → 最新の値
 let _lsFlushScheduled = false;
+let _lsFlushDue = false;          // 保険のタイマーが切れた（次の安全な機会で必ず書く）
 
 function _lsFlush() {
   _lsFlushScheduled = false;
+  _lsFlushDue = false;
   if (_lsPending.size === 0) return;
   const _t0 = PERF_ON ? performance.now() : 0;
   try { for (const [k, v] of _lsPending) localStorage.setItem(k, v); } catch(e) {}
@@ -3026,7 +3057,13 @@ function _lsQueue(key, value) {
   _lsPending.set(key, value);
   if (_lsFlushScheduled) return;
   _lsFlushScheduled = true;
-  _runWhenIdle(_lsFlush, _LS_FLUSH_DELAY_MS);
+  /* 保険のタイマーでは書き込まず「そろそろ書け」のフラグを立てるだけにする。
+     実際の書き出しは必ずupdate()の中で行う（下記_lsFlushDueの参照箇所）。
+     タイマーのコールバックはタップと同じタスク列に割り込むので、そこで書くと
+     稀にタップ直後の1フレームへ着地して引っかかりに見えるため。
+     既にフラッシュ済み（_lsFlushScheduled=false）なら、古いタイマーが後から
+     発火してもフラグは立てない */
+  _runWhenIdle(() => { if (_lsFlushScheduled) _lsFlushDue = true; }, _LS_FLUSH_DELAY_MS);
 }
 /* 離脱・バックグラウンド化で確実に書き出す（予約が残ったまま失われないように）。
    visibilitychangeはiOSでpagehideが発火しないケースの保険 */
@@ -3593,6 +3630,7 @@ function init(fromStartup, fromGameOver) {
   } else {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
+  _lastInitAt = performance.now(); // ?perfのスパイク記録で「トライ開始から何ms後か」を出すため
   /* 中当たりエフェクトは消さずに退場モードへ渡す（_startFxOutro参照）。
      _clearTrialFxStateより先に呼ぶこと: あちらは worms/yoyos/ghosts/gyogyoFish を
      プールへ返して空にするため、順序が逆だと退場させる中身が残らない */
@@ -3740,6 +3778,16 @@ function _buildWheelOC(w) {
   _buildSegWheelOC(w, _WHEEL_OC_OPT);
 }
 
+/* セグメント塗りのグラジェント（OffscreenCanvas未対応環境のフォールバック描画用）。
+   生成箇所を1つにまとめ、必要になった時点でだけ作れるようにする */
+function _segFallbackGradient(char, mid) {
+  const grd = ctx.createRadialGradient(
+    Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
+  grd.addColorStop(0, SEG_L[char]);
+  grd.addColorStop(1, SEG_D[char]);
+  return grd;
+}
+
 function createWheel(x, y, feverChar) {
   const chars   = [...CHARS].sort(() => Math.random() - 0.5);
   /* フィーバー中: 対象文字97%、他3文字各1%の極端な偏りを設定 */
@@ -3751,12 +3799,14 @@ function createWheel(x, y, feverChar) {
   const segs = chars.map((c, i) => {
     const span = (weights[i] / sum) * Math.PI * 2;
     const mid  = angle + span / 2;
-    /* gradient・font は OffscreenCanvas 未対応時のフォールバック描画用。
-       通常は _buildWheelOC 内で再生成するため毎フレームの描画には使われない。 */
-    const grd = ctx.createRadialGradient(
-      Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
-    grd.addColorStop(0, SEG_L[c]);
-    grd.addColorStop(1, SEG_D[c]);
+    /* gradient は OffscreenCanvas 未対応時のフォールバック描画専用。対応環境では
+       _buildSegWheelOC が OC 座標で作り直すので、ここで作ると毎トライ16個
+       （4的×4セグメント）の CanvasGradient をそのまま捨てることになる。
+       トライの切り替わりは、稀な引っかかりが出るとしたらGCが疑わしい場所なので、
+       作らずに済むものは作らない。未対応環境では描画側が必要になった時点で
+       作る（_segFallbackGradient参照）。
+       font は OC 描画でも使うので常に作る（fontOf: s => s.font） */
+    const grd = typeof OffscreenCanvas === 'undefined' ? _segFallbackGradient(c, mid) : null;
     const fontSize = Math.max(12, Math.min(33, (span / (Math.PI * 2)) * 116));
     const font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
     const s = { char: c, start: angle, span, gradient: grd, font };
@@ -4073,8 +4123,12 @@ function update() {
      止まっても入力は取りこぼさない。逆に固定遅延のタイマー任せにすると、
      その遅延が拍と一致したときに毎回タップの瞬間へ着地する（_LS_FLUSH_DELAY_MSの
      コメント参照）。curIdx>0＝このトライで既に射っていることの確認 */
-  if (_lsPending.size > 0 && phase === 'idle' && curIdx > 0 &&
-      performance.now() / 1000 - _arrowStartWallTime > _LS_FLUSH_SAFE_SEC) _lsFlush();
+  if (_lsPending.size > 0) {
+    const safeMoment = phase === 'idle' && curIdx > 0 &&
+                       performance.now() / 1000 - _arrowStartWallTime > _LS_FLUSH_SAFE_SEC;
+    /* 保険が切れたぶんは、せめて発射アニメ中（shooting）だけは避けて書く */
+    if (safeMoment || (_lsFlushDue && phase !== 'shooting')) _lsFlush();
+  }
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
@@ -9359,6 +9413,8 @@ function drawWheel(i) {
     for (const s of w.segs) {
       const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
       ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,WR,a1,a2); ctx.closePath();
+      /* createWheelでは作らない場合があるので、この経路に入った時点で用意する */
+      if (!s.gradient) s.gradient = _segFallbackGradient(s.char, s.start + s.span/2);
       ctx.fillStyle=s.gradient; ctx.fill();
       ctx.strokeStyle='rgba(245,208,32,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
       const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
@@ -10891,8 +10947,10 @@ function _gameLoop(t) {
     if (_updateAccum > _TARGET_FRAME_MS) _updateAccum = 0; // 過剰蓄積防止
     /* 60fps tick: update() → draw() の順でA/V同期を保つ */
     if (_updateLastT > 0) {
-      _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = t - _updateLastT;
+      const _gap = t - _updateLastT;
+      _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = _gap;
       _frameTimesIdx++;
+      if (PERF_ON && _gap > _PERF_SPIKE_MS) _perfLogSpike(_gap);
     }
     _updateLastT = t;
     const _tWork = performance.now();
