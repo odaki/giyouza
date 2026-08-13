@@ -221,6 +221,51 @@ function drawKeyDebug() {
   lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
   ctx.restore();
 }
+/* ?perf URL パラメータで、実機の「どこで詰まっているか」を数値で見るオーバーレイ。
+   引っかかりの原因を推測で潰していくのをやめ、実機の数字で判断するために置く
+   （Web Inspectorを繋がなくても画面だけで読める。?keydebugと同じ位置づけで、
+   パラメータを付けない限り計測も描画も一切走らない）。
+   見方: frame work が16.7msを超えたフレームがあれば、その回のどれかが犯人。
+   tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
+   wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
+const PERF_ON = new URLSearchParams(location.search).has('perf');
+const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
+const _perf = {
+  tap:   { last: 0, max: 0, at: 0 },
+  resOC: { last: 0, max: 0, at: 0 },
+  pre:   { last: 0, max: 0, at: 0 },
+  ls:    { last: 0, max: 0, at: 0 },
+};
+function _perfMark(key, t0) {
+  const e = _perf[key], now = performance.now(), ms = now - t0;
+  e.last = ms;
+  if (ms >= e.max || now - e.at > _PERF_MAX_HOLD_MS) { e.max = ms; e.at = now; }
+}
+function drawPerf() {
+  if (!PERF_ON) return;
+  let workMax = 0, gapMax = 0;
+  for (let i = 0; i < _FRAME_BUF_SIZE; i++) {
+    if (_frameWorkTimes[i] > workMax) workMax = _frameWorkTimes[i];
+    if (_frameTimes[i]     > gapMax)  gapMax  = _frameTimes[i];
+  }
+  const n = v => v.toFixed(1);
+  const lines = [
+    `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
+    `tap   ${n(_perf.tap.last)}  max ${n(_perf.tap.max)}`,
+    `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
+    `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
+    `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
+  ];
+  ctx.save();
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  const lineH = 14, boxH = lineH * lines.length + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(4, 4, W - 8, boxH);
+  ctx.fillStyle = '#0f0';
+  lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
+  ctx.restore();
+}
 /* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画 */
 const _dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
 canvas.width  = W * _dpr;
@@ -228,7 +273,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.91';
+const VERSION = 'v5.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -995,6 +1040,7 @@ function _releaseWheelOCs(ws) {
 const _RESULT_OC_HALF = 52; // 44px 文字 + 最大グロー30 を収める半径
 function _buildResultOC(w) {
   if (typeof OffscreenCanvas === 'undefined') return;
+  const _t0 = PERF_ON ? performance.now() : 0;
   const sz = _RESULT_OC_HALF * 2 * _dpr;
   const oc = _freeResultOCs.pop() || new OffscreenCanvas(sz, sz);
   const c  = oc.getContext('2d');
@@ -1008,6 +1054,7 @@ function _buildResultOC(w) {
   c.fillStyle = fillC;
   c.fillText(w.result, _RESULT_OC_HALF, _RESULT_OC_HALF);
   w._resOC = oc;
+  if (PERF_ON) _perfMark('resOC', _t0);
 }
 
 /* 「手が空いた時に実行する」の共通ヘルパー。requestIdleCallbackが無い環境では
@@ -1043,7 +1090,9 @@ function _scheduleWheelPreBuild() {
   const step = () => {
     if (parts.length < WXS.length) {
       const i = parts.length;
+      const _t0 = PERF_ON ? performance.now() : 0;
       parts.push(createWheel(WXS[i], WYS[i], null));
+      if (PERF_ON) _perfMark('pre', _t0);
       _runWhenIdle(step, _PREBUILD_STEP_MS);
       return;
     }
@@ -2930,8 +2979,10 @@ let _lsFlushScheduled = false;
 function _lsFlush() {
   _lsFlushScheduled = false;
   if (_lsPending.size === 0) return;
+  const _t0 = PERF_ON ? performance.now() : 0;
   try { for (const [k, v] of _lsPending) localStorage.setItem(k, v); } catch(e) {}
   _lsPending.clear();
+  if (PERF_ON) _perfMark('ls', _t0);
 }
 /* 値を予約する。実際の書き込みはまとめて後で行う */
 function _lsQueue(key, value) {
@@ -9217,6 +9268,7 @@ function draw() {
   drawCheatPanel();
   /* デバッグ用keydown受信ログ（?keydebug時のみ、常に最前面） */
   drawKeyDebug();
+  drawPerf(); // ?perf 計測オーバーレイ（付けた時だけ描画）
 }
 
 /* ════════════════ 描画関数群 ════════════════ */
@@ -10998,7 +11050,15 @@ function onShoot(_inputPerfMs){
    - tapestart        : 先打ちバッファ登録（解放時に自動発射）
    - shooting(4本目)  : 先打ちバッファ登録（当たりなら即破棄、ハズレなら着弾後に発射）
    その他フェーズ     : 無視 */
+/* ?perf 計測用の薄いラッパー。タップ1回の処理時間（発射・リセット・ボス操作を含む）を
+   丸ごと測る。計測しないときは関数呼び出しが1段増えるだけ */
 function handleGameClick(inputPerfMs) {
+  if (!PERF_ON) return _handleGameClick(inputPerfMs);
+  const _t0 = performance.now();
+  _handleGameClick(inputPerfMs);
+  _perfMark('tap', _t0);
+}
+function _handleGameClick(inputPerfMs) {
   if (phase === 'bossOmen') {
     /* 誕生完了後（step7・演出安定のため少し待って）のタップで戦闘開始。演出中は入力を無視 */
     if (_omen && _omen.step >= 7 && _omen.timer > 20) _initBossBattle();
