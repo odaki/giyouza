@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.85';
+const VERSION = 'v5.86';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6191,12 +6191,14 @@ const KING_SIFT_RELEASE_FRAME = KING_SIFT_WINDUP_FRAMES + KING_SIFT_DROP_FRAMES;
 const KING_SIFT_AMP    = 14;         // 振り下ろしの最大変位(px)
 const KING_SIFT_SQUASH = 0.08;       // 底でのスカッシュ量（縦を潰し横を広げる）
 const KING_SIFT_GAZE   = -0.6;       // 振り下ろし中の視線（負＝下を見る。_drawKingFace参照）
-/* 復路（篩い落とされて的へ向かう）のフレーム数。往路KING_CHAR_FLY_FRAMES(16)から
-   振り下ろし待ち(KING_SIFT_RELEASE_FRAME=10)を差し引いた値にすることで、
-   発射タップ〜的への衝突までの総時間を演出追加前と同じ16フレームに保つ
-   （ユーザー要望「帳尻合わせて」。残振動は文字の飛行と並行して進むので総時間には
-   影響せず、間延びの実体は振り下ろし待ちの10フレームぶんだった） */
-const KING_CHAR_RETURN_FRAMES = KING_CHAR_FLY_FRAMES - KING_SIFT_RELEASE_FRAME;
+/* 復路（篩い落とされて的へ向かう）のフレーム数。
+   当初は往路KING_CHAR_FLY_FRAMES(16)から振り下ろし待ち(KING_SIFT_RELEASE_FRAME=10)を
+   差し引いた6フレームにして、発射タップ〜衝突までの総時間を演出追加前と同じ16
+   フレームに保っていた（「帳尻合わせて」）。しかし総時間の一致より、篩い落とされた
+   文字が落ちていく過程が見えることのほうが演出として重要だったため、総時間の制約を
+   外して10フレームに広げる（総時間は16→20フレーム）。KING_SIFT_RELEASE_FRAMEとの
+   差し引き関係は無くなったので、往路・復路それぞれ独立に調整してよい */
+const KING_CHAR_RETURN_FRAMES = 10;
 /* 振り下ろしに合わせた画面の微揺れ（既存のdraw()冒頭のshake機構に加算する）。
    打撃感の補強なので短く小さく。フレームカウンタで良い（映像の進行に紐づく演出） */
 const KING_SIFT_SHAKE_FRAMES = 8;
