@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.01';
+const VERSION = 'v6.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11014,18 +11014,34 @@ const _FRAME_BUF_SIZE = 120;
 const _frameTimes = new Float32Array(_FRAME_BUF_SIZE);     // update()間隔 ms
 const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()+draw()処理時間 ms
 const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の1tick
+/* tickを起こす閾値は目標frame時間より少しだけ低くする。
+   60Hz端末のrAFは毎回きっちり16.667msでは来ず、16.6msのように僅かに下回る回が混ざる。
+   閾値が16.667msちょうどだと、その回は積算が届かずtickが飛び、次のフレームでまとめて
+   1tickになる＝ゲームの状態が33ms凍結してから動く。実機の?perfで、こちらの処理が
+   何も走っていない（tagsが[-]）のにgapが33msという記録が繰り返し出ていたのはこれ。
+   1.5msの余裕を持たせると、9%まで短いフレームでも取りこぼさずtickできる。
+   長期的なズレは積算に残るので、実際に60Hzより遅い端末では従来どおり間引かれる */
+const _TICK_THRESHOLD_MS = _TARGET_FRAME_MS - 1.5;
 let _frameTimesIdx = 0, _rafLastT = 0, _updateLastT = 0, _updateAccum = 0;
+/* rAFが実際に何Hzで呼ばれているかの推定（1秒ごとに更新）。追加フレームで描くかどうかの
+   判断に使う。?perfのfps表示とは別に、常時この推定を持つ */
+let _rafHz = 0, _rafHzCount = 0, _rafHzT = 0;
+const _RAF_HZ_HIGH = 70; // これを超えていれば高リフレッシュレート端末とみなす
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
+  _rafHzCount++;
+  if (_rafHzT === 0) _rafHzT = t;
+  else if (t - _rafHzT >= 1000) { _rafHz = _rafHzCount * 1000 / (t - _rafHzT); _rafHzCount = 0; _rafHzT = t; }
   if (PERF_ON) _perfCountFrame(t);
   /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
      dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
   const dt = _rafLastT > 0 ? Math.min(t - _rafLastT, 50) : 0;
   _rafLastT = t;
   _updateAccum += dt;
-  if (_updateAccum >= _TARGET_FRAME_MS) {
+  if (_updateAccum >= _TICK_THRESHOLD_MS) {
     _updateAccum -= _TARGET_FRAME_MS;
-    if (_updateAccum > _TARGET_FRAME_MS) _updateAccum = 0; // 過剰蓄積防止
+    if (_updateAccum > _TARGET_FRAME_MS) _updateAccum = 0;  // 過剰蓄積防止（大きく遅れた回の追いつきを捨てる）
+    if (_updateAccum < -_TARGET_FRAME_MS) _updateAccum = 0; // 借金側も同様に上限を設ける
     /* 60fps tick: update() → draw() の順でA/V同期を保つ */
     if (_updateLastT > 0) {
       const _gap = t - _updateLastT;
@@ -11039,12 +11055,17 @@ function _gameLoop(t) {
     draw();
     _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
   } else {
-    /* 追加フレーム（120Hz等・ジッター）: draw()のみ実行して入力を即反映
-       _bgmAccumStep()を呼んで音声位置を更新しないとBGMリング表示が凍結し
-       JUST判定とリングのピーク表示がずれる */
+    /* 追加フレーム（120Hz等・ジッター）。_bgmAccumStep()は常に呼ぶ: 呼ばないと
+       BGMリング表示が凍結しJUST判定とリングのピーク表示がずれる。
+       draw()は高リフレッシュレート端末でのみ行う。60Hz端末では、この分岐は
+       「update()が走らなかったフレーム」＝ゲームの状態が1つも変わっていない
+       フレームなので、描き直しても画は同じで、塗り直しと転送のコストだけが
+       増える。実機計測でframe workは2msなのにフレーム間隔が50msまで跳ねており、
+       詰まりはこちらのJSではなくブラウザ側の描画・合成にあった。無駄な1枚を
+       減らす（120Hz端末では従来どおり描いて滑らかさを保つ） */
     const _t0 = PERF_ON ? performance.now() : 0;
     _bgmAccumStep();
-    draw();
+    if (_rafHz === 0 || _rafHz > _RAF_HZ_HIGH) draw();
     if (PERF_ON) _perfMark('drawOnly', _t0);
   }
 }
