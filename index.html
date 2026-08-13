@@ -229,7 +229,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.84';
+const VERSION = 'v5.85';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7587,6 +7587,17 @@ function drawBossVictoryOutro() {
    代わりに実績一覧の前に見出しを1行置く（上下を細い罫線で挟むだけの最小構成。
    締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は文字だけに留める） */
 const _TRUE_ENDING_HEADER_TEXT = 'たっせいのあかし';
+/* まとめ（累計データ）の前に置く小見出し。空白だけで区切っていたときは
+   実績一覧の続きなのか別のまとまりなのかが読み取りにくかったため、語を1つだけ置く。
+   冒頭の見出しと同じ「罫線で挟む」様式にはせず、罫線なし・小さめの文字・字間を広げる
+   だけに留める（ユーザー選択）。エンドロール中に強い見出しが2回出ると、締めで
+   丸いギヨウザロゴを大きく見せる構成が相対的に弱まるため、格を一段下げて
+   「冒頭の見出し＞この小見出し」の関係を視覚的に保つ */
+const _TRUE_ENDING_SUBHEADER_TEXT = 'そうけっさん';
+/* 小見出しの字間（フォントサイズ×この値）。フォントを小さくすると見出しらしさも
+   一緒に落ちるので、字間を広げることで「小さいが見出しである」ことを補う。
+   ctx.letterSpacingは対応状況が環境依存なので使わず、1文字ずつ実測幅で送る */
+const _TRUE_ENDING_SUBHEADER_TRACKING_RATIO = 0.3;
 const _TRUE_ENDING_CLOSE_LINES = [
   'ギヨウザたちは',
   'あなたの手によって',
@@ -7713,6 +7724,7 @@ function _wrapTrueEndingLine(text, font, maxWidth) {
 function _buildTrueEndingContent() {
   const fsHeader = IS_PORTRAIT ? 24 : 28;
   const headerH  = fsHeader * 2.6; // 上下の罫線ぶんの余白を含む行高
+  const fsSub    = IS_PORTRAIT ? 18 : 20; // まとめの小見出し（実績行15pxより一回り大きく、冒頭見出しよりは小さい）
   const fsClose = IS_PORTRAIT ? 20 : 24;
   const closeDy = fsClose * _TRUE_ENDING_CLOSE_LINE_DY_RATIO;
   const spacerAfterHeader   = _trueEndingSpacerAfterHeader(headerH);
@@ -7736,8 +7748,13 @@ function _buildTrueEndingContent() {
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
   /* 実績本編とまとめ（累計データ）の間は数行分あけ、まとめとして独立して
-     見えるようにする（実績の続きとして流れ込むと埋没してしまうため） */
+     見えるようにする（実績の続きとして流れ込むと埋没してしまうため）。
+     さらに空白の後へ小見出しを1行置き、別のまとまりであることを明示する
+     （_TRUE_ENDING_SUBHEADER_TEXT参照）。行高はフォント基準で持ち、上下に
+     ほぼ半行ぶんずつの余白を作って、直後の統計行と詰まって見えないようにする */
   y += spacerBeforeSummary;
+  rows.push({ type: 'subheader', text: _TRUE_ENDING_SUBHEADER_TEXT, y, h: fsSub * 3.0, fs: fsSub });
+  y += fsSub * 3.0;
   const summaryStats = [
     { icon: '🎮', text: `総プレイ回数 ${fmt(playCount)}` },
     { icon: '🏹', text: `総矢数 ${fmt(shotCount)}` },
@@ -7957,6 +7974,25 @@ function _drawTrueEndingRows(o) {
         ctx.stroke();
       }
       outText(row.text, W / 2, screenY, Y, 'rgba(0,0,0,0.9)', 6);
+    } else if (row.type === 'subheader') {
+      /* まとめの小見出し: 罫線を引かず、字間を広げた文字だけで区切りを示す
+         （冒頭の見出しより一段軽い格に保つ。_TRUE_ENDING_SUBHEADER_TEXT参照）。
+         字間はctx.letterSpacingに頼らず、1文字ずつ実測幅＋トラッキング分だけ
+         送って描く（letterSpacingは環境によって未対応で、その場合は字間が
+         詰まったまま無言で描かれてしまうため）。全体幅を先に合計して中央から
+         左右対称に配置する */
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      const chars = [...row.text];
+      const tracking = row.fs * _TRUE_ENDING_SUBHEADER_TRACKING_RATIO;
+      const widths = chars.map(c => ctx.measureText(c).width);
+      const totalW = widths.reduce((a, b) => a + b, 0) + tracking * (chars.length - 1);
+      ctx.textAlign = 'left';
+      let x = W / 2 - totalW / 2;
+      for (let c = 0; c < chars.length; c++) {
+        outText(chars[c], x, screenY, Y, 'rgba(0,0,0,0.9)', 5);
+        x += widths[c] + tracking;
+      }
     } else {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
