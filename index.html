@@ -352,7 +352,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.97';
+const VERSION = 'v5.98';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1696,23 +1696,21 @@ _iosAudioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIh
 _iosAudioEl.setAttribute('playsinline', '');
 _iosAudioEl.volume = 0;
 let _iosSessionElevated = false;
-let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確認用）
-let _iosSessionInFlight = false; // 直前のplay()がまだ解決していない
+let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確認用。挙動には影響しない）
 function _elevateAudioSession() {
-  /* 成功するまでタップのたびに試み続ける。ここで打ち切ってはいけない。
-     一度「失敗が続くなら8回で打ち切る」に変えたところ、消音モードの実機で
-     ミュート解除しても音が鳴らなくなった（実機報告）。この昇格はAVAudioSessionを
-     Ambient→Playbackに上げて消音スイッチをバイパスするためのもので、
-     昇格できないまま諦めると消音モードでは一切音が出ない。play()は最初の数回が
-     失敗しても後のタップで成功しうるため、上限は付けない。
-     残しているのは再入防止だけ（解決前に重ねて呼ばない）。これは挙動を変えずに
-     無駄な呼び出しだけを減らす */
-  if (_iosSessionElevated || _iosSessionInFlight) return;
+  /* 成功するまで、タップのたびに無条件で試み続ける。ここに「賢い」抑制を入れてはいけない。
+     この昇格はAVAudioSessionをAmbient→Playbackに上げて消音スイッチをバイパスする
+     ためのもので、昇格できないまま試行をやめると消音モードで一切音が出なくなる。
+     実際に2度やらかした（どちらも実機報告で発覚）:
+       1. 失敗が続いたら8回で打ち切る → 打ち切り後は無音のまま
+       2. 解決前の再入を防ぐフラグ → iOSのplay()は再生できないときPromiseが
+          解決も拒否もしないことがあり、フラグが立ちっぱなしで二度と試行されなくなった
+          （?perfのsess表示が 0/1try のまま固まって発覚）
+     Promiseの解決を前提にした制御を書かないこと。呼び出しコストの心配より、
+     音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった */
+  if (_iosSessionElevated) return;
   _iosSessionTries++;
-  _iosSessionInFlight = true;
-  _iosAudioEl.play()
-    .then(() => { _iosSessionElevated = true; _iosSessionInFlight = false; })
-    .catch(() => { _iosSessionInFlight = false; });
+  _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
 }
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
