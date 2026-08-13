@@ -231,11 +231,24 @@ function drawKeyDebug() {
 const PERF_ON = new URLSearchParams(location.search).has('perf');
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 const _perf = {
-  tap:   { last: 0, max: 0, at: 0 },
-  resOC: { last: 0, max: 0, at: 0 },
-  pre:   { last: 0, max: 0, at: 0 },
-  ls:    { last: 0, max: 0, at: 0 },
+  tap:      { last: 0, max: 0, at: 0 },
+  resOC:    { last: 0, max: 0, at: 0 },
+  pre:      { last: 0, max: 0, at: 0 },
+  ls:       { last: 0, max: 0, at: 0 },
+  drawOnly: { last: 0, max: 0, at: 0 }, // 60fps tick以外の追加フレーム（draw()だけ走る側）
 };
+/* rAFが実際に何回/秒呼ばれているかを数える。update()+draw()が5〜7msなのに
+   フレーム間隔が31〜47msという実機報告の切り分け用: JSの合計とrAFの実測レートを
+   突き合わせれば、残りがブラウザ側（塗り直し・GPU転送・合成）だと確定できる */
+let _perfFps = 0, _perfFrameCount = 0, _perfFpsT = 0;
+function _perfCountFrame(t) {
+  _perfFrameCount++;
+  if (_perfFpsT === 0) { _perfFpsT = t; return; }
+  if (t - _perfFpsT >= 1000) {
+    _perfFps = _perfFrameCount * 1000 / (t - _perfFpsT);
+    _perfFrameCount = 0; _perfFpsT = t;
+  }
+}
 function _perfMark(key, t0) {
   const e = _perf[key], now = performance.now(), ms = now - t0;
   e.last = ms;
@@ -250,7 +263,9 @@ function drawPerf() {
   }
   const n = v => v.toFixed(1);
   const lines = [
+    `rAF ${_perfFps.toFixed(0)}fps  dpr ${_dpr}  canvas ${W * _dpr}x${H * _dpr}`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
+    `drawOnly ${n(_perf.drawOnly.last)}  max ${n(_perf.drawOnly.max)}  (追加フレームのdraw)`,
     `tap   ${n(_perf.tap.last)}  max ${n(_perf.tap.max)}`,
     `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
     `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
@@ -266,14 +281,24 @@ function drawPerf() {
   lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
   ctx.restore();
 }
-/* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画 */
-const _dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+/* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画。
+   ?dpr=N で上書きできる（1〜3にクランプ）。実機計測で「update()+draw()は5〜7msしか
+   かかっていないのに、フレーム間隔は31〜47ms」という結果が出たため、詰まりが
+   こちらのJSの外側＝キャンバスの塗り直しとGPUへの転送にある可能性を、実機で
+   その場で切り分けられるようにするための手段。縦画面420×820をdpr3で確保すると
+   実ピクセルは1260×2460＝約310万画素あり、dpr2にすれば約45%に減る。
+   本番の既定は従来どおり端末のdevicePixelRatio */
+const _dpr = (() => {
+  const auto = Math.max(1, Math.round(window.devicePixelRatio || 1));
+  const v = parseFloat(new URLSearchParams(location.search).get('dpr'));
+  return isNaN(v) ? auto : Math.max(1, Math.min(3, v));
+})();
 canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.92';
+const VERSION = 'v5.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10843,6 +10868,7 @@ const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の1tick
 let _frameTimesIdx = 0, _rafLastT = 0, _updateLastT = 0, _updateAccum = 0;
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
+  if (PERF_ON) _perfCountFrame(t);
   /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
      dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
   const dt = _rafLastT > 0 ? Math.min(t - _rafLastT, 50) : 0;
@@ -10865,8 +10891,10 @@ function _gameLoop(t) {
     /* 追加フレーム（120Hz等・ジッター）: draw()のみ実行して入力を即反映
        _bgmAccumStep()を呼んで音声位置を更新しないとBGMリング表示が凍結し
        JUST判定とリングのピーク表示がずれる */
+    const _t0 = PERF_ON ? performance.now() : 0;
     _bgmAccumStep();
     draw();
+    if (PERF_ON) _perfMark('drawOnly', _t0);
   }
 }
 _rafId = requestAnimationFrame(_gameLoop);
