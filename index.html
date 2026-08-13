@@ -242,6 +242,7 @@ const _perf = {
   tap:      { last: 0, max: 0, at: 0, ranAt: 0 },
   touch:    { last: 0, max: 0, at: 0, ranAt: 0 }, // touchstartハンドラ全体（tapの外側も含む）
   unlk:     { last: 0, max: 0, at: 0, ranAt: 0 }, // 音声アンロック（毎タップ呼ばれる）
+  elev:     { last: 0, max: 0, at: 0, ranAt: 0 }, // AVAudioSession昇格（成功するまで毎タップ）
   focus:    { last: 0, max: 0, at: 0, ranAt: 0 }, // canvas.focus()（毎タップ呼ばれる）
   resOC:    { last: 0, max: 0, at: 0, ranAt: 0 },
   pre:      { last: 0, max: 0, at: 0, ranAt: 0 },
@@ -261,7 +262,7 @@ let _lastInitAt = 0;         // 直近のinit()時刻（トライ開始）
 function _perfLogSpike(gapMs) {
   const now = performance.now();
   const tags = [];
-  for (const k of ['tap', 'touch', 'unlk', 'focus', 'resOC', 'pre', 'ls', 'drawOnly']) {
+  for (const k of ['tap', 'touch', 'unlk', 'focus', 'elev', 'resOC', 'pre', 'ls', 'drawOnly']) {
     if (_perf[k].ranAt > 0 && now - _perf[k].ranAt <= gapMs + 4) tags.push(k);
   }
   _perfSpikes.unshift({
@@ -302,9 +303,10 @@ function drawPerf() {
     `rAF ${_perfFps.toFixed(0)}fps  dpr ${_dpr}  canvas ${W * _dpr}x${H * _dpr}`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     `drawOnly ${n(_perf.drawOnly.last)}  max ${n(_perf.drawOnly.max)}  (追加フレームのdraw)`,
-    `tap ${n(_perf.tap.max)}  touch ${n(_perf.touch.max)}  unlk ${n(_perf.unlk.max)}  foc ${n(_perf.focus.max)} (max)`,
-    /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提 */
-    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try  route ${_speakerRouteEstablished ? 1 : 0}  ctx ${audioCtx ? audioCtx.state : '-'}  mute ${audioMuted ? 1 : 0}`,
+    `tap ${n(_perf.tap.max)} touch ${n(_perf.touch.max)} unlk ${n(_perf.unlk.max)} foc ${n(_perf.focus.max)} elev ${n(_perf.elev.max)}`,
+    /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
+       el= <audio>要素の状態（p:paused e:ended t:currentTime）で、昇格の判定根拠 */
+    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}e${_iosAudioEl.ended ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
     `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
     `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
     `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
@@ -352,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.98';
+const VERSION = 'v5.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1672,6 +1674,10 @@ function _recreateAudioGraph() {
   masterGain.connect(_createMasterLimiter(audioCtx));
   _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
   _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
+  /* AVAudioSessionの昇格も作り直しで失われうるので再武装する（_elevateAudioSession参照）。
+     消音モードではこの昇格が唯一の発音経路なので、取りこぼすと無音になる */
+  _iosSessionElevated = false;
+  _iosAudioEl.currentTime = 0;
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
@@ -1709,6 +1715,15 @@ function _elevateAudioSession() {
      Promiseの解決を前提にした制御を書かないこと。呼び出しコストの心配より、
      音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった */
   if (_iosSessionElevated) return;
+  /* 昇格できたかどうかをPromiseで判定しない。実機では解決も拒否もしないまま
+     128回呼び続け、しかも1回あたり最大55msかかっていた（?perfの sess 0/128try と
+     unlk 55.0ms で判明。これがタップ時の引っかかりの正体だった）。
+     代わりに要素が実際に再生された痕跡を見る: 44バイトの無音WAVは再生開始と
+     ほぼ同時に終わるので、endedかcurrentTime>0になっていれば鳴った＝昇格済み。
+     痕跡が無いうちは従来どおり毎タップ試み続けるので、諦めて無音になることはない。
+     音声グラフを作り直したとき（interruptedからの復帰）は_recreateAudioGraphが
+     このフラグを倒して再武装する */
+  if (_iosAudioEl.ended || _iosAudioEl.currentTime > 0) { _iosSessionElevated = true; return; }
   _iosSessionTries++;
   _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
 }
@@ -1726,7 +1741,10 @@ function _unlockAudio() {
   _perfMark('unlk', _t0);
 }
 function _unlockAudioImpl() {
-  _elevateAudioSession(); // iOS: AVAudioSessionをPlaybackカテゴリに昇格（マナーモード対策）
+  /* AVAudioSessionの昇格（_elevateAudioSession）はここでは呼ばない。
+     成功するまでの間は1回あたり最大55msかかることが実機計測で分かったため、
+     入力処理より後ろ＝touchstartハンドラの最後（finally）へ移した。
+     ジェスチャー内であることは変わらないので昇格の条件は満たす */
   if (!audioCtx) getAudioCtx();
   /* スピーカールート未確立、または suspended の場合にバッファを再生する。
      ジェスチャー内で生成した AudioContext は即 running になるが、
@@ -11410,10 +11428,18 @@ canvas.addEventListener('mousedown', e=>{
    handleGameClickより手前で走る処理（音声アンロック・フォーカス確保・当たり判定）も
    計測範囲に入れる */
 document.addEventListener('touchstart', e => {
-  if (!PERF_ON) return _onTouchStart(e);
-  const _t0 = performance.now();
-  _onTouchStart(e);
-  _perfMark('touch', _t0);
+  const _t0 = PERF_ON ? performance.now() : 0;
+  try {
+    _onTouchStart(e);
+  } finally {
+    if (PERF_ON) _perfMark('touch', _t0);
+    /* AVAudioSessionの昇格は入力処理を終えてから行う（_elevateAudioSession参照）。
+       finallyに置くのは、ボタン類の早期returnも含めて「どのタップでも必ず試みる」を
+       保証するため。昇格できないまま諦めると消音モードで無音になる */
+    const _t1 = PERF_ON ? performance.now() : 0;
+    _elevateAudioSession();
+    if (PERF_ON) _perfMark('elev', _t1);
+  }
 }, { passive: false });
 function _onTouchStart(e) {
   e.preventDefault();
