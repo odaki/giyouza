@@ -228,7 +228,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.89';
+const VERSION = 'v5.90';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3258,9 +3258,9 @@ const _fxOutro = { worms: [], yoyos: [], ghosts: [], fish: [], rush: false, time
 const _FX_OUTRO_RUSH_MULT    = 3;     // 次トライで当たりが出たときの加速倍率
 const _FX_OUTRO_WORM_ACCEL   = 0.06;  // ウヨウヨ: 進行方向への加速(px/frame²)
 const _FX_OUTRO_WORM_SPD_MAX = 14;    // ウヨウヨ: 速度上限（速すぎるとワープして見える）
-const _FX_OUTRO_YOYO_ACCEL   = 0.35;  // ヨヨヨヨ: 上方向への加速
+const _FX_OUTRO_YOYO_ACCEL   = 0.18;  // ヨヨヨヨ: 上方向への加速（0.35は速すぎるとの実機評価で半減）
 const _FX_OUTRO_YOYO_SPD0    = -1.5;  // ヨヨヨヨ: 退場開始時の上向き初速
-const _FX_OUTRO_GHOST_ACCEL  = 0.06;  // ウウウウ: 上昇の加速
+const _FX_OUTRO_GHOST_ACCEL  = 0.02;  // ウウウウ: 上昇の加速（もっとゆっくりでよいとの実機評価で1/3に）
 const _FX_OUTRO_FISH_ACCEL   = 0.08;  // ギョギョ: 進行方向への加速
 /* 画面外判定（毎フレームのクロージャ生成を避けてモジュールスコープに置く）。
    余白はそれぞれの見た目の大きさに合わせる */
