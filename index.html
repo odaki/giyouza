@@ -228,7 +228,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.87';
+const VERSION = 'v5.88';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -484,14 +484,6 @@ function _itemAlloc() {
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
-/* 落下ギヨウザ（items）専用: 画面外退場をキングギヨウザ蓄積メーターに数えながら返却。
-   1トライあたりの加算量はKING_METER_TRIAL_CAPで頭打ちにする（上限到達後も
-   アイテム自体は通常どおり退場する。放置による無限稼ぎ対策、KING_GYOZA_THRESHOLD
-   の宣言部コメント参照） */
-const _deadifyCountExit = o => {
-  o._dead = true;
-  if (_trialKingGain < KING_METER_TRIAL_CAP) { kingGyozaMeter++; _trialKingGain++; }
-};
 /* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
    Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
 function _insertionSortY(a) {
@@ -555,14 +547,38 @@ const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウ
 const KING_OMEN_RATIO      = 0.8;  // 予兆演出（霊の横切り）開始割合
 /* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下し続ける
    （updateItems参照）。当たり演出はユーザー入力待ちで自動終了しないため、
-   画面を開いたまま放置するだけでアイテムが湧いては画面外へ退場し、
-   king値を際限なく稼げてしまう（ユーザー指摘: チートのようになる）。
-   投下時間そのものに上限を設け（KING_ITEM_SPAWN_MAX_FRAMES）、さらに
-   1トライで加算できるking値にも上限を設ける（KING_METER_TRIAL_CAP）
-   二段構えで、放置による無限稼ぎを塞ぐ（通常プレイのテンポなら
-   どちらの上限にも達しないため体感は変わらない） */
+   上限が無いと画面を開いて放置するだけでアイテムが無限に増え続ける。
+   投下時間そのものに上限を設けて打ち切る。
+   （かつてはking値が「画面外へ退場したアイテム数」だったため、この上限は
+   放置による無限稼ぎ対策も兼ねていた。king値が当たり種別ごとの固定値に
+   なった今は、演出の尺と描画負荷の上限としてだけ機能する） */
 const KING_ITEM_SPAWN_MAX_FRAMES = 400; // 約6.7秒でリーチ大当たりの継続投下を打ち切る
-const KING_METER_TRIAL_CAP = 60;        // 1トライでking値に加算できる上限
+/* ── king値（キングギヨウザ蓄積メーター）の加算量 ──
+   当たり種別ごとの固定値。旧方式は「落下ギヨウザが画面外へ退場した数」を数えて
+   いたが、次の理由で固定値へ切り替えた（ユーザー要望）:
+   ・加算タイミングが「画面外へ出た時」なので、当たり演出をすぐ送るか眺めるかで
+     同じ当たりでも実測18〜92と大きくブレていた。残りは次トライへ持ち越されていた。
+   ・退場を数える都合上、専用配列で動く中当たり（ウヨウヨ・ヨヨヨヨ・ウウウウ・
+     ギョギョ）は画面にギヨウザが出ているのに加算ゼロだった。
+   ・ギウギウは生成位置が画面外リングのため、72個中およそ24個が1フレーム目に
+     画面外判定で即加算されていた（見えないまま加算されていた）。
+   値は「その演出でMAXまで出るギヨウザの数」を基準に決めてある（大当たり92個→100、
+   超大当たり220個→200、フル連チャン完走184個→150、ギウギウは同時表示ピーク50個→50）。
+   中当たりはギウギウを除き一律20（画面に出るギヨウザも20に揃えてある）。
+   小当たり4種はギヨウザが出ない演出（花火・文字・画面エフェクト・雨）なので0 */
+const KING_GAIN_REACH_JACKPOT  = 200; // 超大当たり（リーチ大当たり）
+const KING_GAIN_FEVER_COMPLETE = 150; // フル連チャン完走
+const KING_GAIN_JACKPOT        = 100; // 通常大当たり・フィーバー中の大当たり
+const KING_GAIN_GIUGIU         = 50;  // ギウギウ（中当たりの例外。表示数だけ突出して多い）
+const KING_GAIN_MEDIUM         = 20;  // 中当たり（ギウギウ以外）一律
+const KING_GAIN_SMALL          = 0;   // 小当たり（ギヨウザが出ない演出）
+/* 中当たり演出で画面に出すギヨウザの数（ギウギウ以外）。KING_GAIN_MEDIUMと同じ
+   20に揃える（ユーザー要望: 加算する固定値と画面に出る数を一致させたい）。
+   もとはヨヨヨヨ14個・ウウウウ18体・ギョギョ18匹とバラバラだった。
+   ウヨウヨだけは同時表示上限22匹のまま（もともと20を超えている側なので下げない）。
+   ※値の意味は演出ごとに少しずつ違う: ヨヨヨヨとギョギョは最初に出す総数、
+     ウウウウは同時表示の上限（退場したぶんを補充し続ける） */
+const MEDIUM_EFFECT_GYOZA_N    = 20;
 /* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
 const _KING_DEBUG = (() => {
   const v = parseInt(new URLSearchParams(location.search).get('king'), 10);
@@ -803,6 +819,9 @@ function _itemBurst(rate) {
 /* 当たり判定テーブル:
    pat       = 4文字パターン
    payout    = PAYOUT_RATE のキー
+   king      = 当たり確定時にking値へ加算する固定値（KING_GAIN_*参照）
+               jackpotは文脈で変わるため、この列は通常大当たりの値。
+               超大当たり・フル連チャン完走は判定側で上書きする
    medId     = checkMediumAch に渡すID（jackpotはnull）
    onHit     = 当たり時に呼ぶエフェクト初期化関数（なければnull）
    update    = done フェーズで毎フレーム呼ぶ更新関数（なければnull）
@@ -810,17 +829,17 @@ function _itemBurst(rate) {
    drawDelay = draw を呼び始める endTimer の閾値（省略時 0）
    ※ 関数宣言はホイスティングされるため、この定数より後に定義された関数も参照可能 */
 const HIT_TABLE = [
-  //          type        pat        payout      medId         onHit               update           draw                drawDelay
-  { type:'jackpot',  pat:TARGET,   payout:'jackpot', medId:null,       onHit:null,              update:null,          draw:drawItems,         drawDelay:0  },
-  { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  medId:'uyouyo',   onHit:initWorms,         update:updateWorms,   draw:drawWorms,          drawDelay:40 },
-  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawItems,         drawDelay:0  },
-  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:updateYoyoyoyo,draw:drawYoyoyoyo,       drawDelay:50 },
-  { type:'uuuu',     pat:UUUU,     payout:'hitMed',  medId:'uuuu',     onHit:initUuuu,          update:updateUuuu,    draw:drawUuuu,           drawDelay:50 },
-  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  medId:'gyogyo',   onHit:initGyogyo,        update:updateGyogyo,  draw:drawGyogyo,         drawDelay:45 },
-  { type:'gizagiza', pat:GIZAGIZA, payout:'hitSml',  medId:'gizagiza', onHit:launchGizaFireworks,update:null,         draw:drawGizagizaEffect, drawDelay:0  },
-  { type:'uzauza',   pat:UZAUZA,   payout:'hitSml',  medId:'uzauza',   onHit:initUzaTexts,      update:updateUzaTexts,draw:drawUzaTexts,       drawDelay:40 },
-  { type:'gigigigi', pat:GIGIGIGI, payout:'hitSml',  medId:'gigigigi', onHit:null,              update:updateGigigigi,draw:drawGigigigi,       drawDelay:0  },
-  { type:'zazazaza', pat:ZAZAZAZA, payout:'hitSml',  medId:'zazazaza', onHit:initZazazaza,      update:updateZazazaza,draw:drawZazazaza,       drawDelay:50 },
+  //          type        pat        payout      king                     medId         onHit               update           draw                drawDelay
+  { type:'jackpot',  pat:TARGET,   payout:'jackpot', king:KING_GAIN_JACKPOT, medId:null,       onHit:null,              update:null,          draw:drawItems,         drawDelay:0  },
+  { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'uyouyo',   onHit:initWorms,         update:updateWorms,   draw:drawWorms,          drawDelay:40 },
+  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  king:KING_GAIN_GIUGIU,  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawItems,         drawDelay:0  },
+  { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:updateYoyoyoyo,draw:drawYoyoyoyo,       drawDelay:50 },
+  { type:'uuuu',     pat:UUUU,     payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'uuuu',     onHit:initUuuu,          update:updateUuuu,    draw:drawUuuu,           drawDelay:50 },
+  { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'gyogyo',   onHit:initGyogyo,        update:updateGyogyo,  draw:drawGyogyo,         drawDelay:45 },
+  { type:'gizagiza', pat:GIZAGIZA, payout:'hitSml',  king:KING_GAIN_SMALL,   medId:'gizagiza', onHit:launchGizaFireworks,update:null,         draw:drawGizagizaEffect, drawDelay:0  },
+  { type:'uzauza',   pat:UZAUZA,   payout:'hitSml',  king:KING_GAIN_SMALL,   medId:'uzauza',   onHit:initUzaTexts,      update:updateUzaTexts,draw:drawUzaTexts,       drawDelay:40 },
+  { type:'gigigigi', pat:GIGIGIGI, payout:'hitSml',  king:KING_GAIN_SMALL,   medId:'gigigigi', onHit:null,              update:updateGigigigi,draw:drawGigigigi,       drawDelay:0  },
+  { type:'zazazaza', pat:ZAZAZAZA, payout:'hitSml',  king:KING_GAIN_SMALL,   medId:'zazazaza', onHit:initZazazaza,      update:updateZazazaza,draw:drawZazazaza,       drawDelay:50 },
 ];
 let coins, bet, betLocked, isGameOver;
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
@@ -934,8 +953,7 @@ let unlockedAch = {}, medAchieved = {};
 let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
 let jackpotCount = 0; // 大当たり累計回数
-let kingGyozaMeter = 0; // 画面外へ退場した落下ギヨウザ累計（キングギヨウザ蓄積・game_stats永続化）
-let _trialKingGain = 0; // 現在のトライでking値に加算した量（KING_METER_TRIAL_CAPの上限判定用、initで0リセット）
+let kingGyozaMeter = 0; // キングギヨウザ蓄積メーター（当たりごとに固定値を加算・game_stats永続化。KING_GAIN_*参照）
 /* こんがり失敗（_startBossDefeat）で没収された所持ギヨウザの累計プール。
    こんがり達成（_startBossVictory）時に、その戦闘の蓄積メーター分と合わせて
    まとめて所持ギヨウザへ返す（ユーザー要望: 「過去にこんがり失敗で奪われた
@@ -3338,7 +3356,6 @@ function init(fromStartup, fromGameOver) {
     arrowSX = W/2;  arrowSY = H - 80; arrowTX = WXS[0]; arrowTY = WYS[0] - WR - 5;
   }
   _clearTrialFxState();
-  _trialKingGain = 0; // king値の1トライあたり加算上限カウンタをリセット（KING_METER_TRIAL_CAP参照）
   shootGuardUntil = performance.now() + 100; // 約100ms間 射撃ブロック（wall-clock基準）
   /* done フェーズ中に経過したビートをミスとして数えないようリセット */
   _autoDecayBeatIdx = BGM_BEAT > 0 ? Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS)) : -1;
@@ -4067,6 +4084,19 @@ function update() {
           checkMediumAch(_hitEntry.medId);
           unlockAch('first_medium');
         }
+        /* king値（キングギヨウザ蓄積）を当たり種別ごとの固定値で加算する。
+           基本値はHIT_TABLEのking列。大当たりだけは同じ'jackpot'型でも文脈で
+           演出規模が変わる（超大当たり＝リーチ経由・フル連チャン完走）ため、
+           ここで上書きする。ハズレは_hitEntryがnullなので0（加算なし） */
+        let _kingGain = _hitEntry?.king ?? 0;
+        if (_isJackpot) {
+          if (feverEndedReason === 'complete') _kingGain = KING_GAIN_FEVER_COMPLETE;
+          else if (isReachJackpot)             _kingGain = KING_GAIN_REACH_JACKPOT;
+        }
+        if (_kingGain > 0) {
+          kingGyozaMeter += _kingGain;
+          lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
+        }
         /* 配当計算 */
         const payout = calcPayout();
         if (payout > 0) {
@@ -4432,7 +4462,7 @@ function updateItems() {
   /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ。
      当たり演出はユーザー入力待ちで自動終了しないため、投下自体に時間上限を
      設けて放置し続けても際限なく湧かないようにする（KING_ITEM_SPAWN_MAX_FRAMES
-     宣言部のコメント参照。king値の1トライ加算上限KING_METER_TRIAL_CAPと二段構え） */
+     宣言部のコメント参照） */
   if (isReachJackpot) {
     const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
     if (endTimer < KING_ITEM_SPAWN_MAX_FRAMES && endTimer % spawnRate === 0 && items.length < 240) spawnItem();
@@ -4542,8 +4572,8 @@ function updateItems() {
     }
   }
 
-  /* 画面外に完全に出たものをプールに返却しつつ除去（キングギヨウザ蓄積を計数） */
-  swapRemove(items, _predItem, _deadifyCountExit);
+  /* 画面外に完全に出たものをプールに返却しつつ除去 */
+  swapRemove(items, _predItem, _deadify);
   /* updateの末尾でソートしておくことでdrawItems側でのslice+sortを排除 */
   _insertionSortY(items);
 }
@@ -4876,9 +4906,15 @@ function drawGigigigi() {
 function initYoyoyoyo() {
   for (const g of yoyos) g._dead = true;
   yoyos = [];
-  const count = 14;
+  const count = MEDIUM_EFFECT_GYOZA_N;
+  /* 横に等間隔で並べるため、1レーンの幅は画面幅÷個数。縦画面（W=420）では
+     20個だと1レーン21pxとギヨウザの見た目幅（約44px）より狭くなるが、
+     各個体は振幅・周波数・位相がばらばらの上下運動をしていて同じ高さに
+     並ばないため、横に重なっても団子にはならない。ばらけ幅（±9px）は
+     レーン幅より大きくしないよう、レーン幅の4割を上限にする */
+  const jitter = Math.min(18, (W / count) * 0.4);
   for (let i = 0; i < count; i++) {
-    const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*18;
+    const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*jitter;
     const g   = makeItem(x, 0, 0, 0);
     g.phase   = Math.random() * Math.PI * 2;
     g.freq    = 0.055 + Math.random()*0.04;
@@ -5020,7 +5056,7 @@ function spawnGhost() {
 }
 
 function updateUuuu() {
-  if (endTimer % 18 === 0 && ghosts.length < 18) spawnGhost();
+  if (endTimer % 18 === 0 && ghosts.length < MEDIUM_EFFECT_GYOZA_N) spawnGhost();
   for (const g of ghosts) {
     g.y += g.vy;
     g.wobble += g.wobbleSpd;
@@ -5124,7 +5160,7 @@ function drawZazazaza() {
 /* ════════════════ ギョギョ: びっくり魚 ════════════════ */
 function initGyogyo() {
   gyogyoFish = [];
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < MEDIUM_EFFECT_GYOZA_N; i++) {
     const fromLeft = Math.random() < 0.5;
     const size = 28 + Math.random() * 28;
     /* bodyGrd: makeItem()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
