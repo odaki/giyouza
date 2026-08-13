@@ -107,16 +107,16 @@ canvas:focus-visible { outline: none; }
 
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d', { alpha: false }); // 毎フレーム全面を塗るため不透明化（ページとの合成コスト削減）
-/* iOS Safari + 外付け（Bluetooth）キーボード対策: hardware keydownがページの
-   JSへ配送されるには、ページ内のどこかにフォーカス可能な要素が実際に
-   フォーカスされている必要がある。このゲームはcanvas1枚だけのUIで
-   tabindexも無いため、タップしてもどの要素にもフォーカスが当たらず、
-   キーボード自体もSafari自体への配送も生きているのにkeydownがページへ
-   一切届かない状態になっていた（実機指摘: 「URL欄には直接入力できるのに、
-   矢文字チートに無反応」＝キーボード入力経路自体は生きているのに
-   ページ内フォーカス先が無かったための取りこぼしと推測される）。
-   canvasをプログラム的にフォーカス可能にし、タップのたびに明示的に
-   フォーカスを取り直す（_ensureCanvasFocus参照） */
+/* 外付けキーボード対策: hardware keydownがページのJSへ配送されるには、
+   ページ内のどこかにフォーカス可能な要素が実際にフォーカスされている必要がある。
+   このゲームはcanvas1枚だけのUIでtabindexも無いため、タップしてもどの要素にも
+   フォーカスが当たらず、キーボード側の入力経路は生きているのにkeydownがページへ
+   一切届かない状態になっていた（iOS実機で発覚。URL欄には直接入力できるのに
+   ページのJSには届かない＝ページ内フォーカス先が無かったための取りこぼしと推測）。
+   canvasをプログラム的にフォーカス可能にし、タップのたびに明示的にフォーカスを
+   取り直す（_ensureCanvasFocus参照）。発覚のきっかけは当時のキーボードチートだが、
+   チート削除後もスペース（発射・段送り）と左右矢印（BET変更）がキーボード操作
+   として残るため、この対策自体は引き続き必要 */
 canvas.tabIndex = -1;
 function _ensureCanvasFocus() {
   try { canvas.focus({ preventScroll: true }); } catch(_e) { try { canvas.focus(); } catch(_e2) {} }
@@ -130,12 +130,13 @@ const IS_PORTRAIT = _forcePortrait || (IS_TOUCH && window.innerWidth < window.in
 const W = IS_PORTRAIT ? 420  : 1060;
 const H = IS_PORTRAIT ? 820  : 560;
 /* ?cheatpanel URL パラメータで画面下端にタップ式チートパネルを表示する。
-   iOS Safari + 外付け（Bluetooth）キーボードでkeydown系のチートキー
+   もとは iOS Safari + 外付け（Bluetooth）キーボードでkeydown系のチートキー
    （Ctrl+F/T/C・矢文字G/Y/U/Z）が一切反応しない不具合（実機指摘、複数の
    JS側対策：予約ショートカット回避キー・KeyboardEvent.keyフォールバック・
-   canvasフォーカス確保、を試したが解消せず）への対処。タップはこのゲーム
-   の主入力手段そのものであり確実に届くため、キーボードに依存しない
-   代替経路として用意する。本番プレイでは?cheatpanelを付けない限り
+   canvasフォーカス確保、を試したが解消せず）への代替経路として用意したもの。
+   タップはこのゲームの主入力手段そのもので確実に届くため実機でも使える。
+   現在はこれがチート操作の唯一の入口で、キーボード側のチートは削除済み
+   （keydownハンドラのコメント参照）。本番プレイでは?cheatpanelを付けない限り
    一切描画・判定されない（既存の?king=等のデバッグ用URLパラメータと
    同じ位置づけ） */
 const CHEAT_PANEL_ON = new URLSearchParams(location.search).has('cheatpanel');
@@ -197,14 +198,12 @@ function drawCheatPanel() {
 }
 
 /* ?keydebug URL パラメータで、実機に届いたkeydownイベントの生の内容を
-   画面上に表示する診断オーバーレイ。ユーザー指摘: 「過去に試した時は
-   キーが効いた気がする、iPadだった可能性がある」。iPhone単体では
-   Ctrl+F/T/C（予約ショートカット回避キー含む）・矢文字G/Y/U/Z・
-   canvasフォーカス確保、いずれの対策後もキーボードチートが反応せず、
-   一方でiPadでは過去に動いていた可能性があるという新情報が出たため、
-   「そもそもkeydownが届いているか」を実機で直接確認できるようにする
-   （Web Inspector接続なしでも実機の画面だけで判断できる）。keydown
-   ハンドラの最も外側（他の早期returnより前）でログに追記するため、
+   画面上に表示する診断オーバーレイ。「そもそもkeydownが届いているか」を
+   Web Inspector接続なしに実機の画面だけで判断できるようにするためのもので、
+   iPhone単体ではあらゆる対策後もkeydownが観測できなかった（一方でiPadでは
+   過去に動いていた可能性がある）という切り分けに使った。キーボードチート削除後も、
+   スペース・左右矢印というキーボード操作は残るので診断手段として残置する。
+   keydownハンドラの最も外側（他の早期returnより前）でログに追記するため、
    ゲームのphase等に関係なく全てのkeydownを捕捉する */
 const KEY_DEBUG_ON = new URLSearchParams(location.search).has('keydebug');
 let _keyDebugLog = [];
@@ -229,7 +228,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.86';
+const VERSION = 'v5.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -781,8 +780,8 @@ let feverPending     = false; // 次トライ開始時にフィーバーへ移�
 let _jackpotAutoReset = false; // フィーバー中（または完走）の大当たり → ユーザー入力なし自動リセット対象
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
 /* チートキー予約（当たり判定時に pending へ転写） */
-let _cheatFeverQueued = false; // Ctrl+F予約
-let _cheatSlowQueued  = null;  // Ctrl+T予約: null=なし / true=スロー / false=通常
+let _cheatFeverQueued = false; // チートパネルのFEVER予約
+let _cheatSlowQueued  = null;  // チートパネルのSLOW予約: null=なし / true=スロー / false=通常
 
 /* ── ギヨウザコイン ── */
 const BET_OPTIONS = [1, 5, 10, 25, 50, 100];
@@ -2558,7 +2557,7 @@ function _slowHandRate(betVal) {
    スローイベント開始・終了時のテンポ演出に使用 */
 /* blockInput=true のときだけランプ中のクリックを無視する
    自動ランプ（init切替・当たり復帰・tapestart）は false、
-   Ctrl+T のインタラクティブ切り替えは true */
+   チートパネルのSLOWによるインタラクティブ切り替えは true */
 function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockInput = false) {
   if (!bgmSource || !audioCtx) return;
   const t       = audioCtx.currentTime;
@@ -3304,7 +3303,7 @@ function init(fromStartup, fromGameOver) {
   const slowProb = (_syncHistCount >= SYNC_HIST_LEN && syncRate >= 0.5)
     ? (0.01 + syncRate * 0.01) : 0.002;
   if (_slowSpinPending !== null) {
-    isSlowSpin = !isFever && _slowSpinPending; // Ctrl+Tチートによる次トライ強制
+    isSlowSpin = !isFever && _slowSpinPending; // チートパネルのSLOWによる次トライ強制
     _slowSpinPending = null;
   } else {
     isSlowSpin = !isFever && Math.random() < slowProb;
@@ -10893,19 +10892,12 @@ function handleGameClick(inputPerfMs) {
   onShoot(inputPerfMs); // idle / reach
 }
 
-const CHEAT_MAP = { 'KeyG':'ギ', 'KeyY':'ヨ', 'KeyU':'ウ', 'KeyZ':'ザ' };
-/* e.code のフォールバック用（e.key、大小文字問わず）。iOS Safari + 外付け
-   （Bluetooth）キーボードの一部組み合わせでKeyboardEvent.codeが正しく
-   取得できない既知の問題への対策（実機指摘: 「矢文字チートが効いていな
-   かった」。Ctrl+F/T/CをiOS予約ショートカットと衝突しないキーへ変更した
-   後もなお発火しなかったため、.codeそのものが信頼できない可能性を疑い、
-   より安定して取得できる.keyでも判定できるようにした）。以下すべての
-   キー判定に同じフォールバックを適用する */
-const CHEAT_MAP_BY_KEY = { 'g':'ギ', 'y':'ヨ', 'u':'ウ', 'z':'ザ' };
-function _keyMatches(e, codes, keys) {
-  return codes.includes(e.code) || keys.includes((e.key || '').toLowerCase());
-}
-
+/* チート操作の入口は?cheatpanelのタップ式パネル1つに集約した（CHEAT_PANEL_BTNS参照）。
+   以前あったキーボードチート（矢文字G/Y/U/Z・Ctrl+F/T/Cとその代替キー、
+   KeyboardEvent.keyフォールバック_keyMatches）は削除済み。iPhone+外付けキーボードでは
+   keydownがそもそも届かず実機で使えないうえ、パネルで同じ操作が全て賄えるため、
+   同じ機能に2つの入口を維持する理由が無くなった。キーボードで残すのは
+   スペース（発射・段送り）と左右矢印（BET変更）＝ゲーム本来の操作のみ */
 function cheatShoot(char) {
   if (phase!=='idle'||curIdx>=4) return;
   const w = wheels[curIdx];
@@ -10943,43 +10935,8 @@ document.addEventListener('keydown', e=>{
     changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
-  const _cheatChar = CHEAT_MAP[e.code] ?? CHEAT_MAP_BY_KEY[(e.key || '').toLowerCase()];
-  if (_cheatChar && phase==='idle' && curIdx<4) {
-    e.preventDefault();
-    cheatShoot(_cheatChar);
-  }
-  /* チート: Ctrl+F（+ 代替Ctrl+J） → 当たり判定時にフィーバーを予約
-     Ctrl+C/Ctrl+T/Ctrl+FがiOSで機能しない件（下記コメント参照）に伴い、
-     代替キーを追加。デスクトップの既存キーは互換のため残す */
-  if (_keyMatches(e, ['KeyF', 'KeyJ'], ['f', 'j']) && e.ctrlKey) {
-    e.preventDefault();
-    _cheatFeverQueued = true;
-  }
-  /* 隠しコマンド: Ctrl+C（+ 代替Ctrl+Q） → localStorage全消去してリロード */
-  if (_keyMatches(e, ['KeyC', 'KeyQ'], ['c', 'q']) && e.ctrlKey) {
-    e.preventDefault();
-    try { localStorage.clear(); } catch(err) {}
-    location.reload();
-  }
-  /* デバッグ: Ctrl+T（+ 代替Ctrl+L） → 当たり判定時にスローハンドを予約（2回押しでキャンセル）
-     iOS Safari + 外付け（Bluetooth）キーボードでは、AppleがOS標準の
-     ハードウェアキーボード編集ショートカットとして Control-A/B/D/E/F/H/K/N/P/T
-     （Emacs風のカーソル移動・削除・文字入れ替え）をシステムレベルで予約しており、
-     テキスト入力欄にフォーカスが無くても keydown がページのJSへ届く前に消費
-     されてしまう（実機指摘: 「iPhone+Bluetoothキーボードでチートキーが使えない」）。
-     このゲームのCtrl+F・Ctrl+T・Ctrl+Cは全てこの予約セットと衝突しているため、
-     予約セットに含まれないキー（J/L/Q）を代替として割り当てた。
-     さらに矢文字チート（G/Y/U/Z、無修飾）でも反応がないという実機指摘を受け、
-     KeyboardEvent.code自体がこの環境で信頼できない可能性を疑い、全てのキー
-     判定に.keyでのフォールバック（_keyMatches）を追加した */
-  if (_keyMatches(e, ['KeyT', 'KeyL'], ['t', 'l']) && e.ctrlKey) {
-    e.preventDefault();
-    if (_cheatSlowQueued !== null) {
-      _cheatSlowQueued = null; // 2回押しでキャンセル
-    } else {
-      _cheatSlowQueued = !isSlowSpin; // 現在の状態をトグル予約
-    }
-  }
+  /* ここから下にあったキーボードチート（G/Y/U/Z・Ctrl+F/T/Cと各代替キー）は
+     削除した。理由はcheatShoot手前のコメント参照 */
 });
 
 canvas.addEventListener('mousedown', e=>{
