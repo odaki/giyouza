@@ -228,7 +228,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.90';
+const VERSION = 'v5.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1010,23 +1010,49 @@ function _buildResultOC(w) {
   w._resOC = oc;
 }
 
+/* 「手が空いた時に実行する」の共通ヘルパー。requestIdleCallbackが無い環境では
+   setTimeout(f, 0)がアイドルの代用にならない（"直後のマクロタスク"で走ってしまい、
+   結局そのフレームの続きで同期実行されるのと変わらない）ため、実際に間を空ける。
+   iPhone実機のWeb Inspectorで typeof requestIdleCallback === 'undefined' を確認済み
+   （iOS Safari/WebKitは未実装）。localStorage書き込みの合流でも同じ判断をしている
+   （_lsQueue参照）ので、判定をこの1関数に集約して水平展開漏れを防ぐ */
+function _runWhenIdle(fn, delayMs) {
+  if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(fn, { timeout: delayMs });
+  else setTimeout(fn, delayMs);
+}
+/* 事前構築の開始待ちと、的1個ごとの間隔。
+   実機報告「4的射てハズレ、次のゲームの1的目で少し引っかかる」の原因のひとつ。
+   以前は setTimeout(build, 0) だったため、iOS Safariでは init() の直後
+   （＝次のトライが始まった直後、まさに1的目をタップする直前）に4的ぶんの
+   OffscreenCanvas描画がまとめて同期実行されていた。dpr3の実機ではこれが
+   1フレーム予算を超えて取りこぼしに見える。
+   対策は2つ: 開始を遅らせて入力の窓から外すことと、4的を1個ずつに割って
+   1回あたりの塊を1/4にすること。合計でも約270msで、プレイヤーが4本射り終える
+   より十分早く完了する（間に合わなかった場合はinit()側の同期生成に落ちるだけで
+   壊れない） */
+const _PREBUILD_START_DELAY_MS = 150;
+const _PREBUILD_STEP_MS        = 40;
 function _scheduleWheelPreBuild() {
   if (_pendingWheelScheduled) return;
   _pendingWheelScheduled = true;
-  const build = () => {
-    /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
-       feverPending/isFever が真の場合は init() 側で再構築（レアケース）。 */
+  /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
+     feverPending/isFever が真の場合は init() 側で再構築（レアケース）。
+     完成した4個が揃うまで_pendingWheelsへは入れない（途中の配列を
+     init()に拾わせないため。init()は _pendingWheels===null なら同期生成する） */
+  const parts = [];
+  const step = () => {
+    if (parts.length < WXS.length) {
+      const i = parts.length;
+      parts.push(createWheel(WXS[i], WYS[i], null));
+      _runWhenIdle(step, _PREBUILD_STEP_MS);
+      return;
+    }
     /* 二重スケジュール（コールバック発火前に init() が再スケジュール）で
        2回発火した場合、前回分のOCをプールへ返却してから上書きする */
     _releaseWheelOCs(_pendingWheels);
-    _pendingWheels = WXS.map((x, i) => createWheel(x, WYS[i], null));
+    _pendingWheels = parts;
   };
-  /* requestIdleCallback: iOS Safari未対応のためsetTimeoutでフォールバック */
-  if (typeof requestIdleCallback !== 'undefined') {
-    requestIdleCallback(build, { timeout: 200 });
-  } else {
-    setTimeout(build, 0);
-  }
+  _runWhenIdle(step, _PREBUILD_START_DELAY_MS);
 }
 
 /* ════════════════ UI レイアウト定数 ════════════════ */
@@ -2884,8 +2910,20 @@ function lsLoadAch() {
    連続した書き込みは1回に畳まれるので、ハズレ連続でも書き込み回数が
    トライ数に比例して増えない。フォールバックも setTimeout(0) をやめて
    実際に間を空ける（0だと結局同じフレームの直後に走ってしまう）。
-   取りこぼし防止のため、離脱時（pagehide/visibilitychange）に同期フラッシュする。 */
-const _LS_FLUSH_DELAY_MS = 400;   // 合流のための待ち（この間の同一キーへの書き込みは畳まれる）
+   取りこぼし防止のため、離脱時（pagehide/visibilitychange）に同期フラッシュする。
+
+   その後の続報（iOS実機、iPhone16/iPad・縦画面）: 合流後も「4的目のあと、次の
+   ゲームの1的目で少し引っかかる」が残っていた。待ち時間400msが、このゲームの
+   1拍（BGM_BEAT＝約395ms）とほぼ一致していたのが原因。ハズレの自動リセットは
+   onBeatGrid()＝拍の境界で走るため（update()のdone分岐参照）、「4的目で予約した
+   書き込みの発火」と「次トライの開始〜1的目のタップ」が構造的に重なっていた。
+   当たりのときは演出を眺めている数秒の間に発火するので体感に出ない＝ハズレ特有
+   という報告とも一致する。
+   そこで、タイマーは取りこぼし用の保険（長め）に格下げし、実際の書き出しは
+   「矢を放った直後」＝次のタップまで約1拍ぶんの余裕がある時点で行う
+   （update()の_LS_FLUSH_SAFE_SEC参照）。拍と同期した固定遅延で殴らない */
+const _LS_FLUSH_DELAY_MS = 1500;  // 保険のタイマー（拍と一致しない長さ。通常はこれより先に書き出される）
+const _LS_FLUSH_SAFE_SEC = 0.1;   // 発射からこれだけ経った安全な時点で書き出す（次のタップは約1拍先）
 const _lsPending = new Map();     // key → 最新の値
 let _lsFlushScheduled = false;
 
@@ -2900,8 +2938,7 @@ function _lsQueue(key, value) {
   _lsPending.set(key, value);
   if (_lsFlushScheduled) return;
   _lsFlushScheduled = true;
-  if (window.requestIdleCallback) requestIdleCallback(_lsFlush, { timeout: _LS_FLUSH_DELAY_MS });
-  else setTimeout(_lsFlush, _LS_FLUSH_DELAY_MS);
+  _runWhenIdle(_lsFlush, _LS_FLUSH_DELAY_MS);
 }
 /* 離脱・バックグラウンド化で確実に書き出す（予約が残ったまま失われないように）。
    visibilitychangeはiOSでpagehideが発火しないケースの保険 */
@@ -3943,6 +3980,13 @@ function update() {
   /* 中当たりエフェクトの退場: 次のトライと並行して画面外へ抜けていくので、
      phaseをまたいで常時更新する必要がある（_fxOutro参照） */
   _updateFxOutro();
+  /* localStorageの溜まり分は「矢を放った直後」に書き出す。プレイヤーは拍に乗せて
+     打つので、発射直後は次のタップまで約1拍（395ms）の余裕がある＝ここで数ms
+     止まっても入力は取りこぼさない。逆に固定遅延のタイマー任せにすると、
+     その遅延が拍と一致したときに毎回タップの瞬間へ着地する（_LS_FLUSH_DELAY_MSの
+     コメント参照）。curIdx>0＝このトライで既に射っていることの確認 */
+  if (_lsPending.size > 0 && phase === 'idle' && curIdx > 0 &&
+      performance.now() / 1000 - _arrowStartWallTime > _LS_FLUSH_SAFE_SEC) _lsFlush();
   /* ハズレ・獲得ポップアップ（トライ横断フェードアウト） */
   for (const p of missPopups)   { if (p.timer > 0) p.timer--; }
   for (const p of payoutPopups) { if (p.timer > 0) p.timer--; }
