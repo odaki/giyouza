@@ -119,7 +119,15 @@ const ctx    = canvas.getContext('2d', { alpha: false }); // 毎フレーム全�
    として残るため、この対策自体は引き続き必要 */
 canvas.tabIndex = -1;
 function _ensureCanvasFocus() {
+  /* 既にフォーカスが当たっているなら何もしない。focus()はフォーカス移動が無くても
+     ブラウザ側でスタイル・レイアウトの再計算やイベント発行が走りうるため、毎タップ
+     無条件に呼ばない（実機のスパイク記録で、タップしたフレームだけ30〜61ms止まる
+     一方でこちらの計測値は0msという結果が出たため、ハンドラ内で計測外だった処理を
+     順に潰している）。フォーカスが外れたときだけ取り直せば目的は達成できる */
+  if (document.activeElement === canvas) return;
+  const _t0 = PERF_ON ? performance.now() : 0;
   try { canvas.focus({ preventScroll: true }); } catch(_e) { try { canvas.focus(); } catch(_e2) {} }
+  if (PERF_ON) _perfMark('focus', _t0);
 }
 /* タッチデバイス判定 & 向き */
 const IS_TOUCH    = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -232,6 +240,9 @@ const PERF_ON = new URLSearchParams(location.search).has('perf');
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 const _perf = {
   tap:      { last: 0, max: 0, at: 0, ranAt: 0 },
+  touch:    { last: 0, max: 0, at: 0, ranAt: 0 }, // touchstartハンドラ全体（tapの外側も含む）
+  unlk:     { last: 0, max: 0, at: 0, ranAt: 0 }, // 音声アンロック（毎タップ呼ばれる）
+  focus:    { last: 0, max: 0, at: 0, ranAt: 0 }, // canvas.focus()（毎タップ呼ばれる）
   resOC:    { last: 0, max: 0, at: 0, ranAt: 0 },
   pre:      { last: 0, max: 0, at: 0, ranAt: 0 },
   ls:       { last: 0, max: 0, at: 0, ranAt: 0 },
@@ -250,7 +261,7 @@ let _lastInitAt = 0;         // 直近のinit()時刻（トライ開始）
 function _perfLogSpike(gapMs) {
   const now = performance.now();
   const tags = [];
-  for (const k of ['tap', 'resOC', 'pre', 'ls', 'drawOnly']) {
+  for (const k of ['tap', 'touch', 'unlk', 'focus', 'resOC', 'pre', 'ls', 'drawOnly']) {
     if (_perf[k].ranAt > 0 && now - _perf[k].ranAt <= gapMs + 4) tags.push(k);
   }
   _perfSpikes.unshift({
@@ -291,7 +302,7 @@ function drawPerf() {
     `rAF ${_perfFps.toFixed(0)}fps  dpr ${_dpr}  canvas ${W * _dpr}x${H * _dpr}`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     `drawOnly ${n(_perf.drawOnly.last)}  max ${n(_perf.drawOnly.max)}  (追加フレームのdraw)`,
-    `tap   ${n(_perf.tap.last)}  max ${n(_perf.tap.max)}`,
+    `tap ${n(_perf.tap.max)}  touch ${n(_perf.touch.max)}  unlk ${n(_perf.unlk.max)}  foc ${n(_perf.focus.max)} (max)`,
     `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
     `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
     `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
@@ -339,7 +350,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v5.95';
+const VERSION = 'v5.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1683,9 +1694,21 @@ _iosAudioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIh
 _iosAudioEl.setAttribute('playsinline', '');
 _iosAudioEl.volume = 0;
 let _iosSessionElevated = false;
+let _iosSessionTries = 0;      // play()の試行回数（失敗し続けたときの打ち切り用）
+let _iosSessionInFlight = false; // 直前のplay()がまだ解決していない
+const _IOS_SESSION_MAX_TRIES = 8;
 function _elevateAudioSession() {
-  if (_iosSessionElevated) return;
-  _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
+  /* 成功後はスキップ。加えて「まだ解決していない」「何度も失敗している」場合も呼ばない。
+     HTMLMediaElement.play() はiOSではオーディオセッションに触れるため、毎タップ
+     無条件に呼ぶと稀に数十msかかる。成功すれば1回で済むが、何らかの理由で
+     失敗し続ける端末では毎タップ呼び続けることになるため、上限を設ける
+     （実機のスパイク記録で、タップしたフレームだけ止まる事象を追った結果の対策） */
+  if (_iosSessionElevated || _iosSessionInFlight || _iosSessionTries >= _IOS_SESSION_MAX_TRIES) return;
+  _iosSessionTries++;
+  _iosSessionInFlight = true;
+  _iosAudioEl.play()
+    .then(() => { _iosSessionElevated = true; _iosSessionInFlight = false; })
+    .catch(() => { _iosSessionInFlight = false; });
 }
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
@@ -1693,7 +1716,14 @@ function _elevateAudioSession() {
    サイレントバッファは destination 直結では AVAudioSession が開かないため masterGain 経由必須。
    特定の音声操作前に確実に running にしたい場合は _resumeAudioCtx(callback) を使う。 */
 let _speakerRouteEstablished = false; // masterGain経由バッファ再生でスピーカールートを開通済みか
+/* ?perf 計測用の薄いラッパー（早期returnが多いので本体を分ける） */
 function _unlockAudio() {
+  if (!PERF_ON) return _unlockAudioImpl();
+  const _t0 = performance.now();
+  _unlockAudioImpl();
+  _perfMark('unlk', _t0);
+}
+function _unlockAudioImpl() {
   _elevateAudioSession(); // iOS: AVAudioSessionをPlaybackカテゴリに昇格（マナーモード対策）
   if (!audioCtx) getAudioCtx();
   /* スピーカールート未確立、または suspended の場合にバッファを再生する。
@@ -11373,7 +11403,17 @@ canvas.addEventListener('mousedown', e=>{
 });
 
 /* タッチ操作対応（ページ内どこでもタップで反応） */
-document.addEventListener('touchstart', e=>{
+/* ?perf 計測用の薄いラッパー（handleGameClickと同じ形）。実機のスパイク記録で
+   「tapは0msなのにタップしたフレームだけ30〜61ms止まる」という結果が出たため、
+   handleGameClickより手前で走る処理（音声アンロック・フォーカス確保・当たり判定）も
+   計測範囲に入れる */
+document.addEventListener('touchstart', e => {
+  if (!PERF_ON) return _onTouchStart(e);
+  const _t0 = performance.now();
+  _onTouchStart(e);
+  _perfMark('touch', _t0);
+}, { passive: false });
+function _onTouchStart(e) {
   e.preventDefault();
   /* 入力物理発生時刻（performance.now() 基準 ms） */
   const inputPerfMs = e.timeStamp;
@@ -11442,7 +11482,7 @@ document.addEventListener('touchstart', e=>{
   }
 
   handleGameClick(inputPerfMs);
-}, { passive: false });
+}
 
 /* touchend ハンドラ: START ボタンのゲーム開始処理
    touchstart で resume() + サイレントバッファを発行し、
