@@ -400,7 +400,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.11';
+const VERSION = 'v6.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6102,7 +6102,12 @@ function _buildBossOC() {
   const c = oc.getContext('2d');
   c.drawImage(bodyOC, 0, 0);
   c.drawImage(faceOC, 0, 0);
-  _bossOC = { oc, bodyOC, faceOC, half };
+  /* 合成用のliveOCもここで確保しておく。以前は_initBossBattle（戦闘開始）で
+     確保しており、1140x1140＝約130万画素の確保が、的が回り始めるフレームに
+     ぶつかって回転の速度ムラになっていた（実機指摘）。予兆は演出だけの区間なので、
+     ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
+  const liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  _bossOC = { oc, bodyOC, faceOC, half, liveOC };
 }
 
 /* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部。
@@ -6887,6 +6892,11 @@ function _initBossBattle() {
      旧canvasがGC待ちで滞留していた＝キング的OCと同じリーククラスの水平展開。
      合成状態のキャッシュキー（_toneRenderedPct等）は_king側に持つため、
      canvasを使い回しても前戦闘の内容が誤って再利用されることはない） */
+  /* liveOCは_buildBossOC（予兆の入口）で確保済み。ここでの確保は保険
+     （OffscreenCanvas未対応環境は上で復帰するので通常は通らない）。
+     実機指摘「キング戦開始直後、的の回転に速度ムラがある」の対策: 1140x1140＝
+     約130万画素の確保が、まさに的が回り始めるフレームに来ていた。確保回数を
+     数えて確認したところ、戦闘開始時の6回のうち1回がこれだった */
   const liveOC = _bossOC.liveOC ||
     (_bossOC.liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr));
   /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
@@ -10647,6 +10657,10 @@ function drawSlowHandBadge() {
 
 function drawBeatBonusBadge() {
   if (phase === 'startup' || phase === 'tapestart' || isGameOver) return;
+  /* キングギヨウザ中はミュージックボーナス自体が無いのでバナーも出さない
+     （実機指摘: BONUS READYのまま戦闘に入ると出っ放しになる）。予兆から
+     エンディングまでを対象にする。シンクメーターの非表示条件と同じ扱い */
+  if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (syncChain < BEAT_BONUS_CHAIN) return;
 
   /* BETバー直下・同期メーターと同じ高さに配置（B案: 下部エリア） */
