@@ -121,31 +121,16 @@ const _dbgNum  = (name, fallback = null) => {
   return isNaN(v) ? fallback : v;
 };
 
-/* ?layers: 背景を別canvasへ分離して重ねる（レイヤー分割）。
-   狙いは「変化しない背景を毎フレーム貼り直さない」こと。ただしトレードオフがあり、
-   分離すると本体canvasを透明にする必要がある（不透明のままだと背後が見えない）。
-   つまり「全画面のテクスチャ転送1回」を「全画面のクリア＋合成時の全画面ブレンド」
-   に置き換えることになり、速くなるとは限らない。実機A/Bで判断するためフラグにした。
-   iPhone 16のタイムライン収録では paint が11秒で合計6.0msしか無く、この端末では
-   もともと削る余地が無いことが分かっている。効くとすれば低速な端末側 */
-const _LAYERS = _dbgFlag('layers');
-
 const canvas = document.getElementById('c');
-/* alpha: レイヤー分割時のみ透明にする（背後の背景canvasを見せるため）。
-   通常は不透明のまま＝ページとの合成コストを下げる（毎フレーム全面を塗るので損はない） */
-const ctx    = canvas.getContext('2d', { alpha: _LAYERS });
-/* 背景レイヤー（?layers 時のみ生成）。#canvas-wrap は position:relative なので
-   その中へ絶対配置で敷く。z-indexを明示するのは、絶対配置の要素は既定で
-   静的配置の要素より前に描かれるため（何もしないと背景が本体の上に乗る） */
-let bgCanvas = null, bgCtx = null, _cssScale = 1;
-if (_LAYERS) {
-  bgCanvas = document.createElement('canvas');
-  bgCanvas.style.cssText = 'position:absolute;left:0;top:0;z-index:0;';
-  canvas.style.position = 'relative';
-  canvas.style.zIndex = '1';
-  canvas.parentNode.insertBefore(bgCanvas, canvas);
-  bgCtx = bgCanvas.getContext('2d', { alpha: false });
-}
+const ctx    = canvas.getContext('2d', { alpha: false }); // 毎フレーム全面を塗るため不透明化（ページとの合成コスト削減）
+/* 背景を別canvasへ分けて重ねる案（レイヤー分割）は実装して実機A/Bまでやったが、
+   効果が無かったので削除した（2026-08-15。?layers として一時的に入れていた）。
+   理由: 分離すると本体canvasを透明にする必要があり（不透明のままでは背後が見えない）、
+   「全画面のテクスチャ転送1回」を「全画面のクリア＋合成時の全画面ブレンド」に
+   置き換えるだけになる。しかもこのゲームは前景が毎フレーム全画面ぶん変化するので、
+   レイヤー分割本来の利点（変化しない領域を再ラスタライズしない）がそもそも効かない。
+   実機ではgapが有無どちらも30〜35msで差が出なかった。再挑戦しないこと。
+   塗る量を減らしたいなら実解像度側で下げる（_RS_* の自動制御を参照） */
 /* 外付けキーボード対策: hardware keydownがページのJSへ配送されるには、
    ページ内のどこかにフォーカス可能な要素が実際にフォーカスされている必要がある。
    このゲームはcanvas1枚だけのUIでtabindexも無いため、タップしてもどの要素にも
@@ -508,11 +493,6 @@ function _applyRenderScale(v) {
   bgGradient.addColorStop(0, '#145c24');
   bgGradient.addColorStop(0.5, '#0f5020');
   bgGradient.addColorStop(1, '#0a3d18');
-  if (bgCanvas) {
-    bgCanvas.width  = canvas.width;
-    bgCanvas.height = canvas.height;
-    _paintBackgroundLayer();
-  }
   _lastFilter = ''; // 次のdraw()で掛け直させる（要素の状態は残っているが安全側に倒す）
 }
 
@@ -552,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.44';
+const VERSION = 'v6.45';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -623,8 +603,7 @@ const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [235, 235, 235, 235];
 
 /* ── キャッシュ（canvas生成後に初期化） ── */
 let bgGradient = null;   // 背景グラジェント（fitCanvas後に1回生成）
-let _lastFilter = '';    // filter の前回値（変化時のみ書き込み）
-let _lastBgTransform = ''; // 背景レイヤーのtransformの前回値（?layers時）
+let _lastFilter = '';    // canvas.style.filter の前回値（変化時のみ書き込み）
 /* getBoundingClientRect() キャッシュ: 入力ハンドラ内での強制レイアウトを排除
    fitCanvas（リサイズ時）にのみ更新する */
 let _canvasRect = { left: 0, top: 0, width: 1, height: 1 };
@@ -697,15 +676,6 @@ function _prebuildStaticLayers() {
   oc2.fillRect(0, 8, W, 3); oc2.fillRect(0, H - 11, W, 3);
   oc2.globalAlpha = 1;
   _staticLayerCanvas = oc;
-  _paintBackgroundLayer();
-}
-
-/* 背景レイヤーへ焼き込み済みの静的レイヤーを1回だけ貼る（?layers時のみ）。
-   以後このcanvasは触らないので、毎フレームのラスタライズ対象から外れる */
-function _paintBackgroundLayer() {
-  if (!_LAYERS || !bgCtx || !_staticLayerCanvas) return;
-  bgCtx.setTransform(1, 0, 0, 1, 0, 0);
-  bgCtx.drawImage(_staticLayerCanvas, 0, 0, bgCanvas.width, bgCanvas.height);
 }
 
 /* ── 文字列キャッシュ（coins/bet が変わった時だけ再計算） ──
@@ -9797,19 +9767,8 @@ function draw() {
     _kingImpactShake--;
   }
 
-  /* レイヤー分割時は本体を毎フレームクリアする（背景を貼らないので、これが下地作りを兼ねる）。
-     シェイクの平行移動より前・変形が入っていない状態で全面を消す */
-  if (_LAYERS) ctx.clearRect(0, 0, W, H);
   ctx.save();
   ctx.translate(shakeX, shakeY);
-  /* 背景も一緒に揺らす（分割前と見た目を変えないため）。canvasはCSSで拡縮されているので
-     論理座標のシェイク量をCSSピクセルへ換算する。値が変わった時だけ書き込む
-     （合成のみで済むtransformなので、再ラスタライズは起きない） */
-  if (bgCanvas) {
-    const tf = (shakeX || shakeY)
-      ? `translate(${(shakeX * _cssScale).toFixed(2)}px,${(shakeY * _cssScale).toFixed(2)}px)` : '';
-    if (tf !== _lastBgTransform) bgCanvas.style.transform = _lastBgTransform = tf;
-  }
 
   /* グレースケールフィルター（CSSをcanvas要素に適用）
      ctx.filterはiOS Safari<18未サポートのため、canvas.style.filterを使用
@@ -9822,19 +9781,14 @@ function draw() {
     const rate = Math.max(0.001, Math.min(1, grayRateCur));
     const f = rate >= 0.995 ? '' : `grayscale(${Math.round((1 - rate) * 90)}%)`;
     if (f !== _lastFilter) {
-      /* レイヤー分割時は本体だけに掛けると背景が色付きのまま残るので、
-         2枚を含むラッパーへ掛ける（合成後に1回で済むので枚数ぶんの負荷にもならない） */
-      const el = _LAYERS ? canvas.parentNode : canvas;
-      el.style.filter = _lastFilter = f;
-      el.style.willChange = f ? 'filter' : 'auto';
+      canvas.style.filter = _lastFilter = f;
+      canvas.style.willChange = f ? 'filter' : 'auto';
     }
   }
 
-  /* 背景 + 吉祥雲 + 獅子 + 上下帯: すべて焼き込み済みの静的レイヤー1枚を drawImage。
-     レイヤー分割時は背景canvasに置きっぱなしなので、ここでは何もしない */
-  if (_LAYERS) {
-    /* 何もしない（_paintBackgroundLayer が一度だけ貼ってある） */
-  } else if (_staticLayerCanvas) {
+  /* 背景 + 吉祥雲 + 獅子 + 上下帯: すべて焼き込み済みの静的レイヤー1枚を drawImage
+     キャッシュ未構築のフォールバックは通常描画（_mkCache により実質到達しない） */
+  if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
   } else {
     ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
@@ -12291,12 +12245,6 @@ function fitCanvas() {
   );
   canvas.style.width  = Math.floor(W * scale) + 'px';
   canvas.style.height = Math.floor(H * scale) + 'px';
-  if (bgCanvas) { // レイヤー分割時: 背景も本体と同じ位置・大きさに揃える
-    _cssScale = Math.floor(W * scale) / W; // シェイクをCSSピクセルへ換算する係数
-    bgCanvas.width  = canvas.width;  bgCanvas.height = canvas.height;
-    bgCanvas.style.width  = canvas.style.width;
-    bgCanvas.style.height = canvas.style.height;
-  }
   /* 背景グラジェントを再生成（canvasサイズ変化時のみ） */
   bgGradient = ctx.createLinearGradient(0, 0, 0, H);
   bgGradient.addColorStop(0, '#145c24');
