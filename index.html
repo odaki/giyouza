@@ -129,10 +129,23 @@ function _ensureCanvasFocus() {
   try { canvas.focus({ preventScroll: true }); } catch(_e) { try { canvas.focus(); } catch(_e2) {} }
   if (PERF_ON) _perfMark('focus', _t0);
 }
+/* ── デバッグ用URLパラメータの一元パース ──
+   ?portrait ?cheatpanel ?keydebug ?perf ?dpr ?king ?lat ?jlat の8種を、以前は
+   使う場所ごとに new URLSearchParams(location.search) して個別に解釈していた。
+   増えるたびに書き方が分かれる（has/get/parseInt/parseFloatの混在、既定値の扱い）ため、
+   入口をここ1つにまとめる。本番プレイではどのフラグも立たない。
+   _dbgFlag: 有無だけを見るもの / _dbgNum: 数値。無指定なら第2引数を返す */
+const _DBG_QUERY = new URLSearchParams(location.search);
+const _dbgFlag = name => _DBG_QUERY.has(name);
+const _dbgNum  = (name, fallback = null) => {
+  const v = parseFloat(_DBG_QUERY.get(name));
+  return isNaN(v) ? fallback : v;
+};
+
 /* タッチデバイス判定 & 向き */
 const IS_TOUCH    = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 /* ?portrait URL パラメータでデスクトップからでも縦画面テスト可能 */
-const _forcePortrait = new URLSearchParams(location.search).has('portrait');
+const _forcePortrait = _dbgFlag('portrait');
 const IS_PORTRAIT = _forcePortrait || (IS_TOUCH && window.innerWidth < window.innerHeight);
 
 const W = IS_PORTRAIT ? 420  : 1060;
@@ -147,7 +160,7 @@ const H = IS_PORTRAIT ? 820  : 560;
    （keydownハンドラのコメント参照）。本番プレイでは?cheatpanelを付けない限り
    一切描画・判定されない（既存の?king=等のデバッグ用URLパラメータと
    同じ位置づけ） */
-const CHEAT_PANEL_ON = new URLSearchParams(location.search).has('cheatpanel');
+const CHEAT_PANEL_ON = _dbgFlag('cheatpanel');
 const CHEAT_PANEL_BTNS = [
   { id: 'fever',  label: 'FEVER' },
   { id: 'slow',   label: 'SLOW'  },
@@ -213,7 +226,7 @@ function drawCheatPanel() {
    スペース・左右矢印というキーボード操作は残るので診断手段として残置する。
    keydownハンドラの最も外側（他の早期returnより前）でログに追記するため、
    ゲームのphase等に関係なく全てのkeydownを捕捉する */
-const KEY_DEBUG_ON = new URLSearchParams(location.search).has('keydebug');
+const KEY_DEBUG_ON = _dbgFlag('keydebug');
 let _keyDebugLog = [];
 function drawKeyDebug() {
   if (!KEY_DEBUG_ON) return;
@@ -236,19 +249,25 @@ function drawKeyDebug() {
    見方: frame work が16.7msを超えたフレームがあれば、その回のどれかが犯人。
    tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
    wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
-const PERF_ON = new URLSearchParams(location.search).has('perf');
+const PERF_ON = _dbgFlag('perf');
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
-const _perf = {
-  tap:      { last: 0, max: 0, at: 0, ranAt: 0 },
-  touch:    { last: 0, max: 0, at: 0, ranAt: 0 }, // touchstartハンドラ全体（tapの外側も含む）
-  unlk:     { last: 0, max: 0, at: 0, ranAt: 0 }, // 音声アンロック（毎タップ呼ばれる）
-  elev:     { last: 0, max: 0, at: 0, ranAt: 0 }, // AVAudioSession昇格（成功するまで毎タップ）
-  focus:    { last: 0, max: 0, at: 0, ranAt: 0 }, // canvas.focus()（毎タップ呼ばれる）
-  resOC:    { last: 0, max: 0, at: 0, ranAt: 0 },
-  pre:      { last: 0, max: 0, at: 0, ranAt: 0 },
-  ls:       { last: 0, max: 0, at: 0, ranAt: 0 },
-  drawOnly: { last: 0, max: 0, at: 0, ranAt: 0 }, // 60fps tick以外の追加フレーム（draw()だけ走る側）
-};
+/* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
+   スパイクのタグ付けも自動で追従する（以前は「_perfに項目追加→タグ配列に追加→
+   表示行を手書き」と3箇所を触る必要があり、増やすたびに漏れる形だった）。
+   line: 表示のまとめ方（同じ番号は1行に並ぶ）。withLast: 直近値も併記するか */
+const _PERF_PROBES = [
+  { key: 'drawOnly', label: 'drawOnly', line: 0, withLast: true, note: '追加フレームのdraw' },
+  { key: 'tap',      label: 'tap',      line: 1 }, // handleGameClick（発射処理そのもの）
+  { key: 'touch',    label: 'touch',    line: 1 }, // touchstartハンドラ全体（tapの外側も含む）
+  { key: 'unlk',     label: 'unlk',     line: 1 }, // 音声アンロック（毎タップ呼ばれる）
+  { key: 'focus',    label: 'foc',      line: 1 }, // canvas.focus()（フォーカスが外れている時だけ）
+  { key: 'elev',     label: 'elev',     line: 1 }, // AVAudioSession昇格（成功するまで毎タップ）
+  { key: 'resOC',    label: 'resOC',    line: 2, withLast: true, note: 'shadowBlur' },
+  { key: 'pre',      label: 'wheel',    line: 3, withLast: true, note: '事前構築1個' },
+  { key: 'ls',       label: 'lsW',      line: 4, withLast: true },
+];
+const _perf = {};
+for (const p of _PERF_PROBES) _perf[p.key] = { last: 0, max: 0, at: 0, ranAt: 0 };
 /* 突出したフレーム間隔（スパイク）だけを、そのとき何が起きていたかと一緒に残す。
    「ごく稀に1的目の発射で引っかかる」のような低頻度の事象は、最大値だけ見ていても
    前後関係が分からないため。直近3件を新しい順に表示する。
@@ -262,8 +281,9 @@ let _lastInitAt = 0;         // 直近のinit()時刻（トライ開始）
 function _perfLogSpike(gapMs) {
   const now = performance.now();
   const tags = [];
-  for (const k of ['tap', 'touch', 'unlk', 'focus', 'elev', 'resOC', 'pre', 'ls', 'drawOnly']) {
-    if (_perf[k].ranAt > 0 && now - _perf[k].ranAt <= gapMs + 4) tags.push(k);
+  for (const pr of _PERF_PROBES) {
+    const e = _perf[pr.key];
+    if (e.ranAt > 0 && now - e.ranAt <= gapMs + 4) tags.push(pr.key);
   }
   _perfSpikes.unshift({
     gap: gapMs,
@@ -302,18 +322,22 @@ function drawPerf() {
   const lines = [
     `rAF ${_perfFps.toFixed(0)}fps  dpr ${_dpr}  canvas ${W * _dpr}x${H * _dpr}`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
-    `drawOnly ${n(_perf.drawOnly.last)}  max ${n(_perf.drawOnly.max)}  (追加フレームのdraw)`,
-    `tap ${n(_perf.tap.max)} touch ${n(_perf.touch.max)} unlk ${n(_perf.unlk.max)} foc ${n(_perf.focus.max)} elev ${n(_perf.elev.max)}`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused e:ended t:currentTime）で、昇格の判定根拠 */
     `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}e${_iosAudioEl.ended ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
-    `resOC ${n(_perf.resOC.last)}  max ${n(_perf.resOC.max)}   (shadowBlur)`,
-    `wheel ${n(_perf.pre.last)}  max ${n(_perf.pre.max)}   (事前構築1個)`,
-    `lsW   ${n(_perf.ls.last)}  max ${n(_perf.ls.max)}`,
   ];
+  /* 計測行は_PERF_PROBESから組み立てる（同じline番号のものは1行に並べる） */
+  const byLine = new Map();
+  for (const pr of _PERF_PROBES) {
+    const e = _perf[pr.key];
+    const cell = `${pr.label} ${pr.withLast ? n(e.last) + '/' : ''}${n(e.max)}${pr.note ? '(' + pr.note + ')' : ''}`;
+    if (!byLine.has(pr.line)) byLine.set(pr.line, []);
+    byLine.get(pr.line).push(cell);
+  }
+  for (const cells of byLine.values()) lines.push(cells.join('  '));
   /* スパイク履歴（新しい順）。tagsが空なら詰まりはこちらのJSの外側 */
   for (const s of _perfSpikes) {
-    lines.push(`spike ${n(s.gap)}ms ${s.phase}#${s.idx} +${s.since}ms [${s.tags || '-'}]`);
+    lines.push(`spike ${n(s.gap)}ms ${s.phase}#${s.idx ?? '-'} +${s.since}ms [${s.tags || '-'}]`);
   }
   ctx.save();
   ctx.font = '11px monospace';
@@ -346,15 +370,15 @@ function drawPerf() {
 const _DPR_CAP = 2;
 const _dpr = (() => {
   const auto = Math.min(_DPR_CAP, Math.max(1, Math.round(window.devicePixelRatio || 1)));
-  const v = parseFloat(new URLSearchParams(location.search).get('dpr'));
-  return isNaN(v) ? auto : Math.max(1, Math.min(3, v)); // ?dpr=3で上限を外して比較できる
+  const v = _dbgNum('dpr');
+  return v === null ? auto : Math.max(1, Math.min(3, v)); // ?dpr=3で上限を外して比較できる
 })();
 canvas.width  = W * _dpr;
 canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.05';
+const VERSION = 'v6.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -706,10 +730,7 @@ const KING_GAIN_SMALL          = 0;   // 小当たり（ギヨウザが出ない
      ウウウウは同時表示の上限（退場したぶんを補充し続ける） */
 const MEDIUM_EFFECT_GYOZA_N    = 20;
 /* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
-const _KING_DEBUG = (() => {
-  const v = parseInt(new URLSearchParams(location.search).get('king'), 10);
-  return isNaN(v) ? null : v;
-})();
+const _KING_DEBUG = _dbgNum('king');
 /* 虹色インデックス: performance.now()ベース、約6秒で一周（GCゼロ） */
 function _rainbowIdx() { return ((performance.now() / 50) | 0) % 120; }
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
@@ -1326,15 +1347,14 @@ let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経�
    iOS Safari は outputLatency 未実装（WebKitにFIXMEあり）のため、AirPods 等
    Bluetooth の出力遅延（150〜250ms）を検出できない。ビートリングと音のズレを
    感じる場合に ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
-const _LATENCY_TRIM = (parseFloat(new URLSearchParams(location.search).get('lat')) || 0) / 1000;
+const _LATENCY_TRIM = _dbgNum('lat', 0) / 1000;
 /* 判定の既定バイアス: 人間はビートに合わせてタップすると平均20〜40ms先行して
    叩く傾向（negative mean asynchrony）があるため、判定グリッドを既定で早める。
    値は iPad スピーカー実機の較正（2026-07）で +37ms が最適と確認されたもの */
 const _JUDGE_BIAS = 0.037;
 /* 入力判定専用の較正（?jlat=ms、既定バイアスへの加算。正の値で判定グリッドをさらに早める。
    表示には影響しない。再較正・実験用 */
-const _JUDGE_TRIM = _JUDGE_BIAS +
-  (parseFloat(new URLSearchParams(location.search).get('jlat')) || 0) / 1000;
+const _JUDGE_TRIM = _JUDGE_BIAS + _dbgNum('jlat', 0) / 1000;
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
   let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
