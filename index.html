@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.21';
+const VERSION = 'v6.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -9203,6 +9203,76 @@ function _drawPillPath(bx, by, bw, bh) {
 }
 
 /* ════════════════ Main draw ════════════════ */
+/* 前景レイヤー一式（暗幕→当たり演出→テキスト→全画面演出→バッジ類）。
+   draw()に425行そのまま並んでいたうちの前景部分を切り出したもの。順序がそのまま
+   重なり順なので、並べ替えは見た目の変更になる。draw()側には
+   「背景・盤面 → _drawForeground() → ポーズ/デバッグ表示」という骨格だけを残す。 */
+function _drawForeground() {
+  /* 1. オーバーレイ（ハズレは暗幕なし） */
+  if (phase==='done'&&endTimer>45&&!isMissResult&&!isGameOver&&hitType!=='none') drawEndOverlay();
+  if (phase==='reach')              drawReachOverlay();
+
+  /* 2. エフェクト面 */
+  const _tFx = PERF_ON ? performance.now() : 0;
+  if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
+  /* 前トライの中当たりエフェクトの退場（_fxOutro参照）。現トライの演出と同じ
+     レイヤーに重ねる。両者が同時に出るのは意図どおり（並行して進む） */
+  _drawFxOutro();
+  /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
+  if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
+  drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
+  if (PERF_ON) _perfMark('fx', _tFx);
+
+  /* 白フラッシュ (リーチ大当たり確定の瞬間) */
+  if (reachFlash > 0) {
+    ctx.save();
+    ctx.globalAlpha = reachFlash;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+
+  /* 3. テキスト最前面 */
+  const _tTxt = PERF_ON ? performance.now() : 0;
+  if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotAutoReset) drawEndScreen();
+  /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
+  if (missPopups.length > 0)   drawMissPopup();
+  if (payoutPopups.length > 0) drawPayoutPopup();
+  /* フィーバーバナー（開始/終了とも drawFeverBanner で統合） */
+  if (feverStartBannerTimer > 0) drawFeverBanner(feverStartBannerTimer, null);
+  if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverBanner(feverEndBannerTimer, feverEndBannerReason);
+  if (phase==='reach')              drawReachText();
+  if (PERF_ON) _perfMark('txt', _tTxt);
+
+  /* スタートアップ画面 */
+  drawStartup();
+
+  /* キングギヨウザ出現予告・戦闘・勝利演出（全画面演出・ボタン類より下、バッジ類より上）。
+     ここは通常モードのfx/whl/txtプローブの範囲外なので、独立して計測する
+     （戦闘中に全プローブが0.0なのにgapが50msという実機データの死角だった） */
+  const _tKing = PERF_ON ? performance.now() : 0;
+  drawBossOmen();
+  drawBossBattle();
+  drawBossVictory();
+  drawBossVictoryOutro();
+  drawTrueEnding();
+  drawBossDefeat();
+  drawBossDefeatShrink();
+  drawBossDefeatOutro();
+  if (PERF_ON) _perfMark('king', _tKing);
+
+  /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
+  if (!_isBossBattlePhase()) drawSyncMeter();
+  drawSyncJust();
+
+  /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
+  drawSlowHandBadge();
+  drawFeverBadge();
+  drawBeatBonusBadge();
+  drawContinueBadge();
+}
+
 function draw() {
   /* 画面シェイク */
   let shakeX = 0, shakeY = 0;
@@ -9343,69 +9413,7 @@ function draw() {
      3. テキスト最前面
      ─────────────────────────────────────────────── */
 
-  /* 1. オーバーレイ（ハズレは暗幕なし） */
-  if (phase==='done'&&endTimer>45&&!isMissResult&&!isGameOver&&hitType!=='none') drawEndOverlay();
-  if (phase==='reach')              drawReachOverlay();
-
-  /* 2. エフェクト面 */
-  const _tFx = PERF_ON ? performance.now() : 0;
-  if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
-  /* 前トライの中当たりエフェクトの退場（_fxOutro参照）。現トライの演出と同じ
-     レイヤーに重ねる。両者が同時に出るのは意図どおり（並行して進む） */
-  _drawFxOutro();
-  /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
-  if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
-  drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
-  if (PERF_ON) _perfMark('fx', _tFx);
-
-  /* 白フラッシュ (リーチ大当たり確定の瞬間) */
-  if (reachFlash > 0) {
-    ctx.save();
-    ctx.globalAlpha = reachFlash;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
-
-
-  /* 3. テキスト最前面 */
-  const _tTxt = PERF_ON ? performance.now() : 0;
-  if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotAutoReset) drawEndScreen();
-  /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
-  if (missPopups.length > 0)   drawMissPopup();
-  if (payoutPopups.length > 0) drawPayoutPopup();
-  /* フィーバーバナー（開始/終了とも drawFeverBanner で統合） */
-  if (feverStartBannerTimer > 0) drawFeverBanner(feverStartBannerTimer, null);
-  if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverBanner(feverEndBannerTimer, feverEndBannerReason);
-  if (phase==='reach')              drawReachText();
-  if (PERF_ON) _perfMark('txt', _tTxt);
-
-  /* スタートアップ画面 */
-  drawStartup();
-
-  /* キングギヨウザ出現予告・戦闘・勝利演出（全画面演出・ボタン類より下、バッジ類より上）。
-     ここは通常モードのfx/whl/txtプローブの範囲外なので、独立して計測する
-     （戦闘中に全プローブが0.0なのにgapが50msという実機データの死角だった） */
-  const _tKing = PERF_ON ? performance.now() : 0;
-  drawBossOmen();
-  drawBossBattle();
-  drawBossVictory();
-  drawBossVictoryOutro();
-  drawTrueEnding();
-  drawBossDefeat();
-  drawBossDefeatShrink();
-  drawBossDefeatOutro();
-  if (PERF_ON) _perfMark('king', _tKing);
-
-  /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
-  if (!_isBossBattlePhase()) drawSyncMeter();
-  drawSyncJust();
-
-  /* スローハンドバッジ・フィーバーバッジ（最前面・上部中央） */
-  drawSlowHandBadge();
-  drawFeverBadge();
-  drawBeatBonusBadge();
-  drawContinueBadge();
+  _drawForeground();
 
   /* ── ポーズオーバーレイ ── */
   if (isPaused) {
