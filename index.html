@@ -335,8 +335,24 @@ function _perfMark(key, t0) {
   e.last = ms; e.ranAt = now;
   if (ms >= e.max || now - e.at > _PERF_MAX_HOLD_MS) { e.max = ms; e.at = now; }
 }
+/* オーバーレイはオフスクリーンへ焼いて貼るだけにする。
+   実機で判明した重大な副作用: 毎フレーム12行・約600グリフをfillTextしていたため、
+   オーバーレイ自身がキング戦の引っかかりの主因になっていた（?perfを消すと出ない、と
+   ユーザーが特定）。canvasのテキストは呼び出しとラスタライズが別で、コストは
+   フレームの合成時に来るので、performance.nowで測るframe workには出ない。
+   「frame work 2msなのにgap 68ms」という数字はこれで説明がつく。
+   計測器が計測対象より重い状態だったので、焼き直しは内容が変わったときだけ、
+   かつ最短でも_PERF_REDRAW_MS間隔に制限する。毎フレームの負担はdrawImage1回になる */
+const _PERF_REDRAW_MS = 200;
+let _perfOC = null, _perfOCText = '', _perfOCAt = 0, _perfOCH = 0;
 function drawPerf() {
   if (!PERF_ON) return;
+  /* 焼き直しの間隔が来ていなければ、前回の絵をそのまま貼って終わり */
+  const _now = performance.now();
+  if (_perfOC && _now - _perfOCAt < _PERF_REDRAW_MS) {
+    ctx.drawImage(_perfOC, 4, 4, W - 8, _perfOCH);
+    return;
+  }
   let workMax = 0, gapMax = 0;
   for (let i = 0; i < _FRAME_BUF_SIZE; i++) {
     if (_frameWorkTimes[i] > workMax) workMax = _frameWorkTimes[i];
@@ -381,14 +397,38 @@ function drawPerf() {
     lines.push(line);
   }
   ctx.save();
-  ctx.font = _PERF_FONT;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  const lineH = 14, boxH = lineH * lines.length + 8;
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(4, 4, W - 8, boxH);
-  ctx.fillStyle = '#0f0';
-  lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
   ctx.restore();
+  /* 内容が同じなら焼き直さない（時刻だけ更新して貼る） */
+  const text = lines.join('\n');
+  const lineH = 14, boxH = lineH * lines.length + 8;
+  if (_perfOC && text === _perfOCText && boxH === _perfOCH) {
+    _perfOCAt = _now;
+    ctx.drawImage(_perfOC, 4, 4, W - 8, _perfOCH);
+    return;
+  }
+  const ocW = Math.ceil((W - 8) * _dpr), ocH = Math.ceil(boxH * _dpr);
+  if (typeof OffscreenCanvas === 'undefined') {
+    /* 未対応環境は従来どおり直接描く（この環境で?perfを使うことは想定していない） */
+    ctx.save();
+    ctx.font = _PERF_FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(4, 4, W - 8, boxH);
+    ctx.fillStyle = '#0f0';
+    lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
+    ctx.restore();
+    return;
+  }
+  if (!_perfOC || _perfOC.width !== ocW || _perfOC.height !== ocH) _perfOC = new OffscreenCanvas(ocW, ocH);
+  const pc = _perfOC.getContext('2d');
+  pc.setTransform(1, 0, 0, 1, 0, 0);
+  pc.clearRect(0, 0, ocW, ocH);
+  pc.scale(_dpr, _dpr);
+  pc.font = _PERF_FONT; pc.textAlign = 'left'; pc.textBaseline = 'top';
+  pc.fillStyle = 'rgba(0,0,0,0.75)';
+  pc.fillRect(0, 0, W - 8, boxH);
+  pc.fillStyle = '#0f0';
+  lines.forEach((line, i) => pc.fillText(line, 4, 4 + i * lineH));
+  _perfOCText = text; _perfOCAt = _now; _perfOCH = boxH;
+  ctx.drawImage(_perfOC, 4, 4, W - 8, boxH);
 }
 /* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画。
    ?dpr=N で上書きできる（1〜3にクランプ）。実機計測で「update()+draw()は5〜7msしか
@@ -419,7 +459,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.18';
+const VERSION = 'v6.19';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
