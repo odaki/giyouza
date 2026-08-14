@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.22';
+const VERSION = 'v6.23';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3615,18 +3615,78 @@ const _predFxGhost = g => g.y > -g.r * 3;
 const _predFxFish  = f => f.x > -f.size * 2.5 && f.x < W + f.size * 2.5;
 
 /* トライ切り替えの直前に呼ぶ。生きているエフェクトを退場モードへ移す */
+/* 退場させる中当たり演出の一覧。1種類ぶんの「取り込み方・進め方・生存判定・返却・描き方」を
+   1エントリにまとめる。以前は_startFxOutro/_updateFxOutro/_drawFxOutro/_clearFxOutroの
+   4関数それぞれに種類ごとの分岐が並んでおり、演出を1つ足すと4箇所を揃える必要があった。
+   ここに1エントリ足せば全部に反映される。
+   src/clear が関数なのは、対象がモジュールスコープのlet変数（配列そのものを差し替える）
+   ため。step は1体ぶんの前進で、rush（次トライで当たりが出たときの加速倍率）を受ける。
+   draw は通常描画と同じ関数を使う（シグネチャは (list, outroTimer) で統一済み） */
+const _FX_OUTRO_KINDS = [
+  {
+    key: 'worms', src: () => worms, clear: () => { worms = []; },
+    alive: _predFxWorm, release: _deadify, draw: drawWorms,
+    /* ウヨウヨ: 這っている向きのまま加速して画面外へ（updateWormsと同じ蛇行を維持） */
+    step: (w, rush) => {
+      w.wiggle += w.wiggleSpd;
+      w.angle  += Math.sin(w.wiggle) * w.wiggleAmp;
+      w.speed   = Math.min(_FX_OUTRO_WORM_SPD_MAX, w.speed + _FX_OUTRO_WORM_ACCEL * rush);
+      w.x      += Math.cos(w.angle) * w.speed;
+      w.y      += Math.sin(w.angle) * w.speed;
+      w.rot     = w.angle;
+    },
+  },
+  {
+    key: 'yoyos', src: () => yoyos, clear: () => { yoyos = []; },
+    alive: _predFxYoyo, release: _deadify, draw: drawYoyoyoyo,
+    onStart: y => { y.outroV = _FX_OUTRO_YOYO_SPD0; }, // 糸に引き上げられる形で上へ抜けていく
+    /* ヨヨヨヨ: 上向きに加速し続ける（上下運動で戻ってきた延長で飛んでいく見え方） */
+    step: (y, rush) => {
+      y.outroV -= _FX_OUTRO_YOYO_ACCEL * rush;
+      y.y      += y.outroV;
+      y.rot    += y.spinSpd;
+    },
+  },
+  {
+    key: 'ghosts', src: () => ghosts, clear: () => { ghosts = []; },
+    alive: _predFxGhost, draw: drawUuuu,
+    /* _releaseGhostはこの表より後方でconst宣言されるため、直接参照するとTDZで落ちる
+       （テーブルはモジュール評価時に作られる）。呼び出し時に解決させる */
+    release: g => _releaseGhost(g),
+    /* ウウウウ: もともと上昇しているので、その速度をさらに上げる（vyは負） */
+    step: (g, rush) => {
+      g.vy -= _FX_OUTRO_GHOST_ACCEL * rush;
+      g.y  += g.vy;
+      g.wobble += g.wobbleSpd;
+      g.x  += Math.sin(g.wobble) * 0.9;
+      /* 濃度の増減はupdateUuuuと同じ規則（上端付近で消える） */
+      const fadeZone = 80;
+      if (g.y > H - fadeZone)   g.alpha = Math.min(0.80, g.alpha + 0.04);
+      else if (g.y < fadeZone)  g.alpha = Math.max(0, g.alpha - 0.025);
+    },
+  },
+  {
+    key: 'fish', src: () => gyogyoFish, clear: () => { gyogyoFish = []; },
+    alive: _predFxFish, release: null, draw: drawGyogyo, // 魚はプール管理外なので返却不要
+    /* ギョギョ: updateGyogyoの壁反射を外し、泳いでいる向きへ加速して画面外へ */
+    step: (f, rush) => {
+      f.vx += Math.sign(f.vx) * _FX_OUTRO_FISH_ACCEL * rush;
+      f.x  += f.vx;
+      f.y  += f.vy;
+    },
+  },
+];
+
+/* トライ切り替えの直前に呼ぶ。生きているエフェクトを退場モードへ移す */
 function _startFxOutro() {
-  for (const w of worms)  _fxOutro.worms.push(w);
-  worms = [];
-  for (const y of yoyos) {
-    y.outroV = _FX_OUTRO_YOYO_SPD0; // 糸に引き上げられる形で上へ抜けていく
-    _fxOutro.yoyos.push(y);
+  for (const kind of _FX_OUTRO_KINDS) {
+    const list = _fxOutro[kind.key];
+    for (const item of kind.src()) {
+      if (kind.onStart) kind.onStart(item);
+      list.push(item);
+    }
+    kind.clear();
   }
-  yoyos = [];
-  for (const g of ghosts) _fxOutro.ghosts.push(g);
-  ghosts = [];
-  for (const f of gyogyoFish) _fxOutro.fish.push(f);
-  gyogyoFish = [];
   _fxOutro.rush = false; // 加速指定は「次のトライで当たりが出たら」なので毎回リセット
 }
 
@@ -3634,66 +3694,36 @@ function _startFxOutro() {
    常時更新セクション。done以外でも動き続ける必要があるため） */
 function _updateFxOutro() {
   const o = _fxOutro;
-  if (!o.worms.length && !o.yoyos.length && !o.ghosts.length && !o.fish.length) {
-    o.timer = 0;
-    return;
-  }
+  let any = false;
+  for (const kind of _FX_OUTRO_KINDS) if (o[kind.key].length) { any = true; break; }
+  if (!any) { o.timer = 0; return; }
   o.timer++;
   const rush = o.rush ? _FX_OUTRO_RUSH_MULT : 1;
-  /* ウヨウヨ: 這っている向きのまま加速して画面外へ（updateWormsと同じ蛇行を維持） */
-  for (const w of o.worms) {
-    w.wiggle += w.wiggleSpd;
-    w.angle  += Math.sin(w.wiggle) * w.wiggleAmp;
-    w.speed   = Math.min(_FX_OUTRO_WORM_SPD_MAX, w.speed + _FX_OUTRO_WORM_ACCEL * rush);
-    w.x      += Math.cos(w.angle) * w.speed;
-    w.y      += Math.sin(w.angle) * w.speed;
-    w.rot     = w.angle;
+  for (const kind of _FX_OUTRO_KINDS) {
+    const list = o[kind.key];
+    if (!list.length) continue;
+    for (const item of list) kind.step(item, rush);
+    swapRemove(list, kind.alive, kind.release);
   }
-  swapRemove(o.worms, _predFxWorm, _deadify);
-  /* ヨヨヨヨ: 上向きに加速し続ける（上下運動で戻ってきた延長で飛んでいく見え方） */
-  for (const y of o.yoyos) {
-    y.outroV -= _FX_OUTRO_YOYO_ACCEL * rush;
-    y.y      += y.outroV;
-    y.rot    += y.spinSpd;
-  }
-  swapRemove(o.yoyos, _predFxYoyo, _deadify);
-  /* ウウウウ: もともと上昇しているので、その速度をさらに上げる（vyは負） */
-  for (const g of o.ghosts) {
-    g.vy -= _FX_OUTRO_GHOST_ACCEL * rush;
-    g.y  += g.vy;
-    g.wobble += g.wobbleSpd;
-    g.x  += Math.sin(g.wobble) * 0.9;
-    /* 濃度の増減はupdateUuuuと同じ規則（上端付近で消える） */
-    const fadeZone = 80;
-    if (g.y > H - fadeZone)   g.alpha = Math.min(0.80, g.alpha + 0.04);
-    else if (g.y < fadeZone)  g.alpha = Math.max(0, g.alpha - 0.025);
-  }
-  swapRemove(o.ghosts, _predFxGhost, _releaseGhost);
-  /* ギョギョ: updateGyogyoの壁反射を外し、泳いでいる向きへ加速して画面外へ */
-  for (const f of o.fish) {
-    f.vx += Math.sign(f.vx) * _FX_OUTRO_FISH_ACCEL * rush;
-    f.x  += f.vx;
-    f.y  += f.vy;
-  }
-  swapRemove(o.fish, _predFxFish);
 }
 
 /* 退場中のエフェクトを描く。通常の演出と同じレイヤーに重ねる */
 function _drawFxOutro() {
   const o = _fxOutro;
-  if (o.worms.length)  drawWorms(o.worms);
-  if (o.yoyos.length)  drawYoyoyoyo(o.yoyos, true);
-  if (o.ghosts.length) drawUuuu(o.ghosts, true);
-  if (o.fish.length)   drawGyogyo(o.fish, true, o.timer);
+  for (const kind of _FX_OUTRO_KINDS) {
+    const list = o[kind.key];
+    if (list.length) kind.draw(list, o.timer);
+  }
 }
 
 /* キングギヨウザ突入時など、退場アニメごと消し去りたい場合に呼ぶ */
 function _clearFxOutro() {
   const o = _fxOutro;
-  for (const w of o.worms) w._dead = true;
-  for (const y of o.yoyos) y._dead = true;
-  for (const g of o.ghosts) _releaseGhost(g);
-  o.worms.length = 0; o.yoyos.length = 0; o.ghosts.length = 0; o.fish.length = 0;
+  for (const kind of _FX_OUTRO_KINDS) {
+    const list = o[kind.key];
+    if (kind.release) for (const item of list) kind.release(item);
+    list.length = 0;
+  }
   o.rush = false; o.timer = 0;
 }
 
@@ -4855,7 +4885,9 @@ function updateWorms() {
   if (endTimer % 18 === 0 && worms.length < 22) spawnWorm();
 }
 
-/* list省略時は現トライのworms。退場中のリストを渡すと同じ見た目で描ける（_drawFxOutro参照） */
+/* 中当たり演出の描画は (list, outroTimer) で統一する。
+   引数なし＝現トライぶんの通常描画、list付き＝退場中のリスト（_drawFxOutro参照）。
+   ウヨウヨは時間軸を持たないのでoutroTimerは受け取らない */
 function drawWorms(list) {
   ctx.save();
   for (const w of (list ?? worms)) {
@@ -5477,9 +5509,10 @@ function updateYoyoyoyo() {
   }
 }
 
-/* outro=true のときは退場中のリストを描く（フェードインは済んでいるので不透明、
+/* outroTimerを渡すと退場中のリストを描く（フェードインは済んでいるので不透明、
    画面上端より上に出た糸は描かない）。省略時は現トライのyoyos */
-function drawYoyoyoyo(list, outro) {
+function drawYoyoyoyo(list, outroTimer) {
+  const outro = outroTimer != null;
   if (!outro && (hitType !== 'yoyoyoyo' || endTimer < 50)) return;
   for (const y of (list ?? yoyos)) {
     let a = 1;
@@ -5620,8 +5653,9 @@ function updateUuuu() {
   swapRemove(ghosts, _predAlive, _releaseGhost); // キャンバスをプールへ返却
 }
 
-/* outro=true のときは退場中のリストを描く（_drawFxOutro参照）。省略時は現トライのghosts */
-function drawUuuu(list, outro) {
+/* outroTimerを渡すと退場中のリストを描く（_drawFxOutro参照）。省略時は現トライのghosts */
+function drawUuuu(list, outroTimer) {
+  const outro = outroTimer != null;
   if (!outro && (hitType !== 'uuuu' || endTimer < 50)) return;
   ctx.save();
   for (const g of (list ?? ghosts)) {
@@ -5864,13 +5898,14 @@ function updateGyogyo() {
   }
 }
 
-/* outro=true のときは退場中の魚だけを描く（_drawFxOutro参照）。
-   時間軸には退場用のタイマーを渡す: endTimerは次トライで0に戻るため、
+/* outroTimerを渡すと退場中の魚だけを描く（_drawFxOutro参照）。
+   時間軸に別のタイマーを使うのは、endTimerが次トライで0に戻るため。
    そのまま使うと尾ひれの揺れや「ギョギョ！」の明滅が止まってしまう。
    「ギョギョ！」テキストは当たり演出そのものなので退場中は出さない */
-function drawGyogyo(list, outro, timer) {
+function drawGyogyo(list, outroTimer) {
+  const outro = outroTimer != null;
   if (!outro && (hitType !== 'gyogyo' || endTimer < 45)) return;
-  const t = outro ? timer : endTimer;
+  const t = outro ? outroTimer : endTimer;
   const fadeIn = outro ? 1 : Math.min(1, (t - 45) / 40);
 
   ctx.save();
