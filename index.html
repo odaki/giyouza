@@ -265,6 +265,7 @@ const _PERF_PROBES = [
   { key: 'resOC',    label: 'resOC',    line: 2, withLast: true, note: 'shadowBlur' },
   { key: 'pre',      label: 'wheel',    line: 3, withLast: true, note: '事前構築1個' },
   { key: 'ls',       label: 'lsW',      line: 4, withLast: true },
+  { key: 'bar',      label: 'bar',      line: 4, withLast: true, note: 'BETバー描画' },
 ];
 const _perf = {};
 for (const p of _PERF_PROBES) _perf[p.key] = { last: 0, max: 0, at: 0, ranAt: 0 };
@@ -378,7 +379,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.06';
+const VERSION = 'v6.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -989,6 +990,17 @@ const HIT_TABLE = [
   { type:'zazazaza', pat:ZAZAZAZA, payout:'hitSml',  king:KING_GAIN_SMALL,   medId:'zazazaza', onHit:initZazazaza,      update:updateZazazaza,draw:drawZazazaza,       drawDelay:50 },
 ];
 let coins, bet, betLocked, isGameOver;
+/* ── BET操作の解放 ──
+   betLockedは「1的目を射ったらBETを変えられない」ためのフラグ。トライ開始で降り、
+   1的目の発射で立つ。これだけだと、リズムに乗って連続でトライしている間は
+   「トライ開始でBETボタンが点灯 → 数フレーム後の1的目で消灯」を毎トライ繰り返し、
+   ちょうど射撃の瞬間に点滅が重なる（実機プレイでの指摘）。
+   実際にBETを変えたい人はトライ開始からビート2つぶんは待つので、解放自体を
+   遅らせてしまえば、リズムプレイ中はボタンの状態が一度も変わらない。
+   これは「実時間で失効するガード」なのでwall-clock基準（rAFが止まる場面でも
+   正しく失効させる。CLAUDE.mdの時間条件の実装規約）。単位はBGMの拍。 */
+const BET_UNLOCK_BEATS = 2.25;  // トライ開始から解放までの拍数（2拍と少し）
+let _betUnlockAt = 0;           // 解放時刻（performance.now() ms基準）
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
 let isSlowSpin   = false;   // 低確率: 回転速度半減イベント
 /* スローハンドバッジの表示ラッチ（drawSlowHandBadge参照）。isSlowSpinが
@@ -2810,6 +2822,22 @@ function startBossBGMTape(durationMs = 1400) {
   grayRateTarget = 1.0;
 }
 
+/* BET操作が今できるかどうか。描画（ボタンの点灯）と入力（当たり判定）の両方が
+   これ1つを見る。以前は同じ条件が描画2箇所・入力3箇所に手書きされており、
+   条件を足すたびに5箇所を揃える必要があった。
+   ・betLocked      : 1的目を射ったらそのトライではもう変えられない
+   ・_betUnlockAt   : トライ開始から2拍強は解放しない（BET_UNLOCK_BEATS参照）
+   ・phase          : 回転中（idle/reach）のみ
+   ・スローハンドランプ中はロック（suspended時はcurrentTimeが止まるので免除） */
+function _betControlsEnabled() {
+  if (betLocked) return false;
+  if (performance.now() < _betUnlockAt) return false;
+  if (phase !== 'idle' && phase !== 'reach') return false;
+  if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+      && audioCtx.currentTime < slowRampEndTime) return false;
+  return true;
+}
+
 /* BET額に対応するスローハンドBGM速度比率を返す
    BET=1→30%, BET=100000→90%, 対数補間 */
 function _slowHandRate(betVal) {
@@ -3670,6 +3698,7 @@ function _clearTrialFxState() {
   _jackpotAutoReset  = false;
   canRestart  = false; _continueShowDelay = 0;
   betLocked   = false;
+  _betUnlockAt = performance.now() + BGM_BEAT * 1000 * BET_UNLOCK_BEATS; // 解放は2拍強あと（_betControlsEnabled参照）
   isMissResult = false;
   for (const g of worms) g._dead = true; // プールに返却してからクリア（リーク防止）
   worms      = [];
@@ -9210,7 +9239,9 @@ function draw() {
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
   if (!_isBossBattlePhase()) {
+    const _tBar = PERF_ON ? performance.now() : 0;
     if (IS_PORTRAIT) drawPortraitBottomBar(); else drawBottomBar();
+    if (PERF_ON) _perfMark('bar', _tBar);
   }
   drawCoinHeader();
 
@@ -9767,10 +9798,9 @@ function drawBottomBar() {
   const btnH = 50, btnY = BAR_Y + (BAR_H - btnH) / 2;
   const cx = W / 2, cy = btnY + btnH / 2;
 
-  const _betRampLocked = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
-  const canDec = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
-  const canInc = !betLocked && !_betRampLocked && (phase==='idle'||phase==='reach') &&
-    _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
+  const betOn = _betControlsEnabled();
+  const canDec = betOn && _cachedBetIdx > 0;
+  const canInc = betOn && _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
   _drawBetBtn(BET_DEC_BTN, '◀', canDec, 26);
   _drawBetBtn(BET_INC_BTN, '▶', canInc, 26);
 
@@ -9822,9 +9852,9 @@ function drawPortraitBottomBar() {
   const incRect = P_BET_INC_BTN;  // { x:309, y:747, w:84, h:36 }
 
   /* ボタン: 確定中またはスローランプ中は両方とも非活性 */
-  const _betRampLockedP = slowRampEndTime > 0 && audioCtx && audioCtx.currentTime < slowRampEndTime;
-  const canDec = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') && _cachedBetIdx > 0;
-  const canInc = !betLocked && !_betRampLockedP && (phase==='idle'||phase==='reach') &&
+  const betOn = _betControlsEnabled();
+  const canDec = betOn && _cachedBetIdx > 0;
+  const canInc = betOn &&
     _cachedBetIdx < BET_OPTIONS.length - 1 && BET_OPTIONS[_cachedBetIdx + 1] <= coins;
   _drawBetBtn(decRect, '◀', canDec, 22);
   _drawBetBtn(incRect, '▶', canInc, 22);
@@ -11451,11 +11481,8 @@ document.addEventListener('keydown', e=>{
     return;
   }
   /* カーソル左右でBET変更 */
-  if ((e.code==='ArrowLeft'||e.code==='ArrowRight') && !betLocked && (phase==='idle'||phase==='reach')) {
+  if ((e.code==='ArrowLeft'||e.code==='ArrowRight') && _betControlsEnabled()) {
     e.preventDefault();
-    /* スローハンドランプ中はBET変更ロック（suspended時は currentTime が止まるためロック免除） */
-    if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
-        && audioCtx.currentTime < slowRampEndTime) return;
     changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
@@ -11502,15 +11529,11 @@ canvas.addEventListener('mousedown', e=>{
     toggleMute(); return;
   }
   /* ベット◀▶ボタン（縦画面 or PCボトムバー） */
-  if (!betLocked && (phase==='idle'||phase==='reach')) {
-    /* スローハンドランプ中はBET変更ロック */
-    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
-          && audioCtx.currentTime < slowRampEndTime)) {
-      const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
-      const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
-      if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
-      if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
-    }
+  if (_betControlsEnabled()) {
+    const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
+    const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
+    if (decBtn && hitTest(decBtn, cx, cy)) { changeBet(-1); return; }
+    if (incBtn && hitTest(incBtn, cx, cy)) { changeBet(+1); return; }
   }
   handleGameClick(inputPerfMs);
 });
@@ -11591,15 +11614,11 @@ function _onTouchStart(e) {
   }
 
   /* スマホ: ベット◀▶ボタン */
-  if (!betLocked && (phase==='idle'||phase==='reach')) {
-    /* スローハンドランプ中はBET変更ロック */
-    if (!(slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
-          && audioCtx.currentTime < slowRampEndTime)) {
-      const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
-      const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
-      if (decBtn && hitTest(decBtn, pt.x, pt.y)) { changeBet(-1); return; }
-      if (incBtn && hitTest(incBtn, pt.x, pt.y)) { changeBet(+1); return; }
-    }
+  if (_betControlsEnabled()) {
+    const decBtn = IS_PORTRAIT ? P_BET_DEC_BTN : BET_DEC_BTN;
+    const incBtn = IS_PORTRAIT ? P_BET_INC_BTN : BET_INC_BTN;
+    if (decBtn && hitTest(decBtn, pt.x, pt.y)) { changeBet(-1); return; }
+    if (incBtn && hitTest(incBtn, pt.x, pt.y)) { changeBet(+1); return; }
   }
 
   handleGameClick(inputPerfMs);
