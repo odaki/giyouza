@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.26';
+const VERSION = 'v6.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2374,6 +2374,9 @@ const _DORA_PARTIALS = [
   { ratio: 4.20, vol: 0.042, decay: 1.6, attack: 0.060, detune: 0.009 },
   { ratio: 5.40, vol: 0.030, decay: 1.3, attack: 0.080, detune: 0.011 },
   { ratio: 7.10, vol: 0.022, decay: 1.0, attack: 0.100, detune: 0.014 },
+  { ratio: 9.50, vol: 0.018, decay: 1.2, attack: 0.070, detune: 0.016 }, // ここから上は
+  { ratio: 12.4, vol: 0.014, decay: 1.0, attack: 0.090, detune: 0.019 }, // 「シャリ」を担う
+  { ratio: 16.3, vol: 0.010, decay: 0.8, attack: 0.110, detune: 0.022 }, // きらめき成分
 ];
 /* 歪み: 部分音を合成した「和」に対して掛ける。個々の部分音を歪ませても倍音が
    増えるだけだが、和を歪ませると部分音どうしの相互変調（和音・差音）が生まれる。
@@ -2385,7 +2388,23 @@ const _DORA_PARTIALS = [
    銅鑼ではなくファズギターの耳障りさになるため */
 const _DORA_DRIVE     = 2.6;   // 歪み前段のゲイン（大きいほど濁る）
 const _DORA_SHAPE     = 3.2;   // tanhカーブの強さ（_acidDistortionCurve）
-const _DORA_TONE_HZ   = 3800;  // 歪み後のローパス（耳障りな高次を落とす）
+const _DORA_TONE_HZ   = 5200;  // 歪み後のローパス（耳障りな高次は落としつつ、シャリは残す）
+/* シャリ（金属の細かい響き）の層。
+   実機評価「お寺の除夜の鐘みたいな感じがある。もっとシャリっとした余韻がほしい」。
+   除夜の鐘に聞こえるのは、低い純音が長く伸びる一方で高域の密な響きが無いため。
+   実物の銅鑼は3〜8kHzに数百の高次モードが密集しており、離散的な部分音を並べても
+   絶対に届かない（本数が桁違いなうえ、可聴域で等間隔に近く並ぶので個々が分離しない）。
+   そこで帯域ノイズを1層足す。打撃と同時ではなく遅れて立ち上げるのが肝で、
+   これが「打った後からシャーッと広がる」銅鑼特有の余韻になる（エネルギーが
+   低次モードから高次へ移っていく非線形現象の再現）。歪みバスは通さない
+   （ノイズを歪ませても質感が変わらないうえ、低域の濁りを薄めてしまう） */
+const _DORA_SHIMMER_VOL   = 0.42;  // シャリの音量（帯域を絞るぶん、素の値は大きく取る）
+const _DORA_SHIMMER_ATK   = 0.18;  // 立ち上がり（遅れて広がる）
+const _DORA_SHIMMER_DEC   = 2.6;   // 減衰。低域の余韻（最長2.9秒）に近い長さにする。
+                                   // 短いと終盤で高域だけ先に消えて、また鐘の音に戻ってしまう
+const _DORA_SHIMMER_HP0   = 2000;  // 下端: 打撃直後
+const _DORA_SHIMMER_HP1   = 3600;  // 下端: 広がりきった後（帯域が上へ移っていく）
+const _DORA_SHIMMER_LP    = 9000;  // 上端（これより上はシャリではなく単なるノイズになる）
 const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭が潰れて音が痩せるため、
                                // 旧実装と同程度のピーク（約1.3）に戻す値をレンダで実測して決めた
 /* 音量は「合計してもマスターリミッターに潰されない」ことを基準に決めてある。
@@ -2396,6 +2415,43 @@ const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭�
    音量を下げても目的の音色は失われない */
 const _DORA_BEND = 0.972;     // 打撃直後の下降しなり（低次のみ・元の97.2%まで）
 const _DORA_BEND_SEC = 0.22;  // しなりに掛ける時間
+/* シャリ層（_DORA_SHIMMER_* のコメント参照）。ノイズをループ再生し、
+   バンドパスの中心を上へ動かしながら、遅れて立ち上げてゆっくり減衰させる。
+   ノイズバッファはplayNoiseと同じ方針で使い分ける（実コンテキストでは事前生成の
+   共有バッファ、オフラインレンダではその場で生成）。ループさせるのは、
+   共有バッファが0.45秒しかなく、そのままでは余韻の長さに足りないため */
+function _playDoraShimmer(ctx, t, dest) {
+  let buf;
+  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
+    buf = _noiseBuffer;
+  } else {
+    const len = Math.ceil(ctx.sampleRate * 0.5);
+    buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  /* 帯域はハイパス＋ローパスの2段で「広く」取る。当初バンドパス1段(Q=0.8)にしたが、
+     ノイズのエネルギーの大半を捨ててしまい、低域に埋もれて全く聞こえなかった
+     （レンダで高域比が0.11→0.12としか動かず発覚）。下端だけを上へ動かすことで、
+     余韻が進むにつれて帯域が上へ移る＝細かくなっていく感じを作る */
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.Q.value = 0.7;
+  hp.frequency.setValueAtTime(_DORA_SHIMMER_HP0, t);
+  hp.frequency.exponentialRampToValueAtTime(_DORA_SHIMMER_HP1, t + _DORA_SHIMMER_ATK * 2.5);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = _DORA_SHIMMER_LP;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.linearRampToValueAtTime(_DORA_SHIMMER_VOL, t + _DORA_SHIMMER_ATK);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + _DORA_SHIMMER_DEC);
+  src.connect(hp); hp.connect(lp); lp.connect(gain); gain.connect(dest);
+  const stopAt = t + _DORA_SHIMMER_DEC + 0.05;
+  src.start(t); src.stop(stopAt);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, lp, gain);
+}
+
 function _playDoraHit(ctx, t, dest) {
   const out = _seDest(ctx, dest);
   /* 共鳴用のバス: [部分音の和] → drive → tanhソフトクリップ → ローパス → 出力。
@@ -2416,6 +2472,7 @@ function _playDoraHit(ctx, t, dest) {
   _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4);
   playNoise(ctx, t, 0.12, 0.50, 1500, out); // 胴鳴りのクラック（歪ませない）
   playNoise(ctx, t, 0.05, 0.22, 6000, out); // 金属の当たり（短く高い・歪ませない）
+  _playDoraShimmer(ctx, t, out);            // シャリ（遅れて広がる高域の響き）
   /* 2. 共鳴（金属的な唸り）: 各部分音を2本組で鳴らしてうなりを作る */
   const base = noteHz('A', 2); // boss_flashの雷鳴と同じ音高で統一
   for (const p of _DORA_PARTIALS) {
