@@ -250,25 +250,26 @@ function drawKeyDebug() {
    tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
    wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
 const PERF_ON = _dbgFlag('perf');
+const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
    スパイクのタグ付けも自動で追従する（以前は「_perfに項目追加→タグ配列に追加→
    表示行を手書き」と3箇所を触る必要があり、増やすたびに漏れる形だった）。
    line: 表示のまとめ方（同じ番号は1行に並ぶ）。withLast: 直近値も併記するか */
 const _PERF_PROBES = [
-  { key: 'drawOnly', label: 'drawOnly', line: 0, withLast: true, note: '追加フレームのdraw' },
+  { key: 'drawOnly', label: 'drawOnly', line: 0, withLast: true, note: '追加draw' },
   { key: 'tap',      label: 'tap',      line: 1 }, // handleGameClick（発射処理そのもの）
   { key: 'touch',    label: 'touch',    line: 1 }, // touchstartハンドラ全体（tapの外側も含む）
   { key: 'unlk',     label: 'unlk',     line: 1 }, // 音声アンロック（毎タップ呼ばれる）
   { key: 'focus',    label: 'foc',      line: 1 }, // canvas.focus()（フォーカスが外れている時だけ）
   { key: 'elev',     label: 'elev',     line: 1 }, // AVAudioSession昇格（成功するまで毎タップ）
-  { key: 'resOC',    label: 'resOC',    line: 2, withLast: true, note: 'shadowBlur' },
-  { key: 'pre',      label: 'wheel',    line: 3, withLast: true, note: '事前構築1個' },
+  { key: 'resOC',    label: 'resOC',    line: 2, withLast: true, note: 'blur' },
+  { key: 'pre',      label: 'wheel',    line: 3, withLast: true, note: '事前構築' },
   { key: 'ls',       label: 'lsW',      line: 4, withLast: true },
-  { key: 'bar',      label: 'bar',      line: 4, withLast: true, note: 'BETバー' },
-  { key: 'fx',       label: 'fx',       line: 5, withLast: true, note: '当たり演出+退場+アイテム' },
-  { key: 'whl',      label: 'whl',      line: 5, withLast: true, note: '的4個' },
-  { key: 'txt',      label: 'txt',      line: 5, withLast: true, note: '結果テキスト' },
+  { key: 'bar',      label: 'bar',      line: 4, withLast: true, note: 'BET' },
+  { key: 'fx',       label: 'fx',       line: 5, withLast: true, note: '演出' },
+  { key: 'whl',      label: 'whl',      line: 5, withLast: true, note: '的' },
+  { key: 'txt',      label: 'txt',      line: 5, withLast: true, note: '文字' },
 ];
 const _perf = {};
 for (const p of _PERF_PROBES) _perf[p.key] = { last: 0, max: 0, at: 0, ranAt: 0 };
@@ -330,21 +331,38 @@ function drawPerf() {
        el= <audio>要素の状態（p:paused e:ended t:currentTime）で、昇格の判定根拠 */
     `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}e${_iosAudioEl.ended ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
   ];
-  /* 計測行は_PERF_PROBESから組み立てる（同じline番号のものは1行に並べる） */
-  const byLine = new Map();
+  /* 計測行は_PERF_PROBESから組み立てる。同じline番号のものを1行に並べるが、
+     画面幅に収まらなければ実測幅で折り返す（縦画面W=420で右端が切れて読めなくなった
+     実機指摘への対応。プローブを増やしても溢れないよう、決め打ちではなく都度測る） */
+  ctx.font = _PERF_FONT; // measureTextのために先にフォントを確定させる
+  const maxW = W - 16;
+  let row = null, rowLine = -1;
   for (const pr of _PERF_PROBES) {
     const e = _perf[pr.key];
     const cell = `${pr.label} ${pr.withLast ? n(e.last) + '/' : ''}${n(e.max)}${pr.note ? '(' + pr.note + ')' : ''}`;
-    if (!byLine.has(pr.line)) byLine.set(pr.line, []);
-    byLine.get(pr.line).push(cell);
+    if (row !== null && pr.line === rowLine && ctx.measureText(row + '  ' + cell).width <= maxW) {
+      row += '  ' + cell;
+    } else {
+      if (row !== null) lines.push(row);
+      row = cell; rowLine = pr.line;
+    }
   }
-  for (const cells of byLine.values()) lines.push(cells.join('  '));
-  /* スパイク履歴（新しい順）。tagsが空なら詰まりはこちらのJSの外側 */
+  if (row !== null) lines.push(row);
+  /* スパイク履歴（新しい順）。tagsが空なら詰まりはこちらのJSの外側。
+     同時に多くのプローブが走った回はタグが長くなるため、幅に収まるまで後ろから
+     落として「…」を付ける（先頭ほど重要という順ではないが、切れて読めないよりよい） */
   for (const s of _perfSpikes) {
-    lines.push(`spike ${n(s.gap)}ms ${s.phase}#${s.idx ?? '-'} +${s.since}ms [${s.tags || '-'}]`);
+    const head = `spike ${n(s.gap)}ms ${s.phase}#${s.idx ?? '-'} +${s.since}ms `;
+    const tags = s.tags ? s.tags.split(',') : [];
+    let line = head + `[${tags.join(',') || '-'}]`;
+    while (tags.length > 1 && ctx.measureText(line).width > maxW) {
+      tags.pop();
+      line = head + `[${tags.join(',')}…]`;
+    }
+    lines.push(line);
   }
   ctx.save();
-  ctx.font = '11px monospace';
+  ctx.font = _PERF_FONT;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const lineH = 14, boxH = lineH * lines.length + 8;
   ctx.fillStyle = 'rgba(0,0,0,0.75)';
@@ -382,7 +400,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.09';
+const VERSION = 'v6.10';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
