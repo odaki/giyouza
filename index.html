@@ -253,6 +253,9 @@ const PERF_ON = _dbgFlag('perf');
 /* ?nofilter: グレースケールのCSSフィルターを一切適用しない（見た目は変わるが、
    フィルターが引っかかりの原因かどうかを実機で切り分けるための手段） */
 const GRAY_FILTER_OFF = _dbgFlag('nofilter');
+/* ?nobgm: BGMを一切鳴らさない（SEは鳴る）。「BGMの一周と同期して詰まる」という
+   実機報告に対し、オーディオスレッド由来かどうかを切り分けるための手段 */
+const BGM_OFF = _dbgFlag('nobgm');
 const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
@@ -273,6 +276,7 @@ const _PERF_PROBES = [
   { key: 'fx',       label: 'fx',       line: 5, withLast: true, note: '演出' },
   { key: 'whl',      label: 'whl',      line: 5, withLast: true, note: '的' },
   { key: 'txt',      label: 'txt',      line: 5, withLast: true, note: '文字' },
+  { key: 'king',     label: 'king',     line: 5, withLast: true, note: 'ボス描画' },
 ];
 const _perf = {};
 for (const p of _PERF_PROBES) _perf[p.key] = { last: 0, max: 0, at: 0, ranAt: 0 };
@@ -403,7 +407,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.13';
+const VERSION = 'v6.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2690,6 +2694,7 @@ function applyMuteGain() {
 
 /* BGMソース起動（ミュート状態を問わず起動。gain が音量を制御する） */
 function startBGM() {
+  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx) return;
   if (!bgmBuffer) {
     /* バッファがまだレンダリング中 → 完了後に自動起動するフラグを立てる */
@@ -2781,6 +2786,7 @@ function _stopBossBGMForVictory(fadeMs = 120) {
 /* テープが回り始めるように加速（ゲームオーバーリセット専用）
    既存ソースがあればその位置から加速、なければ新規作成 */
 function startBGMTape(durationMs = 1400) {
+  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx) return;
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
@@ -2820,6 +2826,7 @@ function startBGMTape(durationMs = 1400) {
    持っていく。バッファの差し替えを伴うため既存ソースは使い回さず必ず
    作り直す（レンダリング未完でbossBgmBufferがまだ無い場合は通常BGMで代用） */
 function startBossBGMTape(durationMs = 1400) {
+  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx || !bossBgmBuffer) { startBGMTape(durationMs); return; }
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
@@ -9330,7 +9337,10 @@ function draw() {
   /* スタートアップ画面 */
   drawStartup();
 
-  /* キングギヨウザ出現予告・戦闘・勝利演出（全画面演出・ボタン類より下、バッジ類より上） */
+  /* キングギヨウザ出現予告・戦闘・勝利演出（全画面演出・ボタン類より下、バッジ類より上）。
+     ここは通常モードのfx/whl/txtプローブの範囲外なので、独立して計測する
+     （戦闘中に全プローブが0.0なのにgapが50msという実機データの死角だった） */
+  const _tKing = PERF_ON ? performance.now() : 0;
   drawBossOmen();
   drawBossBattle();
   drawBossVictory();
@@ -9339,6 +9349,7 @@ function draw() {
   drawBossDefeat();
   drawBossDefeatShrink();
   drawBossDefeatOutro();
+  if (PERF_ON) _perfMark('king', _tKing);
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
   if (!_isBossBattlePhase()) drawSyncMeter();
