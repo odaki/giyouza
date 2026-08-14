@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.04';
+const VERSION = 'v6.05';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3487,12 +3487,10 @@ function gameOverReset() {
   bet        = 1;
   bestCoins  = Math.max(bestCoins ?? 0, 0); // best はそのまま
   isGameOver = false;
-  missPopups   = []; // ゲームオーバーリセット時はポップアップ・演出もクリア
-  payoutPopups = [];
+  _clearCrossTrialOverlays(); // ポップアップ・バナー・JUST!ラベル（寿命の分類は同関数のコメント参照）
 
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
-  syncJustTimer = 0; syncJustLabel = '';
   _resetFeverState();
   for (const g of items) g._dead = true; items = [];
   lsSave();
@@ -3610,6 +3608,20 @@ function _clearFxOutro() {
   for (const g of o.ghosts) _releaseGhost(g);
   o.worms.length = 0; o.yoyos.length = 0; o.ghosts.length = 0; o.fish.length = 0;
   o.rush = false; o.timer = 0;
+}
+
+/* ── 表示状態の寿命は3種類ある。新しい表示物を足すときは必ずどれかに割り当てる ──
+   1. トライ限定    : 毎トライの init() で消える。→ _clearTrialFxState()
+   2. トライ横断    : 次のトライへ持ち越して見せる（ポップアップ・バナー・JUST!ラベル）。
+                      自然減衰に任せるが、キングギヨウザ突入だけは消す。→ _clearCrossTrialOverlays()
+   3. 永続          : コイン・実績・統計。トライやフェーズでは消さない。
+   この区別を関数名として持たせておかないと、追加のたびに「_clearTrialFxStateに
+   入れてよいか」を考え直すことになる（実際、フィーバー終了バナーとJUST!ラベルで
+   2回考え直した。どちらも2に属し、1に入れると次トライへ持ち越す前に消えてしまう） */
+function _clearCrossTrialOverlays() {
+  missPopups = []; payoutPopups = [];
+  feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+  syncJustTimer = 0; syncJustLabel = '';
 }
 
 /* トライ終了時のエフェクト系状態を一括で後始末する（init()と_startBossOmen
@@ -6047,7 +6059,10 @@ function _startBossOmen() {
   _pendingWheelScheduled = false; _pendingWheelGen++;
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
   for (const g of items) g._dead = true; items = [];
-  missPopups = []; payoutPopups = []; // 暗転下に残ポップアップが透けないようクリア
+  /* トライ横断で見せている表示物（ポップアップ・フィーバーバナー・JUST!ラベル）は
+     phaseを見ずに描かれるため、暗転下に透けたりキング画面に重なったりする。
+     寿命の分類は_clearCrossTrialOverlaysのコメント参照 */
+  _clearCrossTrialOverlays();
   /* 直前の通常モードのエフェクト状態（ギヨギヨ等のhitType別演出、particles等）を
      init()と同じ後始末で完全にクリアする（_clearTrialFxState参照。実機指摘で発覚:
      ここが手薄だったため、当たり演出の途中でキングギヨウザが発動すると
@@ -6063,13 +6078,6 @@ function _startBossOmen() {
   isSlowSpin = false;
   slowRampEndTime = 0;
   slowHandLockUntil = 0;
-  /* フィーバー終了バナーとJUST!ラベルもトライ限定の表示なので同じ扱いにする。
-     どちらも自然減衰するタイマー方式でphaseを見ずに描かれるため、消さないと
-     キングギヨウザ画面に重なって出る（_clearTrialFxStateには入れられない:
-     あちらは毎トライのinit()から呼ばれるので、トライをまたいで見せる前提の
-     この2つを巻き添えで消してしまう） */
-  feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
-  syncJustTimer = 0; syncJustLabel = '';
   _buildBossOC();
   _omen = { step: 0, timer: 0, items: [], flash: 0 };
   phase = 'bossOmen';
