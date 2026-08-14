@@ -381,7 +381,8 @@ function drawPerf() {
   }
   const n = v => v.toFixed(1);
   const lines = [
-    `rAF ${_perfFps.toFixed(0)}fps  dpr ${_dpr}  canvas ${W * _dpr}x${H * _dpr}`,
+    `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}${_RS_AUTO ? '自動' : '固定'}(焼込${_dpr})` +
+      ` ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠 */
@@ -456,12 +457,102 @@ const _dpr = (() => {
   const v = _dbgNum('dpr');
   return v === null ? auto : Math.max(1, Math.min(3, v)); // ?dpr=3で上限を外して比較できる
 })();
-canvas.width  = W * _dpr;
-canvas.height = H * _dpr;
-ctx.scale(_dpr, _dpr);
+/* ── 実解像度の動的制御 ──
+   塗る量（＝実ピクセル数）が足りない端末を、実測で見つけて自動的に軽くする。
+   iPhone 11で遅いという実機報告への対応。ピクセル数は倍率の2乗で効くので、
+   2→1.5で44%減、2→1.25で61%減になる。過去に実機で「dprを下げると引っかかりが
+   ほぼ消える」ことは確認済みなので、塗る量が効く端末には確実に効く。
+
+   **キャッシュの焼き込み解像度(_dpr)は動かさない**のが要点。スプライトは論理サイズで
+   貼るので、実解像度が下がれば縮小されるだけで破綻しない。焼き直しが要らないので、
+   プールの作り直し・戦闘中の再構築といった危険な処理が一切発生しない
+   （_freeResultOCs等のプールは_dpr基準の大きさで貯まっており、焼き込み解像度を
+   動かすと古い大きさのまま再利用されて崩れる。そこを触らない設計にした）。
+
+   判定はwall-clock基準のtick間隔（_frameTimes と同じ値）で行う。
+   往復（ハンチング）を防ぐため、下げる条件より戻す条件をかなり厳しくし、
+   一度下げた位置より上へ戻すのは「戻して問題が出なかった」実績がある間だけにする */
+const _RS_LATE_MS      = 20;   // これを超えたtick間隔を取りこぼしとみなす（60Hzの16.7msに余裕）
+const _RS_WINDOW       = 120;  // 1窓のtick数（約2秒）
+const _RS_DOWN_RATIO   = 0.25; // 取りこぼし率がこれを超える窓が続いたら下げる
+const _RS_UP_RATIO     = 0.05; // これを下回る窓が続いたら戻す
+const _RS_DOWN_WINDOWS = 2;    // 下げるまでの連続窓数（約4秒）
+const _RS_UP_WINDOWS   = 8;    // 戻すまでの連続窓数（約16秒・戻しは慎重に）
+/* 段階は焼き込み解像度以下・1.0以上。_dpr=2なら 2 → 1.5 → 1.25 → 1.0 */
+const _RS_LEVELS = [...new Set([_dpr, 1.5, 1.25, 1].filter(v => v <= _dpr && v >= 1))]
+  .sort((a, b) => b - a);
+/* ?dpr= を明示した場合は自動制御しない（手動の比較を邪魔しないため） */
+const _RS_AUTO = (_dbgNum('dpr') === null) && _RS_LEVELS.length > 1;
+const _RS_UP_FAIL_WINDOWS = 8; // 戻した直後（この窓数以内）にまた落ちたら、その段階は諦める
+let _rsIdx = 0;        // 現在の段階（0が最も高精細）
+let _rsFloor = 0;      // これより上へは戻さない下限（戻して失敗したときだけ引き上げる）
+let _rsWin = 0, _rsLate = 0, _rsDown = 0, _rsUp = 0, _rsRatio = 0, _rsPending = -1;
+let _rsSinceUp = Infinity; // 最後に段階を戻してからの窓数
+let _renderScale = _RS_LEVELS[0];
+
+canvas.width  = Math.round(W * _renderScale);
+canvas.height = Math.round(H * _renderScale);
+ctx.scale(_renderScale, _renderScale);
+
+/* 実解像度を切り替える。キャッシュには触らないので、やることは
+   バッキングストアの確保し直しと変換の再設定だけ（canvas.width への代入で
+   コンテキストの状態がリセットされるため、scaleを掛け直す必要がある） */
+function _applyRenderScale(v) {
+  if (v === _renderScale) return;
+  _renderScale = v;
+  canvas.width  = Math.round(W * v);
+  canvas.height = Math.round(H * v);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(v, v);
+  bgGradient = ctx.createLinearGradient(0, 0, 0, H);
+  bgGradient.addColorStop(0, '#145c24');
+  bgGradient.addColorStop(0.5, '#0f5020');
+  bgGradient.addColorStop(1, '#0a3d18');
+  if (bgCanvas) {
+    bgCanvas.width  = canvas.width;
+    bgCanvas.height = canvas.height;
+    _paintBackgroundLayer();
+  }
+  _lastFilter = ''; // 次のdraw()で掛け直させる（要素の状態は残っているが安全側に倒す）
+}
+
+/* 1窓ぶんの取りこぼし率を評価して、次の段階を予約する（適用は安全な区切りで行う） */
+function _rsEvaluate() {
+  _rsRatio = _rsLate / _rsWin;
+  _rsWin = 0; _rsLate = 0;
+  if (_rsSinceUp !== Infinity) _rsSinceUp++;
+  if (_rsRatio > _RS_DOWN_RATIO) {
+    _rsUp = 0;
+    if (++_rsDown >= _RS_DOWN_WINDOWS && _rsIdx < _RS_LEVELS.length - 1) {
+      _rsDown = 0;
+      /* 戻した直後にまた落ちた＝その段階はこの端末には無理だった、とみなして下限を上げる。
+         下げるたびに下限を上げてしまうと二度と戻れなくなるので、失敗した時だけにする */
+      if (_rsSinceUp <= _RS_UP_FAIL_WINDOWS) _rsFloor = _rsIdx + 1;
+      _rsPending = _rsIdx + 1;
+    }
+  } else if (_rsRatio < _RS_UP_RATIO) {
+    _rsDown = 0;
+    if (++_rsUp >= _RS_UP_WINDOWS && _rsIdx > _rsFloor) {
+      _rsUp = 0;
+      _rsPending = _rsIdx - 1;
+    }
+  } else {
+    _rsDown = 0; _rsUp = 0;
+  }
+}
+
+/* 予約された段階を適用する。トライの区切り（init）から呼ぶ。
+   射っている最中に解像度を変えると、その1フレームがまるごと引っかかって見えるため */
+function _rsApplyPending() {
+  if (_rsPending < 0 || _rsPending === _rsIdx) { _rsPending = -1; return; }
+  const up = _rsPending < _rsIdx;
+  _rsIdx = _rsPending; _rsPending = -1;
+  if (up) _rsSinceUp = 0; // 戻した直後の再悪化を見張る（_rsEvaluate 参照）
+  _applyRenderScale(_RS_LEVELS[_rsIdx]);
+}
 
 
-const VERSION = 'v6.43';
+const VERSION = 'v6.44';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -614,7 +705,7 @@ function _prebuildStaticLayers() {
 function _paintBackgroundLayer() {
   if (!_LAYERS || !bgCtx || !_staticLayerCanvas) return;
   bgCtx.setTransform(1, 0, 0, 1, 0, 0);
-  bgCtx.drawImage(_staticLayerCanvas, 0, 0, W * _dpr, H * _dpr);
+  bgCtx.drawImage(_staticLayerCanvas, 0, 0, bgCanvas.width, bgCanvas.height);
 }
 
 /* ── 文字列キャッシュ（coins/bet が変わった時だけ再計算） ──
@@ -4150,6 +4241,9 @@ function _clearTrialFxState() {
 }
 
 function init(fromStartup, fromGameOver) {
+  /* 実解像度の切り替えはここで適用する（_rsApplyPending 参照）。
+     トライの区切りなら、切り替えに伴う1フレームぶんの間が体感に出ない */
+  if (_RS_AUTO) _rsApplyPending();
   if (fromStartup) {
     /* スタート時: initGame() は START ボタンの touchend から呼ばれる。
        iOS 内蔵スピーカーは物理2タップ必要（根本制約）。
@@ -11644,6 +11738,12 @@ function _gameLoop(t) {
       const _gap = t - _updateLastT;
       _frameTimes[_frameTimesIdx % _FRAME_BUF_SIZE] = _gap;
       _frameTimesIdx++;
+      /* 実解像度の自動制御（_RS_* 参照）。判定材料はこのtick間隔そのもの */
+      if (_RS_AUTO) {
+        _rsWin++;
+        if (_gap > _RS_LATE_MS) _rsLate++;
+        if (_rsWin >= _RS_WINDOW) _rsEvaluate();
+      }
       if (PERF_ON && _gap > _PERF_SPIKE_MS) _perfLogSpike(_gap);
     }
     _updateLastT = t;
