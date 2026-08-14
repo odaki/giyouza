@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.27';
+const VERSION = 'v6.28';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2388,7 +2388,8 @@ const _DORA_PARTIALS = [
    銅鑼ではなくファズギターの耳障りさになるため */
 const _DORA_DRIVE     = 2.6;   // 歪み前段のゲイン（大きいほど濁る）
 const _DORA_SHAPE     = 3.2;   // tanhカーブの強さ（_acidDistortionCurve）
-const _DORA_TONE_HZ   = 5200;  // 歪み後のローパス（耳障りな高次は落としつつ、シャリは残す）
+const _DORA_TONE_HZ   = 6000;  // 歪み後のローパス。シャリも同じバスへ通すため前版(5.2k)より上げるが、
+                               // 上げすぎると歪みが生む高次でシャリが白っぽくなるので中間に置く
 /* シャリ（金属の細かい響き）の層。
    実機評価「お寺の除夜の鐘みたいな感じがある。もっとシャリっとした余韻がほしい」。
    除夜の鐘に聞こえるのは、低い純音が長く伸びる一方で高域の密な響きが無いため。
@@ -2396,14 +2397,33 @@ const _DORA_TONE_HZ   = 5200;  // 歪み後のローパス（耳障りな高次�
    絶対に届かない（本数が桁違いなうえ、可聴域で等間隔に近く並ぶので個々が分離しない）。
    そこで帯域ノイズを1層足す。打撃と同時ではなく遅れて立ち上げるのが肝で、
    これが「打った後からシャーッと広がる」銅鑼特有の余韻になる（エネルギーが
-   低次モードから高次へ移っていく非線形現象の再現）。歪みバスは通さない
-   （ノイズを歪ませても質感が変わらないうえ、低域の濁りを薄めてしまう） */
-const _DORA_SHIMMER_VOL   = 0.42;  // シャリの音量（帯域を絞るぶん、素の値は大きく取る）
-const _DORA_SHIMMER_ATK   = 0.18;  // 立ち上がり（遅れて広がる）
+   低次モードから高次へ移っていく非線形現象の再現）。
+   当初は歪みバスを通さずドライで出していたが、本体との一体感が足りないという
+   実機評価を受けて歪みバス経由へ変更した（理由は下の設計メモ） */
+const _DORA_SHIMMER_VOL   = 0.125; // シャリの音量。歪みバス（drive 2.6倍）を通すので、
+                                   // ドライで鳴らしていた頃の値のままだと完全にクリップして
+                                   // 白色ノイズ同然になる。前版と同じ明るさに揃う値をレンダで実測
+const _DORA_SHIMMER_ATK   = 0.11;  // 立ち上がり（遅れて広がる。本体の高次のピークと重ねる）
 const _DORA_SHIMMER_DEC   = 2.6;   // 減衰。低域の余韻（最長2.9秒）に近い長さにする。
                                    // 短いと終盤で高域だけ先に消えて、また鐘の音に戻ってしまう
-const _DORA_SHIMMER_HP0   = 2000;  // 下端: 打撃直後
-const _DORA_SHIMMER_HP1   = 3600;  // 下端: 広がりきった後（帯域が上へ移っていく）
+/* 下端を最高部分音（16.3倍＝約1.8kHz）と重なる位置から始める。
+   2.0kHzから始めていたときは1.8〜2.5kHzに帯域の隙間ができ、本体とシャリが
+   別々の音に聞こえる一因になっていた（実機評価「一体感が足りない」） */
+const _DORA_SHIMMER_HP0   = 1500;  // 下端: 打撃直後
+const _DORA_SHIMMER_HP1   = 3200;  // 下端: 広がりきった後（帯域が上へ移っていく）
+/* 一体感のための設計メモ（実機評価「シャリと本体の一体感が足りない」への対応）。
+   耳が2つの音を1つと聞くかどうかは、主に次の手がかりで決まる:
+     ・立ち上がりが揃っているか   → ATKを180msから110msへ縮め、本体の高次部分音の
+                                    ピーク（約100ms）と重ねた
+     ・同じ増幅特性を共有するか   → シャリも歪みバスへ通す（本体が大きい間は
+                                    押さえ込まれ、減衰すると出てくる＝同じ板の中の出来事）
+     ・スペクトルが連続しているか → 下端を最高部分音と重なる1.5kHzから始め、
+                                    さらに1.8kHz付近を持ち上げて本体と橋渡しする
+   逆に、シャリだけを独立したLFOで揺らす案は撤回した。本体のうなり（部分音どうしの
+   干渉で生まれる）とは無関係な周期で揺れるため、かえって「別の音が乗っている」
+   手がかりになる。実装して測ったが改善が確認できず、原理的にも逆効果と判断した */
+const _DORA_SHIMMER_BRIDGE_HZ = 1800; // 本体の最高部分音（16.3倍）付近を持ち上げて繋ぐ
+const _DORA_SHIMMER_BRIDGE_DB = 6;
 const _DORA_SHIMMER_LP    = 9000;  // 上端（これより上はシャリではなく単なるノイズになる）
 const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭が潰れて音が痩せるため、
                                // 旧実装と同程度のピーク（約1.3）に戻す値をレンダで実測して決めた
@@ -2446,10 +2466,16 @@ function _playDoraShimmer(ctx, t, dest) {
   gain.gain.setValueAtTime(0.0001, t);
   gain.gain.linearRampToValueAtTime(_DORA_SHIMMER_VOL, t + _DORA_SHIMMER_ATK);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + _DORA_SHIMMER_DEC);
-  src.connect(hp); hp.connect(lp); lp.connect(gain); gain.connect(dest);
+  /* 橋渡し: 本体の最高部分音の付近を持ち上げ、本体とシャリの帯域を繋ぐ */
+  const bridge = ctx.createBiquadFilter();
+  bridge.type = 'peaking';
+  bridge.frequency.value = _DORA_SHIMMER_BRIDGE_HZ;
+  bridge.Q.value = 1.0;
+  bridge.gain.value = _DORA_SHIMMER_BRIDGE_DB;
+  src.connect(hp); hp.connect(lp); lp.connect(bridge); bridge.connect(gain); gain.connect(dest);
   const stopAt = t + _DORA_SHIMMER_DEC + 0.05;
   src.start(t); src.stop(stopAt);
-  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, lp, gain);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, lp, bridge, gain);
 }
 
 function _playDoraHit(ctx, t, dest) {
@@ -2472,7 +2498,11 @@ function _playDoraHit(ctx, t, dest) {
   _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4);
   playNoise(ctx, t, 0.12, 0.50, 1500, out); // 胴鳴りのクラック（歪ませない）
   playNoise(ctx, t, 0.05, 0.22, 6000, out); // 金属の当たり（短く高い・歪ませない）
-  _playDoraShimmer(ctx, t, out);            // シャリ（遅れて広がる高域の響き）
+  /* シャリも歪みバスへ通す。当初は歪ませずに出していたが、本体だけが非線形を
+     通ることで「別系統の音が上に乗っている」ように聞こえていた（実機評価）。
+     同じ歪みを共有すると、本体が大きい間はシャリが押さえ込まれ、本体が減衰すると
+     出てくる＝1枚の金属板の中で起きている感じになる（本体とシャリの相互変調も生まれる） */
+  _playDoraShimmer(ctx, t, d);
   /* 2. 共鳴（金属的な唸り）: 各部分音を2本組で鳴らしてうなりを作る */
   const base = noteHz('A', 2); // boss_flashの雷鳴と同じ音高で統一
   for (const p of _DORA_PARTIALS) {
