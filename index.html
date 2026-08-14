@@ -332,7 +332,7 @@ function drawPerf() {
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused e:ended t:currentTime）で、昇格の判定根拠 */
-    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}e${_iosAudioEl.ended ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
+    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try park${_iosSessionParked ? 1 : 0} el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
     /* 出力遅延の内訳。Bluetooth（AirPods等）で音が遅れて感じるときはここを見る。
        hw = 補正に使っている値。base/out はブラウザの申告値（iOS Safari は out 未実装）、
        ts = getOutputTimestamp から推定した実効値。src はどれを採用したか。
@@ -437,7 +437,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.32';
+const VERSION = 'v6.33';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1760,6 +1760,7 @@ function _recreateAudioGraph() {
      無音要素がまだ鳴り続けていれば次のタップで即座に「昇格済み」と再判定され、
      割り込みで止められていれば play() から再開される */
   _iosSessionElevated = false;
+  _iosSessionParked   = false; // 待避も解除する（新しいセッションでは鳴らし直しから）
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
@@ -1816,8 +1817,27 @@ let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確
    システム側の出力バッファ設定が変わっている可能性を切り分ける。
    このフラグを付けると消音モード（🔕）では音が出なくなるので、常用してはいけない */
 const _NO_ELEVATE = _dbgFlag('noelev');
+/* 昇格を確認できたら無音要素を止める（＝待避）。
+   実機計測（iPhone + AirPods Pro 3、?perf の lat 行）で、鳴らし続けている間は
+   outputLatency が 163ms もあり、タップから発射音までの遅れとして体感に出ていた。
+   ?noelev で無音要素を止めると改善することをユーザーが実機で確認済み。
+   iOS は再生中のストリームの構成に応じて出力バッファを決めるため、8kHzの無音を
+   鳴らし続けること自体が Bluetooth 経路のバッファを大きくしていたとみられる。
+
+   止めても昇格が保たれるかは iOS 側の実装次第なので、次の経路で必ず再武装する:
+     ・AudioContext の作り直し（_recreateAudioGraph）＝割り込み復帰
+     ・バックグラウンドから戻ったとき（visibilitychange）
+   ?holdelev を付けると従来どおり鳴らし続ける（消音モードで音が出なくなった場合の
+   切り分け・退避用）。消音モードではこの昇格が唯一の発音経路なので、
+   実機で「消音スイッチON＋音が出ること」を確認するまでは暫定の変更として扱う */
+const _ELEV_HOLD = _dbgFlag('holdelev');
+const _ELEV_MIN_SEC = 0.3; // これだけ実際に鳴らしてから待避する
+let _iosSessionParked = false;
 function _elevateAudioSession() {
   if (_NO_ELEVATE) return;
+  /* 待避中: 再武装は上記の2経路が _iosSessionParked を降ろすことで行う。
+     「一度立てたら降ろさないフラグ」にしないこと（過去に無音の退行を出した） */
+  if (_iosSessionParked) return;
   /* 成功するまで、タップのたびに無条件で試み続ける。ここに「賢い」抑制を入れてはいけない。
      この昇格はAVAudioSessionをAmbient→Playbackに上げて消音スイッチをバイパスする
      ためのもので、昇格できないまま試行をやめると消音モードで一切音が出なくなる。
@@ -1840,7 +1860,15 @@ function _elevateAudioSession() {
      （_SILENT_WAV_URI参照）。pausedも併せて見るのは、システム側の割り込みで
      止められた場合に再開できるようにするため。
      判定が真にならないうちは毎タップ試み続けるので、諦めて無音になる経路は無い */
-  if (!_iosAudioEl.paused && _iosAudioEl.currentTime > 0) { _iosSessionElevated = true; return; }
+  if (!_iosAudioEl.paused && _iosAudioEl.currentTime > 0) {
+    _iosSessionElevated = true;
+    /* 十分に鳴ったら止める（出力バッファを小さく保つため。上記コメント参照） */
+    if (!_ELEV_HOLD && _iosAudioEl.currentTime >= _ELEV_MIN_SEC) {
+      _iosAudioEl.pause();
+      _iosSessionParked = true;
+    }
+    return;
+  }
   /* ループの境目でcurrentTimeが0付近を返す一瞬だけのために鳴らし直さない。
      再生中（paused=false）かつ一度でも進行を確認できていれば、そのまま昇格済み扱い */
   if (!_iosAudioEl.paused && _iosSessionElevated) return;
@@ -1851,6 +1879,13 @@ function _elevateAudioSession() {
   _iosSessionTries++;
   _iosAudioEl.play().catch(() => {});
 }
+/* 待避の再武装（フォアグラウンド復帰）。バックグラウンドの間にセッションが
+   降ろされている可能性があるため、次のタップで昇格をやり直せるようにする。
+   ここで resume() や play() を呼ばないこと（ジェスチャー外の再生要求は失敗し、
+   visibilitychange での resume は interrupted の検知を壊す。README/メモ参照） */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) _iosSessionParked = false;
+});
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
