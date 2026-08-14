@@ -356,14 +356,15 @@ function drawPerf() {
     const grid = BGM_BEAT / 2;
     if (grid > 0) {
       const mod = v => ((v % grid) + grid) % grid;
-      const pos = mod(_hwLatency + _SE_PAD);
+      const _pad = _shootSEPad();
+      const pos = mod(_hwLatency + _pad);
       /* pad  : 機械の遅延だけをグリッドに載せる値
          pad人: プレイヤーが平均して早めに叩く分(_JUDGE_TRIM)も込みで載せる値。
                 「拍に合わせて叩いたつもりの位置」に対して音を揃えたいならこちら
                 （人は平均20〜40ms先行して叩く＝negative mean asynchrony） */
-      lines.push(`sepad ${ms(_SE_PAD)} grid ${(grid * 1000).toFixed(0)} 位置 ${(pos / grid * 100).toFixed(0)}%` +
+      lines.push(`sepad ${ms(_pad)}${_SE_PAD_OVERRIDE !== null ? '*' : ''} grid ${(grid * 1000).toFixed(0)} 位置 ${(pos / grid * 100).toFixed(0)}%` +
                  ` pad ${(mod(grid - pos) * 1000).toFixed(0)}` +
-                 ` pad人 ${(mod(grid - mod(_hwLatency + _SE_PAD - _JUDGE_TRIM)) * 1000).toFixed(0)}`);
+                 ` pad人 ${(mod(grid - mod(_hwLatency + _pad - _JUDGE_TRIM)) * 1000).toFixed(0)}`);
     }
   }
   /* 計測行は_PERF_PROBESから組み立てる。同じline番号のものを1行に並べるが、
@@ -459,7 +460,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.38';
+const VERSION = 'v6.39';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1445,21 +1446,34 @@ const _JUDGE_BIAS = 0.037;
 /* 入力判定専用の較正（?jlat=ms、既定バイアスへの加算。正の値で判定グリッドをさらに早める。
    表示には影響しない。再較正・実験用 */
 const _JUDGE_TRIM = _JUDGE_BIAS + _dbgNum('jlat', 0) / 1000;
-/* 発射SEだけに乗せる固定の遅らせ幅（?sepad=ms、既定0＝従来どおり即時）。
+/* 発射SEだけに乗せる固定の遅らせ幅。
 
    これは「量子化」ではない。全射に同じ秒数を足すだけなので、プレイヤーの
    ズレはそのまま保存される（20ms早い人は足した後も20ms早い）。
    タイミング精度の報酬という設計の核（SEスナップを2度廃止した理由）には触れない。
 
-   何のためか: Bluetooth出力の遅延が8分音符グリッド(197.4ms)の整数倍から
-   外れていると、「狙った拍の少し手前」に自分の音が着地して気持ち悪い。
-   実機で outputLatency=163ms（＝グリッドの83%）が観測されており、
-   以前この環境で「BT遅延≈200msはグリッドとほぼ一致するので補正なしでも
-   合って聞こえる」と確認していた状態から、ちょうど外れた位置に動いている。
-   足し込んでグリッドの整数倍に載せると、1グリッド後ろに着地する＝音楽的に
-   破綻しない鳴り方に戻る。代償は絶対遅延が数十ms増えること。
-   _perfのlat行に、グリッドに載せるのに必要な値(pad)を計算して出している */
-const _SE_PAD = _dbgNum('sepad', 0) / 1000;
+   何のためか: Bluetooth出力の遅延が8分音符グリッド(197.4ms)の整数倍から外れていると、
+   「狙った拍の少し手前」に自分の音が着地して気持ち悪い。実機で outputLatency=163ms
+   （＝グリッドの84%）が観測されており、以前この環境で「BT遅延≈200msはグリッドと
+   ほぼ一致するので補正なしでも合って聞こえる」と確認していた状態から外れた位置に
+   動いていた。実機報告「遅延自体は前からある。長さが気持ち悪いタイミングに変わった」
+   はこれで説明が付く。
+
+   値は実機で較正した（AirPods Pro 3、hw=166ms）。31（グリッドぴったり）と
+   68（人の先行タップ+37msも込み）も試したうえで、16が最良という評価。
+   グリッド整列の理屈は「0では駄目」までは当てたが、最良点そのものは当てられて
+   いない（16はグリッドの92%＝16ms手前）。理屈より実機の感覚を採る。
+
+   内蔵スピーカーのように遅延が小さい出力では足さない。足してもグリッドには
+   到底届かず（届かせるには約170ms必要）、ただ反応が鈍るだけになるため。
+   ?sepad=ms を付けるとこの自動判定を上書きする（再較正・実験用） */
+const _SE_PAD_OVERRIDE = _DBG_QUERY.has('sepad') ? _dbgNum('sepad', 0) / 1000 : null;
+const _SE_PAD_BT_MIN = 0.08;   // これ以上の出力遅延をBluetooth級とみなす
+const _SE_PAD_BT     = 0.016;  // Bluetooth時に足す幅（実機較正値）
+function _shootSEPad() {
+  if (_SE_PAD_OVERRIDE !== null) return _SE_PAD_OVERRIDE;
+  return _hwLatency >= _SE_PAD_BT_MIN ? _SE_PAD_BT : 0;
+}
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
   let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
@@ -11757,9 +11771,10 @@ function onShoot(_inputPerfMs){
      「正確に打てた時だけ音が拍に揃って聞こえる」こと自体がゲーム性の核であり、
      ズレた入力を補正して気持ちよく鳴らすのは設計思想に反するため廃止
      （着弾音のビートスナップ廃止に続き2度目の同結論。以後再試行しない） */
-  /* 既定(_SE_PAD=0)では従来どおり即時。?sepad=ms を付けたときだけ、
-     出力遅延をグリッドの整数倍に載せるための固定幅を足す（_SE_PAD参照） */
-  playSE('shoot', (audioCtx && _SE_PAD > 0) ? audioCtx.currentTime + 0.01 + _SE_PAD : undefined);
+  /* Bluetooth出力のときだけ、聴こえる位置をグリッドへ寄せる幅を足す
+     （_shootSEPad参照。内蔵スピーカー等では0＝従来どおり即時） */
+  const _pad = audioCtx ? _shootSEPad() : 0;
+  playSE('shoot', _pad > 0 ? audioCtx.currentTime + 0.01 + _pad : undefined);
   /* ── ビートシンク評価（先頭でキャプチャした値を使用） ── */
   if (_syncScore !== null) {
     const score = _syncScore;
