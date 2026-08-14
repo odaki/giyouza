@@ -355,9 +355,15 @@ function drawPerf() {
                ` / ts ${ms(_hwLatEff)} sr ${(audioCtx.sampleRate / 1000).toFixed(1)}k`);
     const grid = BGM_BEAT / 2;
     if (grid > 0) {
-      const posInGrid = ((_hwLatency + _SE_PAD) % grid + grid) % grid;
-      lines.push(`sepad ${ms(_SE_PAD)} grid ${(grid * 1000).toFixed(0)}` +
-                 ` 位置 ${(posInGrid / grid * 100).toFixed(0)}% pad ${((grid - posInGrid) * 1000).toFixed(0)}`);
+      const mod = v => ((v % grid) + grid) % grid;
+      const pos = mod(_hwLatency + _SE_PAD);
+      /* pad  : 機械の遅延だけをグリッドに載せる値
+         pad人: プレイヤーが平均して早めに叩く分(_JUDGE_TRIM)も込みで載せる値。
+                「拍に合わせて叩いたつもりの位置」に対して音を揃えたいならこちら
+                （人は平均20〜40ms先行して叩く＝negative mean asynchrony） */
+      lines.push(`sepad ${ms(_SE_PAD)} grid ${(grid * 1000).toFixed(0)} 位置 ${(pos / grid * 100).toFixed(0)}%` +
+                 ` pad ${(mod(grid - pos) * 1000).toFixed(0)}` +
+                 ` pad人 ${(mod(grid - mod(_hwLatency + _SE_PAD - _JUDGE_TRIM)) * 1000).toFixed(0)}`);
     }
   }
   /* 計測行は_PERF_PROBESから組み立てる。同じline番号のものを1行に並べるが、
@@ -453,7 +459,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.37';
+const VERSION = 'v6.38';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
