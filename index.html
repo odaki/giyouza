@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.25';
+const VERSION = 'v6.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2176,9 +2176,15 @@ function _playTaikoHit(ctx, t, dest, kind) {
 
 /* ソフトクリップ歪みカーブ（TB-303風アシッドベースの「凶悪」な唸りに使う） */
 function _acidDistortionCurve(amount) {
-  const n = 256, curve = new Float32Array(n);
+  /* テーブル長は奇数にし、入力値の対応も端点ぴったり（-1〜+1）に取る。
+     偶数長かつ x=(i*2)/n-1 だと、WaveShaperが入力0を curve[127]とcurve[128]の
+     中間として補間する結果、無音のときに約-0.0125の直流が出続ける。
+     銅鑼（_playDoraHit）の余韻を測っていて、2秒以降ずっと一定値が残るので発覚した。
+     直流はヘッドルームを食い、ノードを切る瞬間にプツッというクリックにもなる。
+     奇数長なら中央のマスがちょうど入力0に対応し、tanh(0)=0で直流が出ない */
+  const n = 257, curve = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    const x = (i * 2) / n - 1;
+    const x = -1 + (2 * i) / (n - 1); // i=(n-1)/2 のとき厳密に0
     curve[i] = Math.tanh(x * amount) / Math.tanh(amount); // tanhソフトクリップ、ピークで正規化
   }
   return curve;
@@ -2357,15 +2363,31 @@ const _DORA_PARTIALS = [
   /* ratio: 基音に対する比（非整数＝ベル/銅鑼の定石。整数比だと管楽器的になる）
      vol  : 音量比 / decay: 減衰秒 / attack: 立ち上がり秒（ブルーム）
      detune: 二重化する相方のずらし率（うなりの速さを決める） */
-  { ratio: 1.00, vol: 0.145, decay: 3.2, attack: 0.010, detune: 0.006 },
-  { ratio: 1.52, vol: 0.110, decay: 2.9, attack: 0.014, detune: 0.008 },
+  { ratio: 0.50, vol: 0.130, decay: 2.9, attack: 0.008, detune: 0.004 }, // 胴の芯（太さ担当）
+  { ratio: 1.00, vol: 0.145, decay: 2.8, attack: 0.010, detune: 0.006 },
+  { ratio: 1.19, vol: 0.085, decay: 2.6, attack: 0.012, detune: 0.009 },
+  { ratio: 1.52, vol: 0.110, decay: 2.5, attack: 0.014, detune: 0.008 },
   { ratio: 2.00, vol: 0.095, decay: 2.6, attack: 0.020, detune: 0.005 },
+  { ratio: 2.35, vol: 0.070, decay: 2.4, attack: 0.025, detune: 0.013 },
   { ratio: 2.76, vol: 0.072, decay: 2.2, attack: 0.030, detune: 0.010 },
   { ratio: 3.30, vol: 0.055, decay: 1.9, attack: 0.045, detune: 0.012 },
   { ratio: 4.20, vol: 0.042, decay: 1.6, attack: 0.060, detune: 0.009 },
   { ratio: 5.40, vol: 0.030, decay: 1.3, attack: 0.080, detune: 0.011 },
   { ratio: 7.10, vol: 0.022, decay: 1.0, attack: 0.100, detune: 0.014 },
 ];
+/* 歪み: 部分音を合成した「和」に対して掛ける。個々の部分音を歪ませても倍音が
+   増えるだけだが、和を歪ませると部分音どうしの相互変調（和音・差音）が生まれる。
+   これが銅鑼を強く打ったときのガシャンとした濁り＝「歪んだ太い感じ」の正体
+   （ユーザー要望「もっと歪んだような太いような感じに」）。
+   減衰に従って入力が小さくなると自然に歪みが薄れるので、強打の直後だけ濁って
+   最後は澄んでいく、という実物の振る舞いがそのまま出る（時間制御は不要）。
+   出力側でローパスを掛けているのは、tanhが生む高次の成分をそのまま出すと
+   銅鑼ではなくファズギターの耳障りさになるため */
+const _DORA_DRIVE     = 2.6;   // 歪み前段のゲイン（大きいほど濁る）
+const _DORA_SHAPE     = 3.2;   // tanhカーブの強さ（_acidDistortionCurve）
+const _DORA_TONE_HZ   = 3800;  // 歪み後のローパス（耳障りな高次を落とす）
+const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭が潰れて音が痩せるため、
+                               // 旧実装と同程度のピーク（約1.3）に戻す値をレンダで実測して決めた
 /* 音量は「合計してもマスターリミッターに潰されない」ことを基準に決めてある。
    部分音を2本組にしたぶん本数が倍（16本）になっており、素直に重ねると合計振幅が
    1.5に達してリミッターがアタックを削ってしまう（オフラインレンダで実測）。
@@ -2375,13 +2397,25 @@ const _DORA_PARTIALS = [
 const _DORA_BEND = 0.972;     // 打撃直後の下降しなり（低次のみ・元の97.2%まで）
 const _DORA_BEND_SEC = 0.22;  // しなりに掛ける時間
 function _playDoraHit(ctx, t, dest) {
-  const d = _seDest(ctx, dest);
+  const out = _seDest(ctx, dest);
+  /* 共鳴用のバス: [部分音の和] → drive → tanhソフトクリップ → ローパス → 出力。
+     歪みを個別ではなくここへ掛けることで相互変調が生まれる（上記コメント参照）。
+     インパクトの低音もこのバスへ通して一緒に潰し、「バーン」を太くする。
+     ノイズ2種はバスを通さない: 歪ませると打撃の粒立ちが潰れて締まりが無くなる */
+  const drive  = ctx.createGain();  drive.gain.value = _DORA_DRIVE;
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = _acidDistortionCurve(_DORA_SHAPE);
+  shaper.oversample = '4x'; // エイリアシング（金属音では特に耳につく）を抑える
+  const tone   = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = _DORA_TONE_HZ;
+  const outG   = ctx.createGain();  outG.gain.value = _DORA_OUT_GAIN;
+  drive.connect(shaper); shaper.connect(tone); tone.connect(outG); outG.connect(out);
+  const d = drive; // 以降、共鳴系はこのバスへ繋ぐ
   /* 1. インパクト（バーン）: 低音の急減衰スライド＋ノイズ2種。
         ノイズを2つに分けているのは、低め(1.5kHz)だけだと「ドスン」で終わり、
         金属を叩いた瞬間の高い当たり音が出ないため。短い高域を重ねる */
   _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4);
-  playNoise(ctx, t, 0.12, 0.50, 1500, d); // 胴鳴りのクラック
-  playNoise(ctx, t, 0.05, 0.22, 6000, d); // 金属の当たり（短く高い）
+  playNoise(ctx, t, 0.12, 0.50, 1500, out); // 胴鳴りのクラック（歪ませない）
+  playNoise(ctx, t, 0.05, 0.22, 6000, out); // 金属の当たり（短く高い・歪ませない）
   /* 2. 共鳴（金属的な唸り）: 各部分音を2本組で鳴らしてうなりを作る */
   const base = noteHz('A', 2); // boss_flashの雷鳴と同じ音高で統一
   for (const p of _DORA_PARTIALS) {
@@ -2404,6 +2438,10 @@ function _playDoraHit(ctx, t, dest) {
       if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
     }
   }
+  /* バスは最も長い部分音が鳴り終わってから切る */
+  let last = 0;
+  for (const p of _DORA_PARTIALS) if (p.decay > last) last = p.decay;
+  if (ctx === audioCtx) _disconnectAfter(ctx, t + last + 0.1, drive, shaper, tone, outG);
 }
 
 /* こんがり達成（キング撃破）専用の達成感あるファンファーレ
