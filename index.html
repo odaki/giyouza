@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.02';
+const VERSION = 'v6.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1104,6 +1104,7 @@ let _pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
    OffscreenCanvas はプールで再利用してアロケーションをゼロにする。 */
 let _pendingWheels        = null;  // 事前構築済みホイール（null=未構築）
 let _pendingWheelScheduled= false; // スケジュール済みフラグ（重複防止）
+let _pendingWheelGen      = 0;     // 事前構築チェーンの世代（古いチェーンの上書きを防ぐ。_scheduleWheelPreBuild参照）
 const _freeWheelOCs       = [];    // 解放済みOCプール（再利用でGCゼロ）
 const _freeResultOCs      = [];    // 結果文字OCプール（固定サイズで再利用）
 const _freeKingReelOCs    = [];    // キング的OCプール（通常ホイールとサイズが異なるため別管理）
@@ -1166,9 +1167,14 @@ function _scheduleWheelPreBuild() {
   /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
      feverPending/isFever が真の場合は init() 側で再構築（レアケース）。
      完成した4個が揃うまで_pendingWheelsへは入れない（途中の配列を
-     init()に拾わせないため。init()は _pendingWheels===null なら同期生成する） */
+     init()に拾わせないため。init()は _pendingWheels===null なら同期生成する）。
+     世代番号を持つのは、構築が的1個ずつの遅延実行に分かれていて、完了前に
+     init()や_startBossOmenが次の世代を立ち上げうるため。古い世代がそのまま
+     走り続けると、後から_pendingWheelsを1世代前の内容で上書きしてしまう */
+  const gen = ++_pendingWheelGen;
   const parts = [];
   const step = () => {
+    if (gen !== _pendingWheelGen) { _releaseWheelOCs(parts); return; } // 世代交代済み: 作りかけを返却して降りる
     if (parts.length < WXS.length) {
       const i = parts.length;
       const _t0 = PERF_ON ? performance.now() : 0;
@@ -1494,15 +1500,6 @@ function calcSyncScore(atPerfMs) {
   return Math.max(0, 1 - distMs / 100); // 0ms→1.0, 100ms→0.0, 100ms超→0
 }
 
-/* 次の1/4拍グリッド境界点のaudioCtx時刻を返す（SE先読みスケジュール用） */
-function nextBeatDivTime(divsPerBeat = 4) {
-  if (!audioCtx || bgmPhaseRef === null) return audioCtx ? audioCtx.currentTime + 0.01 : 0;
-  const divDur  = BGM_BEAT / divsPerBeat;
-  const elapsed = audioCtx.currentTime - bgmPhaseRef;
-  const nextDiv = Math.ceil(elapsed / divDur + 0.02); // 0.02=ほぼ同時でも次グリッドへ
-  return bgmPhaseRef + nextDiv * divDur;
-}
-
 /* masterGainの出力先に挟む常時有効のセーフティリミッター。
    実機報告: cheatpanelのACH一括解除（最大18件）で実績解除音('ach')が
    同時に18重に重なり、音が割れて（クリッピングして）聞こえた。
@@ -1739,9 +1736,11 @@ function _elevateAudioSession() {
        2. 解決前の再入を防ぐフラグ → iOSのplay()は再生できないときPromiseが
           解決も拒否もしないことがあり、フラグが立ちっぱなしで二度と試行されなくなった
           （?perfのsess表示が 0/1try のまま固まって発覚）
+       3. 一度立てたら降ろさないフラグ（`if (_iosSessionElevated) return;`）→ システム側の
+          割り込みで無音要素が止められると、鳴っていないのに昇格済みのままになり再開できない
      Promiseの解決を前提にした制御を書かないこと。呼び出しコストの心配より、
-     音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった */
-  if (_iosSessionElevated) return;
+     音が鳴らないほうが致命的。実機計測でもこの経路（unlk）は0.0msだった。
+     フラグは「毎回その場で確かめた結果」を持つだけで、判断そのものには使わない */
   /* 昇格できたかの判定は「実際に再生位置が進んでいて、かつ止まっていない」ことで見る。
      判定材料の選定を2度間違えた記録（どちらも実機で無音の退行を出した）:
        ・Promiseの解決 → iOSでは解決も拒否もしないことがあり、永久に判定できない
@@ -1751,12 +1750,16 @@ function _elevateAudioSession() {
      （_SILENT_WAV_URI参照）。pausedも併せて見るのは、システム側の割り込みで
      止められた場合に再開できるようにするため。
      判定が真にならないうちは毎タップ試み続けるので、諦めて無音になる経路は無い */
-  if (_iosAudioEl.currentTime > 0 && !_iosAudioEl.paused) {
-    _iosSessionElevated = true;
-    return;
-  }
+  if (!_iosAudioEl.paused && _iosAudioEl.currentTime > 0) { _iosSessionElevated = true; return; }
+  /* ループの境目でcurrentTimeが0付近を返す一瞬だけのために鳴らし直さない。
+     再生中（paused=false）かつ一度でも進行を確認できていれば、そのまま昇格済み扱い */
+  if (!_iosAudioEl.paused && _iosSessionElevated) return;
+  /* ここへ来た＝止められている。フラグを畳んでから鳴らし直す。
+     成功をplay()のPromiseで確定させない（解決しても実際に鳴り続けているとは限らず、
+     フラグが立ったまま止まると二度と再開しなくなる。判定は上の再生状態だけで行う） */
+  _iosSessionElevated = false;
   _iosSessionTries++;
-  _iosAudioEl.play().then(() => { _iosSessionElevated = true; }).catch(() => {});
+  _iosAudioEl.play().catch(() => {});
 }
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
@@ -4338,7 +4341,11 @@ function update() {
       phase = 'idle';
       /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
       if (isSlowSpin) rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // ゲームオーバーリカバリー後もBET対応速度へ
-      if (pendingShoot) { pendingShoot = false; onShoot(); }
+      /* 先打ちバッファの消費前に射撃ガードを解除する（_doAutoReset・クリック経路と同じ扱い）。
+         init()が張った100msのガードがまだ生きていると onShoot() が黙って弾かれ、
+         溜めていた1発が消える。無音起動（bgmSource無し）ではテープ加速が初回フレームで
+         完了するため、ガードが残ったままここへ到達しうる */
+      if (pendingShoot) { pendingShoot = false; shootGuardUntil = 0; onShoot(); }
     }
     return;
   }
@@ -6022,7 +6029,10 @@ function _maybeStartBossOmen() {
 
 function _startBossOmen() {
   pendingShoot = false;
-  _releaseWheelOCs(_pendingWheels); _pendingWheels = null; _pendingWheelScheduled = false;
+  /* 事前構築は世代番号を進めて打ち切る。フラグを倒すだけでは、遅延実行の途中に
+     いるチェーンが後から_pendingWheelsを書き戻してしまう（_scheduleWheelPreBuild参照） */
+  _releaseWheelOCs(_pendingWheels); _pendingWheels = null;
+  _pendingWheelScheduled = false; _pendingWheelGen++;
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
   for (const g of items) g._dead = true; items = [];
   missPopups = []; payoutPopups = []; // 暗転下に残ポップアップが透けないようクリア
@@ -6041,6 +6051,13 @@ function _startBossOmen() {
   isSlowSpin = false;
   slowRampEndTime = 0;
   slowHandLockUntil = 0;
+  /* フィーバー終了バナーとJUST!ラベルもトライ限定の表示なので同じ扱いにする。
+     どちらも自然減衰するタイマー方式でphaseを見ずに描かれるため、消さないと
+     キングギヨウザ画面に重なって出る（_clearTrialFxStateには入れられない:
+     あちらは毎トライのinit()から呼ばれるので、トライをまたいで見せる前提の
+     この2つを巻き添えで消してしまう） */
+  feverEndBannerTimer = 0; feverEndBannerReason = null; feverStartBannerTimer = 0;
+  syncJustTimer = 0; syncJustLabel = '';
   _buildBossOC();
   _omen = { step: 0, timer: 0, items: [], flash: 0 };
   phase = 'bossOmen';
@@ -9564,23 +9581,6 @@ function drawWheel(i) {
   ctx.restore();
 }
 
-function drawArrow(x,y,embedded,angle=0) {
-  ctx.save(); ctx.translate(x,y); if(angle) ctx.rotate(angle);
-  const shaft=embedded?68:58;
-  ctx.beginPath(); ctx.moveTo(0,embedded?0:4); ctx.lineTo(0,-shaft);
-  ctx.strokeStyle='#7a4a10'; ctx.lineWidth=4; ctx.lineCap='round'; ctx.stroke();
-  if (!embedded){
-    ctx.beginPath(); ctx.moveTo(0,9); ctx.lineTo(-6,-5); ctx.lineTo(6,-5);
-    ctx.closePath(); ctx.fillStyle='#555'; ctx.fill();
-  }
-  const fy=-shaft+12;
-  ctx.strokeStyle=GN2; ctx.lineWidth=3.5; ctx.lineCap='round';
-  ctx.beginPath(); ctx.moveTo(0,fy); ctx.lineTo(-13,fy-22); ctx.moveTo(0,fy); ctx.lineTo(13,fy-22); ctx.stroke();
-  ctx.strokeStyle=YD; ctx.lineWidth=2.5;
-  ctx.beginPath(); ctx.moveTo(0,fy+10); ctx.lineTo(-9,fy-8); ctx.moveTo(0,fy+10); ctx.lineTo(9,fy-8); ctx.stroke();
-  ctx.restore();
-}
-
 /* ── 矢の3D飛翔エフェクト ──────────────────────────────────
    弓道の映像のように矢を横から見た形(矢先→矢柄→矢羽)で描き、
    手前(大)→的(小)へ遠近スケールで縮小して飛ばす。
@@ -9669,7 +9669,6 @@ function drawCoinHeader() {
   const lowCoins = coins <= 10;
   const blink    = lowCoins ? (Math.floor(Date.now() / 380) % 2 === 0 ? 1 : 0.35) : 1;
   const mainColor = lowCoins ? '#ff7755' : Y;
-  const glowColor = lowCoins ? '#cc2200' : '#c8a800';
 
   ctx.save();
   ctx.globalAlpha = blink;
@@ -10384,7 +10383,7 @@ function drawSyncMeter() {
   if (_syncHistCount < SYNC_HIST_LEN || syncRateAboveCount < SYNC_VISIBLE_THRESHOLD) return;
 
   const pct     = syncRateDisp;                      // 0-1（VUメーター式表示値）
-  const [fillC, glowC, glowStr] = _syncBarColor(pct);
+  const [fillC, glowC] = _syncBarColor(pct);
   /* テキストキャッシュ: 値が変化した時のみ再生成（毎フレームのテンプレートリテラルを排除） */
   const pctRounded = Math.round(pct * 100);
   if (pctRounded !== _cachedSyncPctVal) { _cachedSyncPctVal = pctRounded; _cachedSyncPctStr = `SYNC ${pctRounded}%`; }
