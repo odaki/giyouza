@@ -290,6 +290,7 @@ const _PERF_SPIKE_MS = 25;   // これを超えるフレーム間隔を記録す
 const _PERF_SPIKE_KEEP = 3;
 const _perfSpikes = [];
 let _lastInitAt = 0;         // 直近のinit()時刻（トライ開始）
+let _perfLastSpikeAt = 0; // 直近スパイクの時刻（間隔Δの算出用）
 function _perfLogSpike(gapMs) {
   const now = performance.now();
   const tags = [];
@@ -297,13 +298,19 @@ function _perfLogSpike(gapMs) {
     const e = _perf[pr.key];
     if (e.ranAt > 0 && now - e.ranAt <= gapMs + 4) tags.push(pr.key);
   }
+  /* 直前のスパイクからの間隔。周期性のある事象は、この値が既知の周期
+     （拍=約395ms、ボスBGMの1ループ、1秒など）に一致するかどうかで発生源を絞れる。
+     実機では「BGMの一周と同期して詰まる」という体感報告が出ており、
+     ?nobgmでも再現したため、周期の実測値そのものが必要になった */
   _perfSpikes.unshift({
     gap: gapMs,
     phase: phase,
     idx: curIdx,
     since: _lastInitAt > 0 ? Math.round(now - _lastInitAt) : -1,
+    delta: _perfLastSpikeAt > 0 ? Math.round(now - _perfLastSpikeAt) : -1,
     tags: tags.join(','),
   });
+  _perfLastSpikeAt = now;
   if (_perfSpikes.length > _PERF_SPIKE_KEEP) _perfSpikes.length = _PERF_SPIKE_KEEP;
 }
 /* rAFが実際に何回/秒呼ばれているかを数える。update()+draw()が5〜7msなのに
@@ -359,7 +366,7 @@ function drawPerf() {
      同時に多くのプローブが走った回はタグが長くなるため、幅に収まるまで後ろから
      落として「…」を付ける（先頭ほど重要という順ではないが、切れて読めないよりよい） */
   for (const s of _perfSpikes) {
-    const head = `spike ${n(s.gap)}ms ${s.phase}#${s.idx ?? '-'} +${s.since}ms `;
+    const head = `spike ${n(s.gap)}ms ${s.phase}#${s.idx ?? '-'} Δ${s.delta}ms `;
     const tags = s.tags ? s.tags.split(',') : [];
     let line = head + `[${tags.join(',') || '-'}]`;
     while (tags.length > 1 && ctx.measureText(line).width > maxW) {
@@ -407,7 +414,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.14';
+const VERSION = 'v6.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
