@@ -400,7 +400,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.10';
+const VERSION = 'v6.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1157,8 +1157,7 @@ let _pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
    タップ時の同期処理（GCスパイク）を削減する。
    OffscreenCanvas はプールで再利用してアロケーションをゼロにする。 */
 let _pendingWheels        = null;  // 事前構築済みホイール（null=未構築）
-let _pendingWheelScheduled= false; // スケジュール済みフラグ（重複防止）
-let _pendingWheelGen      = 0;     // 事前構築チェーンの世代（古いチェーンの上書きを防ぐ。_scheduleWheelPreBuild参照）
+
 const _freeWheelOCs       = [];    // 解放済みOCプール（再利用でGCゼロ）
 const _freeResultOCs      = [];    // 結果文字OCプール（固定サイズで再利用）
 const _freeKingReelOCs    = [];    // キング的OCプール（通常ホイールとサイズが異なるため別管理）
@@ -1203,47 +1202,38 @@ function _runWhenIdle(fn, delayMs) {
   if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(fn, { timeout: delayMs });
   else setTimeout(fn, delayMs);
 }
-/* 事前構築の開始待ちと、的1個ごとの間隔。
-   実機報告「4的射てハズレ、次のゲームの1的目で少し引っかかる」の原因のひとつ。
-   以前は setTimeout(build, 0) だったため、iOS Safariでは init() の直後
-   （＝次のトライが始まった直後、まさに1的目をタップする直前）に4的ぶんの
-   OffscreenCanvas描画がまとめて同期実行されていた。dpr3の実機ではこれが
-   1フレーム予算を超えて取りこぼしに見える。
-   対策は2つ: 開始を遅らせて入力の窓から外すことと、4的を1個ずつに割って
-   1回あたりの塊を1/4にすること。合計でも約270msで、プレイヤーが4本射り終える
-   より十分早く完了する（間に合わなかった場合はinit()側の同期生成に落ちるだけで
-   壊れない） */
-const _PREBUILD_START_DELAY_MS = 100;
-const _PREBUILD_STEP_MS        = 30;
-function _scheduleWheelPreBuild() {
-  if (_pendingWheelScheduled) return;
-  _pendingWheelScheduled = true;
+/* ── 次トライ用ホイールの事前構築 ──
+   時刻ではなく「プレイヤーの入力」を基準に進める。
+   経緯: 以前は init() からタイマーで刻んでいた（開始100ms・的ごと30ms）。しかし
+   タイマーはプレイヤーの入力周期と無関係に発火するため、実機の?perfで
+   「1的目のタップと事前構築が同じフレームに乗って30ms」というスパイクを観測した
+   （spike 30.0ms shooting#1 +146ms [tap,touch,unlk,elev,pre,bar…]）。
+   しかもcreateWheelはOffscreenCanvasへの描画をsubmitするだけで、実際の転送コストは
+   そのフレームの合成時に払われる＝performance.nowの計測には出ない。つまり
+   「計測値が小さいから安全」とは言えず、タップと同じフレームに置かないことが対策になる。
+   そこで、矢が着弾した直後（次のタップまでが最も遠い時点）に1個ずつ作る。
+   8分打ちなら着弾は発射の67ms後、次のタップは約197ms後なので110ms以上の余裕がある。
+   1トライ4射＝4個ぶんの機会があり、次のトライ開始時にはちょうど揃う。
+   タイマーを使わなくなったので、世代管理もスケジュール済みフラグも不要になった */
+const _PREBUILD_AFTER_LANDING_SEC = 0.02; // 着弾からこれだけ置いてから作る
+let _preBuiltForShot = -1;                // この矢の後の1個は作成済み（1射につき1個に制限）
+function _preBuildStepIfDue() {
+  if (!_pendingWheels || _pendingWheels.length >= WXS.length) return;
+  /* 回転中（idle/reach）に加えて結果表示中（done）も対象にする。4射目の着弾は
+     そのままトライ終了なので、doneを含めないと4個目だけ毎回間に合わない。
+     ただし結果が出た直後は演出の立ち上がりと重なるので、少し置いてから作る */
+  const inSpin = phase === 'idle' || phase === 'reach';
+  if (!inSpin && !(phase === 'done' && endTimer > 8)) return;
+  if (curIdx === 0 || _preBuiltForShot === curIdx) return; // まだ1射もしていない／この矢のぶんは作成済み
+  /* 着弾（＝飛行時間の経過）を待ってから。発射と同じフレームに置かないための間 */
+  if (performance.now() / 1000 - _arrowStartWallTime < ARROW_FLIGHT_SEC + _PREBUILD_AFTER_LANDING_SEC) return;
+  _preBuiltForShot = curIdx;
+  const i = _pendingWheels.length;
+  const _t0 = PERF_ON ? performance.now() : 0;
   /* フィーバー状態は init() で確定するため null（非フィーバー）で構築。
-     feverPending/isFever が真の場合は init() 側で再構築（レアケース）。
-     完成した4個が揃うまで_pendingWheelsへは入れない（途中の配列を
-     init()に拾わせないため。init()は _pendingWheels===null なら同期生成する）。
-     世代番号を持つのは、構築が的1個ずつの遅延実行に分かれていて、完了前に
-     init()や_startBossOmenが次の世代を立ち上げうるため。古い世代がそのまま
-     走り続けると、後から_pendingWheelsを1世代前の内容で上書きしてしまう */
-  const gen = ++_pendingWheelGen;
-  _releaseWheelOCs(_pendingWheels); // 前回の作り置きが残っていればプールへ返す
-  /* 進捗は _pendingWheels へ逐次公開する。以前は4個そろうまで公開しなかったため、
-     間に合わないと init() が4個まとめて同期生成していた。16分打ち（1拍に4射）だと
-     トライ1周が1〜2拍しかなく、その同期生成が毎トライ発生しうる（実機での指摘）。
-     逐次公開なら、間に合わなかったぶんだけを init() が作れば済む */
-  _pendingWheels = [];
-  const step = () => {
-    /* 世代交代済み（init()やボス突入が次を立ち上げた）なら何も触らない。
-       作りかけの所有権は既にそちらへ移っているので、ここで返却すると二重解放になる */
-    if (gen !== _pendingWheelGen) return;
-    const i = _pendingWheels.length;
-    if (i >= WXS.length) return;
-    const _t0 = PERF_ON ? performance.now() : 0;
-    _pendingWheels.push(createWheel(WXS[i], WYS[i], null));
-    if (PERF_ON) _perfMark('pre', _t0);
-    if (_pendingWheels.length < WXS.length) _runWhenIdle(step, _PREBUILD_STEP_MS);
-  };
-  _runWhenIdle(step, _PREBUILD_START_DELAY_MS);
+     feverPending/isFever が真の場合は init() 側で作り直す（レアケース） */
+  _pendingWheels.push(createWheel(WXS[i], WYS[i], null));
+  if (PERF_ON) _perfMark('pre', _t0);
 }
 
 /* ════════════════ UI レイアウト定数 ════════════════ */
@@ -3791,8 +3781,6 @@ function init(fromStartup, fromGameOver) {
   const _ready = (_pendingWheels && !isFever && !feverPending) ? _pendingWheels : null;
   if (!_ready) _releaseWheelOCs(_pendingWheels);
   _pendingWheels = null;
-  _pendingWheelScheduled = false;
-  _pendingWheelGen++; // 走っているチェーンを打ち切る（作りかけの所有権をこちらへ移す）
   wheels = WXS.map((x, i) => {
     if (_ready && _ready[i]) return _ready[i];
     /* 同期生成ぶんも計測に含める。以前はチェーン側にしかプローブが無く、
@@ -3806,11 +3794,11 @@ function init(fromStartup, fromGameOver) {
   for (const w of wheels) {
     w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
   }
-  /* 次トライ用ホイールをアイドル時間に事前構築開始。完成まで約190ms。
-     16分打ち（1拍に4射）だとトライ1周が1〜2拍しかなく間に合わないことがあるが、
-     その場合も作りかけを使って足りないぶんだけ上で同期生成するので、
-     最悪でも「4個まとめて同期生成」にはならない */
-  _scheduleWheelPreBuild();
+  /* 次トライぶんの収集を開始する。実際に作るのは矢が着弾するたび1個ずつで、
+     4射する間に4個そろう（_preBuildStepIfDue参照）。間に合わなかったぶんは
+     次のinit()が同期生成するので、足りなくても壊れない */
+  _pendingWheels = [];
+  _preBuiltForShot = -1;
   curIdx     = 0;
   phase      = 'idle';
   arrowProgress = 0;
@@ -4493,6 +4481,10 @@ function update() {
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
   }
 
+  /* 次トライ用ホイールを1個進める（矢の着弾後＝次のタップまでが最も遠い時点。
+     _preBuildStepIfDue参照）。phase判定は関数側で行う */
+  _preBuildStepIfDue();
+
   if (phase === 'shooting') {
     /* フレームレート非依存: performance.now() でアニメーション進行（audioCtx suspended中も動く） */
     arrowProgress = _arrowStartWallTime > 0
@@ -4701,7 +4693,6 @@ function update() {
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
     if (!isGameOver && !_jackpotAutoReset && endTimer > minWait && allShown) {
       canRestart = true;
-      _scheduleWheelPreBuild(); // アイドル時間に次トライのホイールを事前構築
     }
     /* CONTINUEバッジ表示遅延カウント: draw()側だと120Hz端末で2倍速になるためここで進める */
     if (canRestart && !isGameOver) _continueShowDelay++;
@@ -6132,10 +6123,8 @@ function _maybeStartBossOmen() {
 
 function _startBossOmen() {
   pendingShoot = false;
-  /* 事前構築は世代番号を進めて打ち切る。フラグを倒すだけでは、遅延実行の途中に
-     いるチェーンが後から_pendingWheelsを書き戻してしまう（_scheduleWheelPreBuild参照） */
+  /* 事前構築の作り置きはプールへ返す（タイマー駆動をやめたので打ち切り処理は不要） */
   _releaseWheelOCs(_pendingWheels); _pendingWheels = null;
-  _pendingWheelScheduled = false; _pendingWheelGen++;
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
   for (const g of items) g._dead = true; items = [];
   /* トライ横断で見せている表示物（ポップアップ・フィーバーバナー・JUST!ラベル）は
