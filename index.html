@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.20';
+const VERSION = 'v6.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4285,7 +4285,144 @@ function drawKingReel(w, active, idx) {
 }
 
 /* ════════════════ Update ════════════════ */
-function update() {
+/* 4本目が着弾した瞬間の確定処理（当たり型の判定・フィーバー・king値・配当・実績・ハズレ）。
+   update()のshooting分岐に157行そのまま埋まっていたぶんを関数として切り出したもの。
+   ここを読むだけで「1トライの結果がどう決まるか」が追えるようにするのが目的で、
+   処理内容と順序は変えていない（順序には意味がある: フィーバー終了判定→アイテム投下→
+   配当計算→ゲームオーバー判定→ハズレ判定→保存、の順に依存関係がある）。 */
+function _resolveTrialResult() {
+  phase = 'done'; endTimer = 0;
+  /* チートキー予約を当たり判定タイミングで確定（次トライのinit()が消費する） */
+  if (_cheatFeverQueued) { feverPending = true; _cheatFeverQueued = false; }
+  if (_cheatSlowQueued !== null) { _slowSpinPending = _cheatSlowQueued; _cheatSlowQueued = null; }
+  /* HIT_TABLE を先頭から順に照合して最初にマッチした型を採用 */
+  const res = wheels.map(w => w.result);
+  const _hitEntry = HIT_TABLE.find(h => h.pat.every((c, i) => c === res[i]));
+  hitType       = _hitEntry ? _hitEntry.type : 'none';
+  _activeEffect = _hitEntry ?? null;
+  const _isJackpot = hitType === 'jackpot';
+  const _isMedium  = hitType !== 'none' && !_isJackpot;
+  /* フィーバー終了判定: 大当たり以外またはトライ上限到達で終了 */
+  if (isFever) {
+    if (hitType !== 'jackpot') {
+      isFever = false; feverTriesLeft = 0;
+      feverEndedReason = 'miss';
+      feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'miss';
+      feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
+    } else {
+      feverTriesLeft--;
+      if (feverTriesLeft <= 0) {
+        isFever = false; feverTriesLeft = 0;
+        feverEndedReason = 'complete';
+        feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'complete';
+        feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
+        unlockAch('fever_complete');
+      }
+    }
+  }
+  /* 残存アイテムがある場合: 当たりエフェクト発動前に地面スルーで退場させる
+     フィーバー中の連続大当たりは積み重ねたいため除外 */
+  if (items.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushItems();
+  if (_isJackpot) {
+    /* フィーバー中の大当たり: アイテム落下＋配当表示のみ・自動リセット */
+    if (isFever || feverEndedReason === 'complete') _jackpotAutoReset = true;
+    if (_jackpotAutoReset) {
+      const _isComplete = feverEndedReason === 'complete';
+      /* フル連チャン達成時: アイテム倍増（上限300）・配当は calcPayout で×2 */
+      initItems(_itemBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
+      playSE('jackpot');
+    } else if (isReach) {
+      isReachJackpot = true;
+      reachFlash = 1;
+      launchReachFireworks();
+      initItems(_itemBurst(PAYOUT_RATE.reachJackpot), true);
+      unlockAch('reach_jackpot');
+      playSE('reach_jackpot');
+      if (!feverPending && Math.random() < FEVER_PROB) feverPending = true;
+    } else {
+      launchFireworks();
+      initItems(_itemBurst(PAYOUT_RATE.jackpot), true);
+      playSE('jackpot');
+      /* 通常大当たりからも低確率でフィーバー移行（フィーバー中は _jackpotAutoReset 分岐のため対象外） */
+      if (!feverPending && Math.random() < FEVER_PROB_NORMAL) feverPending = true;
+    }
+    unlockAch('first_jackpot');
+    jackpotCount++;
+    if (bet >= 100) unlockAch('big_bet_win');
+    lsSaveStats();
+  }
+  /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
+     フィーバー大当たりは自動リセット時に発射するため破棄しない */
+  if ((_isJackpot || _isMedium) && !_jackpotAutoReset) pendingShoot = false;
+  /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
+  if (isSlowSpin && (_isJackpot || _isMedium)) {
+    rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
+    isSlowSpin = false; // バッジも連動してフェードアウト
+  }
+  if (_isMedium) {
+    playSE('medium');
+    _hitEntry.onHit?.();
+    checkMediumAch(_hitEntry.medId);
+    unlockAch('first_medium');
+  }
+  /* king値（キングギヨウザ蓄積）を当たり種別ごとの固定値で加算する。
+     基本値はHIT_TABLEのking列。大当たりだけは同じ'jackpot'型でも文脈で
+     演出規模が変わる（超大当たり＝リーチ経由・フル連チャン完走）ため、
+     ここで上書きする。ハズレは_hitEntryがnullなので0（加算なし） */
+  let _kingGain = _hitEntry?.king ?? 0;
+  if (_isJackpot) {
+    if (feverEndedReason === 'complete') _kingGain = KING_GAIN_FEVER_COMPLETE;
+    else if (isReachJackpot)             _kingGain = KING_GAIN_REACH_JACKPOT;
+  }
+  if (_kingGain > 0) {
+    kingGyozaMeter += _kingGain;
+    lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
+  }
+  /* 前トライのエフェクトがまだ退場しきっていないうちに次の当たりが出た場合は、
+     退場を加速して早く画面から抜けさせる（ユーザー要望: 新しい当たり演出と
+     混ざり続けないように）。ハズレでは加速しない＝そのままの速度で流れていく */
+  if (hitType !== 'none') _fxOutro.rush = true;
+  /* 配当計算 */
+  const payout = calcPayout();
+  if (payout > 0) {
+    coins += payout;
+    payoutPopups.push({ amt: payout, timer: 150, beatBonus: syncChain >= BEAT_BONUS_CHAIN });
+    if (!_isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
+  }
+  /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
+  if (coins <= 0) {
+    isGameOver = true;
+    grayRateTarget = 0.001; // オーディオ有無に関わらずグレーアウト開始
+    stopBGMTape(); // テープが止まるような演出でBGMをフェードアウト
+  }
+  /* ハズレ判定 */
+  if (!_isJackpot && !_isMedium) {
+    /* 通常モードのハズレでは効果音を鳴らさない（ユーザー要望「4的目を打った後、
+       文字列が揃わずにハズレたときの効果音が耳障り」）。'miss'SE（ズコーという
+       ノコギリ波の下降スライド）は通常プレイで最も頻繁に鳴るSEであり、
+       ハズレのたびに毎回鳴ると耳につく。ハズレ自体はポップアップ（missPopups）
+       と画面演出で十分伝わるため、音は落とす。
+       ※'miss'SE自体はキングギヨウザ戦の失敗時（頻度が低く演出上の意味がある）
+         で引き続き使うので、playSEのcaseは残す */
+    isMissResult = true;
+    missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
+  }
+  lsSave();         // コイン状態を保存
+  checkCoinsAch();  // コイン実績チェック
+}
+
+/* ── phaseをまたいで常時更新するもの ──
+   ここに置いたものは、どのphase分岐が早期returnしても必ず毎tick実行される。
+   関数として切り出しているのは、この不変条件をコメントではなく構造で守るため。
+   過去2回、同じクラスの不具合を実機で踏んでいる:
+     ・画面全体フェード（_screenFade）を後方に置いていたため、boss系phaseの
+       早期returnで一度も進まず、フェードアウト後にCONTINUEが出たまま入力が
+       効かなくなった
+     ・花火パーティクルの寿命処理とフィーバー終了バナーのタイマーが同様に凍結し、
+       キングギヨウザの画面に前のモードの表示が残り続けた
+   新しく「phaseに関係なく進める必要があるもの」を足すときは、update()本体では
+   なくこの関数に入れること。 */
+function _updateAlways() {
   /* 画面全体フェード: 関数先頭で最優先に更新する。boss系の各phase分岐は末尾で
      早期returnするため（bossDefeatOutro等）、後方の「phaseをまたいで常時更新
      すべきもの」セクションに置くとその早期returnで一切実行されず、フェードが
@@ -4439,6 +4576,10 @@ function update() {
   }
   /* グレースケール視覚レートをlerpで追従（係数0.04≈1300ms収束、easeOut近似） */
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
+}
+
+function update() {
+  _updateAlways();
   if (phase === 'startup') {
     /* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
        その回転角は startupTimer と w.speed から直接求める（draw側参照）。
@@ -4526,124 +4667,7 @@ function update() {
          復活させないための指針は _SHOOT_ARPEGIO の定義部コメントに集約してある */
       curIdx++;
       if (curIdx >= 4) {
-        phase = 'done'; endTimer = 0;
-        /* チートキー予約を当たり判定タイミングで確定（次トライのinit()が消費する） */
-        if (_cheatFeverQueued) { feverPending = true; _cheatFeverQueued = false; }
-        if (_cheatSlowQueued !== null) { _slowSpinPending = _cheatSlowQueued; _cheatSlowQueued = null; }
-        /* HIT_TABLE を先頭から順に照合して最初にマッチした型を採用 */
-        const res = wheels.map(w => w.result);
-        const _hitEntry = HIT_TABLE.find(h => h.pat.every((c, i) => c === res[i]));
-        hitType       = _hitEntry ? _hitEntry.type : 'none';
-        _activeEffect = _hitEntry ?? null;
-        const _isJackpot = hitType === 'jackpot';
-        const _isMedium  = hitType !== 'none' && !_isJackpot;
-        /* フィーバー終了判定: 大当たり以外またはトライ上限到達で終了 */
-        if (isFever) {
-          if (hitType !== 'jackpot') {
-            isFever = false; feverTriesLeft = 0;
-            feverEndedReason = 'miss';
-            feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'miss';
-            feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
-          } else {
-            feverTriesLeft--;
-            if (feverTriesLeft <= 0) {
-              isFever = false; feverTriesLeft = 0;
-              feverEndedReason = 'complete';
-              feverEndBannerTimer = FEVER_BANNER_FRAMES; feverEndBannerReason = 'complete';
-              feverStartBannerTimer = 0; // 開始バナー表示中なら即中断
-              unlockAch('fever_complete');
-            }
-          }
-        }
-        /* 残存アイテムがある場合: 当たりエフェクト発動前に地面スルーで退場させる
-           フィーバー中の連続大当たりは積み重ねたいため除外 */
-        if (items.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushItems();
-        if (_isJackpot) {
-          /* フィーバー中の大当たり: アイテム落下＋配当表示のみ・自動リセット */
-          if (isFever || feverEndedReason === 'complete') _jackpotAutoReset = true;
-          if (_jackpotAutoReset) {
-            const _isComplete = feverEndedReason === 'complete';
-            /* フル連チャン達成時: アイテム倍増（上限300）・配当は calcPayout で×2 */
-            initItems(_itemBurst(PAYOUT_RATE.jackpot) * (_isComplete ? 2 : 1), true, _isComplete ? 300 : 200);
-            playSE('jackpot');
-          } else if (isReach) {
-            isReachJackpot = true;
-            reachFlash = 1;
-            launchReachFireworks();
-            initItems(_itemBurst(PAYOUT_RATE.reachJackpot), true);
-            unlockAch('reach_jackpot');
-            playSE('reach_jackpot');
-            if (!feverPending && Math.random() < FEVER_PROB) feverPending = true;
-          } else {
-            launchFireworks();
-            initItems(_itemBurst(PAYOUT_RATE.jackpot), true);
-            playSE('jackpot');
-            /* 通常大当たりからも低確率でフィーバー移行（フィーバー中は _jackpotAutoReset 分岐のため対象外） */
-            if (!feverPending && Math.random() < FEVER_PROB_NORMAL) feverPending = true;
-          }
-          unlockAch('first_jackpot');
-          jackpotCount++;
-          if (bet >= 100) unlockAch('big_bet_win');
-          lsSaveStats();
-        }
-        /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
-           フィーバー大当たりは自動リセット時に発射するため破棄しない */
-        if ((_isJackpot || _isMedium) && !_jackpotAutoReset) pendingShoot = false;
-        /* スローハンド中の当たり: BGMを通常速度に戻して当たりエフェクトを通常速度で見せる */
-        if (isSlowSpin && (_isJackpot || _isMedium)) {
-          rampBGMRate(1.0, 800, 'easeIn'); // 素早く通常テンポへ復帰
-          isSlowSpin = false; // バッジも連動してフェードアウト
-        }
-        if (_isMedium) {
-          playSE('medium');
-          _hitEntry.onHit?.();
-          checkMediumAch(_hitEntry.medId);
-          unlockAch('first_medium');
-        }
-        /* king値（キングギヨウザ蓄積）を当たり種別ごとの固定値で加算する。
-           基本値はHIT_TABLEのking列。大当たりだけは同じ'jackpot'型でも文脈で
-           演出規模が変わる（超大当たり＝リーチ経由・フル連チャン完走）ため、
-           ここで上書きする。ハズレは_hitEntryがnullなので0（加算なし） */
-        let _kingGain = _hitEntry?.king ?? 0;
-        if (_isJackpot) {
-          if (feverEndedReason === 'complete') _kingGain = KING_GAIN_FEVER_COMPLETE;
-          else if (isReachJackpot)             _kingGain = KING_GAIN_REACH_JACKPOT;
-        }
-        if (_kingGain > 0) {
-          kingGyozaMeter += _kingGain;
-          lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
-        }
-        /* 前トライのエフェクトがまだ退場しきっていないうちに次の当たりが出た場合は、
-           退場を加速して早く画面から抜けさせる（ユーザー要望: 新しい当たり演出と
-           混ざり続けないように）。ハズレでは加速しない＝そのままの速度で流れていく */
-        if (hitType !== 'none') _fxOutro.rush = true;
-        /* 配当計算 */
-        const payout = calcPayout();
-        if (payout > 0) {
-          coins += payout;
-          payoutPopups.push({ amt: payout, timer: 150, beatBonus: syncChain >= BEAT_BONUS_CHAIN });
-          if (!_isJackpot && !isReachJackpot) playSE('coin'); // 中当たりコイン音
-        }
-        /* ゲームオーバー判定（ペイアウト後にコインが0以下） */
-        if (coins <= 0) {
-          isGameOver = true;
-          grayRateTarget = 0.001; // オーディオ有無に関わらずグレーアウト開始
-          stopBGMTape(); // テープが止まるような演出でBGMをフェードアウト
-        }
-        /* ハズレ判定 */
-        if (!_isJackpot && !_isMedium) {
-          /* 通常モードのハズレでは効果音を鳴らさない（ユーザー要望「4的目を打った後、
-             文字列が揃わずにハズレたときの効果音が耳障り」）。'miss'SE（ズコーという
-             ノコギリ波の下降スライド）は通常プレイで最も頻繁に鳴るSEであり、
-             ハズレのたびに毎回鳴ると耳につく。ハズレ自体はポップアップ（missPopups）
-             と画面演出で十分伝わるため、音は落とす。
-             ※'miss'SE自体はキングギヨウザ戦の失敗時（頻度が低く演出上の意味がある）
-               で引き続き使うので、playSEのcaseは残す */
-          isMissResult = true;
-          missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
-        }
-        lsSave();         // コイン状態を保存
-        checkCoinsAch();  // コイン実績チェック
+        _resolveTrialResult();
       } else if (curIdx === 3) {
         /* 3本目が刺さった → リーチ判定
            ギ・ヨ・ウが揃ったらリーチ発動。
