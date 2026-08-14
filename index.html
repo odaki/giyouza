@@ -333,6 +333,16 @@ function drawPerf() {
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused e:ended t:currentTime）で、昇格の判定根拠 */
     `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}e${_iosAudioEl.ended ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
+    /* 出力遅延の内訳。Bluetooth（AirPods等）で音が遅れて感じるときはここを見る。
+       hw = 補正に使っている値。base/out はブラウザの申告値（iOS Safari は out 未実装）、
+       ts = getOutputTimestamp から推定した実効値。src はどれを採用したか。
+       sr は AudioContext のサンプリングレート（システム側のバッファ設定が変わると動く） */
+    (() => {
+      if (!audioCtx) return 'lat  ctx なし';
+      const ms = v => (v == null ? '-' : (v * 1000).toFixed(0));
+      return `lat hw ${ms(_hwLatency)} = base ${ms(audioCtx.baseLatency)} + out ${ms(audioCtx.outputLatency)}` +
+             ` / ts ${ms(_hwLatEff)} (src ${_hwLatSrc}) sr ${(audioCtx.sampleRate / 1000).toFixed(1)}k`;
+    })(),
   ];
   /* 計測行は_PERF_PROBESから組み立てる。同じline番号のものを1行に並べるが、
      画面幅に収まらなければ実測幅で折り返す（縦画面W=420で右端が切れて読めなくなった
@@ -427,7 +437,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.31';
+const VERSION = 'v6.32';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1393,6 +1403,7 @@ let _BEAT_DISPLAY_ADVANCE = 2 / 60; // 起動時フォールバック: AudioCtx�
    約2〜4フレーム後に発光するため、その分だけ位相を先読みして計算する */
 const _BEAT_ADVANCE_TARGET = 4 / 60; // ≈66.7ms（4フレーム分）
 let _hwLatency = 0; // 実効出力遅延のキャッシュ（毎フレーム読み取りを避ける）
+let _hwLatEff = null, _hwLatSrc = '-'; // ?perf表示用: 推定の生値と採用元（挙動には影響しない）
 let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経路変更追従・演出系なのでフレーム基準で可）
 /* 手動遅延補正（?lat=ms URLパラメータ、負値も可）:
    iOS Safari は outputLatency 未実装（WebKitにFIXMEあり）のため、AirPods 等
@@ -1412,11 +1423,13 @@ function _updateBeatDisplayAdvance() {
   /* outputLatency 未実装環境（Safari）向け: getOutputTimestamp から実効出力遅延を推定。
      currentTime（スケジュール済み時刻）− contextTime（今スピーカーから出ている音の時刻）
      が Bluetooth を含む出力チェーン遅延。取得できて hw より大きければ採用する */
+  _hwLatSrc = 'base';
   if (typeof audioCtx.getOutputTimestamp === 'function' && audioCtx.state === 'running') {
     const ts = audioCtx.getOutputTimestamp();
     if (ts && ts.contextTime > 0) {
       const eff = audioCtx.currentTime - ts.contextTime;
-      if (eff > hw && eff < 1.0) hw = eff; // 異常値（停止直後等）は除外
+      _hwLatEff = eff;
+      if (eff > hw && eff < 1.0) { hw = eff; _hwLatSrc = 'ts'; } // 異常値（停止直後等）は除外
     }
   }
   _hwLatency = hw + _LATENCY_TRIM;
@@ -1798,7 +1811,13 @@ _iosAudioEl.loop   = true; // 鳴り続けることでAVAudioSessionをPlayback�
 _iosAudioEl.volume = 0;
 let _iosSessionElevated = false;
 let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確認用。挙動には影響しない）
+/* ?noelev: 無音要素の再生（AVAudioSession昇格）を丸ごと止めて実機A/Bするための調査用フラグ。
+   Bluetooth出力の遅延が悪化したという実機報告を受けて用意した。無音要素が鳴り続けることで
+   システム側の出力バッファ設定が変わっている可能性を切り分ける。
+   このフラグを付けると消音モード（🔕）では音が出なくなるので、常用してはいけない */
+const _NO_ELEVATE = _dbgFlag('noelev');
 function _elevateAudioSession() {
+  if (_NO_ELEVATE) return;
   /* 成功するまで、タップのたびに無条件で試み続ける。ここに「賢い」抑制を入れてはいけない。
      この昇格はAVAudioSessionをAmbient→Playbackに上げて消音スイッチをバイパスする
      ためのもので、昇格できないまま試行をやめると消音モードで一切音が出なくなる。
