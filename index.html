@@ -414,7 +414,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.16';
+const VERSION = 'v6.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7340,6 +7340,19 @@ function _easeKingXform() {
    水平展開漏れを構造的に防ぐ。
    個々の中身は対象が空なら何もしない（_king が null、配列が空）ため、
    どのフェーズから呼んでも安全 */
+/* 文字飛翔の生存判定と後始末。毎フレーム呼ばれるswapRemoveの引数なので、
+   その場のアロー関数ではなくモジュールスコープに置く（クロージャ生成ゼロ。
+   通常モードの_pred*と同じ方針で、キング戦側にも水平展開する） */
+const _predKingCharAlive = f => {
+  if (f.state === 'stick') return f.frames < KING_CHAR_STICK_FADE_FRAMES;
+  if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
+  return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
+};
+/* 画面外へ消えて配列から取り除かれた瞬間にattemptToken.aliveを減らす。
+   _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を見て
+   初めて次のトライ（respin）を許可する（ユーザー要望） */
+const _onKingCharRemoved = f => { if (f.attemptToken) f.attemptToken.alive--; };
+
 function _updateKingCommonFx() {
   if (_king) _easeKingXform();
   /* 被弾した的の揺れを減衰させる（_kingReelShakeOffset参照）。衝突は破砕へ
@@ -7358,7 +7371,7 @@ function _updateKingCommonFx() {
   }
   _updateKingCharFlights();
   for (const l of _kingLasers) { l.age++; l.life--; }
-  swapRemove(_kingLasers, p => p.life > 0);
+  swapRemove(_kingLasers, _predLife); // 既存の共通predを使う（毎フレームのクロージャ生成を避ける）
 }
 
 /* 篩い落としの縦変位（描画時オフセット。KING_SIFT_*の定義部参照）。
@@ -7584,16 +7597,7 @@ function _updateKingCharFlights() {
       f.rot += f.rotSpd;
     }
   }
-  swapRemove(_kingCharFlights, f => {
-    if (f.state === 'stick') return f.frames < KING_CHAR_STICK_FADE_FRAMES;
-    if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
-    return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
-  }, f => {
-    /* 画面外へ消えて配列から取り除かれた瞬間にattemptToken.aliveを減らす。
-       _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を
-       見て初めて次のトライ（respin）を許可する（ユーザー要望） */
-    if (f.attemptToken) f.attemptToken.alive--;
-  });
+  swapRemove(_kingCharFlights, _predKingCharAlive, _onKingCharRemoved);
 }
 
 function _updateBossBattle() {
