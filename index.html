@@ -229,6 +229,17 @@ function drawCheatPanel() {
    tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
    wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
 const PERF_ON = _dbgFlag('perf');
+/* ?mark: Safari Web Inspector のタイムラインへ目印を打つ（console.timeStamp）。
+   ?perf では原理的に見えないもの——ラスタライズと合成のコスト——を追うためのもの。
+   canvasの描画は呼び出しとラスタライズが別で、後者はフレームの合成時に来るため
+   performance.now では捕まらない（この落とし穴に2度はまっている）。
+   Web Inspectorのタイムラインにはそれが出るので、そこに「いま射った」という
+   目印を並べれば、スパイクのフレームで何のペイントが走っているかを対照できる。
+   オーバーレイ（?perf）は自身が焼き込みを起こすので、収録時は付けずにこちらだけ使う */
+const _MARK_ON = _dbgFlag('mark');
+const _mark = (_MARK_ON && typeof console !== 'undefined' && console.timeStamp)
+  ? name => { try { console.timeStamp(name); } catch (_e) {} }
+  : () => {};
 const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
@@ -460,7 +471,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.39';
+const VERSION = 'v6.40';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1237,6 +1248,7 @@ const _NO_RES_BLUR = _dbgFlag('noresblur'); // 下記の焼き込みからグロ
 function _buildResultOC(w) {
   if (typeof OffscreenCanvas === 'undefined') return;
   const _t0 = PERF_ON ? performance.now() : 0;
+  _mark('resOC');
   const sz = _RESULT_OC_HALF * 2 * _dpr;
   const oc = _freeResultOCs.pop() || new OffscreenCanvas(sz, sz);
   const c  = oc.getContext('2d');
@@ -11771,6 +11783,7 @@ function onShoot(_inputPerfMs){
      「正確に打てた時だけ音が拍に揃って聞こえる」こと自体がゲーム性の核であり、
      ズレた入力を補正して気持ちよく鳴らすのは設計思想に反するため廃止
      （着弾音のビートスナップ廃止に続き2度目の同結論。以後再試行しない） */
+  _mark('shoot'); // タイムラインの目印（?mark。_markの定義部参照）
   /* Bluetooth出力のときだけ、聴こえる位置をグリッドへ寄せる幅を足す
      （_shootSEPad参照。内蔵スピーカー等では0＝従来どおり即時） */
   const _pad = audioCtx ? _shootSEPad() : 0;
