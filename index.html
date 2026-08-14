@@ -354,7 +354,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.03';
+const VERSION = 'v6.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3390,13 +3390,27 @@ function playStartJingle(onEnd) {
 
 /* ════════════════ Init ════════════════ */
 
-/* トライ自動リセット共通処理（ハズレ自動送り・フィーバー大当たり自動送り・クリック即時送りで使用）
-   inputPerfMs: undefined のときは onShoot が performance.now() で代替 */
-function _doAutoReset(inputPerfMs) {
-  const fire = pendingShoot;
+/* 先打ちバッファ（pendingShoot）を消費して発射する。
+   射撃ガードの解除と必ずセットで行うため、この2行を別々に書かせない。
+   実際、tapestart→idleの経路だけガード解除が抜けており、無音起動＝テープ加速が
+   初回フレームで完了する条件で、溜めていた1発が黙って消えていた（静的解析で発覚）。
+   inputPerfMs: undefined のときは onShoot が performance.now() で代替する */
+function _consumePendingShoot(inputPerfMs) {
+  if (!pendingShoot) return false;
+  pendingShoot = false;
+  shootGuardUntil = 0; // init()が張った誤射ガードは、意図された先打ちには適用しない
+  onShoot(inputPerfMs);
+  return true;
+}
+
+/* 次のトライを開始する共通処理。
+   ハズレ自動送り・フィーバー大当たり自動送り・クリックでの即時送りが全てここを通る。
+   以前は呼び出し側それぞれが init() → ガード解除 → 先打ち消費を手書きしており、
+   4箇所で書き方が違っていた（1箇所はガード解除が欠けていた） */
+function _beginNextTrial(inputPerfMs) {
   init();
-  shootGuardUntil = 0;
-  if (fire) { pendingShoot = false; onShoot(inputPerfMs); }
+  shootGuardUntil = 0; // 操作または自動送りで始まったトライなので誤射ガードは不要
+  _consumePendingShoot(inputPerfMs);
 }
 
 /* フィーバー関連状態を一括リセット（initGame / gameOverReset 共通） */
@@ -4341,11 +4355,9 @@ function update() {
       phase = 'idle';
       /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
       if (isSlowSpin) rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // ゲームオーバーリカバリー後もBET対応速度へ
-      /* 先打ちバッファの消費前に射撃ガードを解除する（_doAutoReset・クリック経路と同じ扱い）。
-         init()が張った100msのガードがまだ生きていると onShoot() が黙って弾かれ、
-         溜めていた1発が消える。無音起動（bgmSource無し）ではテープ加速が初回フレームで
-         完了するため、ガードが残ったままここへ到達しうる */
-      if (pendingShoot) { pendingShoot = false; shootGuardUntil = 0; onShoot(); }
+      /* ここは新しいトライの開始ではなくphase遷移なので、init()は呼ばず先打ちだけ消費する
+         （ガード解除は_consumePendingShoot側の責任） */
+      _consumePendingShoot();
     }
     return;
   }
@@ -4587,12 +4599,12 @@ function update() {
     /* ハズレのみビートグリッド同期で自動リセット（当たりはユーザー入力待ち） */
     if (!isGameOver && isMissResult && !feverEndedReason && endTimer > minWait && allShown && onBeatGrid()) {
       if (_maybeStartBossOmen()) return;
-      _doAutoReset(); return;
+      _beginNextTrial(); return;
     }
     /* フィーバー中大当たり: 30f後に自動リセット（アイテム落下のみ、入力待ちなし） */
     if (_jackpotAutoReset && !isGameOver && endTimer > 30) {
       if (_maybeStartBossOmen()) return;
-      _doAutoReset(); return;
+      _beginNextTrial(); return;
     }
     /* エフェクト終了後: canRestartをセット
        ハズレ → クリック早送りも可、当たり → クリック確認必須（自動リセットなし） */
@@ -11347,7 +11359,7 @@ function _handleGameClick(inputPerfMs) {
       pendingShoot = true;
       if (canRestart) {
         if (_maybeStartBossOmen()) return;
-        init(); shootGuardUntil = 0; pendingShoot = false; onShoot(inputPerfMs);
+        _beginNextTrial(inputPerfMs); // 直前に立てたpendingShootがそのまま発射される
       }
       return;
     }
@@ -11355,12 +11367,14 @@ function _handleGameClick(inputPerfMs) {
     if (_jackpotAutoReset) {
       if (_maybeStartBossOmen()) return;
       pendingShoot = true;
-      _doAutoReset(inputPerfMs); return;
+      _beginNextTrial(inputPerfMs); return;
     }
     /* 当たり: エフェクト終了前は無視。終了後（canRestart）はリセットのみ、発射しない */
     if (canRestart) {
       if (_maybeStartBossOmen()) return;
-      init(); shootGuardUntil = 0;
+      /* 当たりの確認クリックでは先打ちを持ち越さない（4本目着弾時に破棄済み）ため、
+         _beginNextTrialは発射せずリセットだけ行う */
+      _beginNextTrial(inputPerfMs);
     }
     return;
   }
