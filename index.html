@@ -437,7 +437,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.41';
+const VERSION = 'v6.42';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -514,6 +514,29 @@ let _lastFilter = '';    // canvas.style.filter の前回値（変化時のみ�
 let _canvasRect = { left: 0, top: 0, width: 1, height: 1 };
 let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（playNoise用、毎回生成しない）
 
+/* ── キャッシュ用の描画面 ──
+   このゲームの高速化は全て「一度描いて焼いておき、あとは drawImage で貼る」に
+   依存している（背景・ホイール・グロー・文字・ボス・各種スプライト）。
+   その焼き先を OffscreenCanvas だけに頼っていたため、**未対応環境では最適化が
+   まるごと無効**になり、毎フレーム直描き＋shadowBlur という最も遅い経路に落ちていた
+   （キング戦は起動すらしない）。OffscreenCanvas は iOS 16.4 以降にしかないので、
+   それ以前の端末では常にその状態だった（iPhone 11で遅いという実機報告を受けて判明）。
+
+   通常の <canvas> 要素は昔から drawImage のソースとして使えるので、
+   未対応環境ではそれを焼き先にする。DOMには挿さない（描画面としてのみ使う）。
+   これで「キャッシュが使えない環境」は実質的に無くなる。 */
+/* ?nooc: OffscreenCanvas が無い環境（iOS 16.4未満）の経路を実機で試すためのフラグ。
+   コピーしたHTMLでOffscreenCanvasを消して確かめる、といった手間を無くす */
+const _HAS_OC = !_dbgFlag('nooc') && (typeof OffscreenCanvas !== 'undefined');
+const _CACHE_OK = _HAS_OC || typeof document.createElement === 'function';
+function _mkCache(w, h) {
+  const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
+  if (_HAS_OC) return new OffscreenCanvas(cw, ch);
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  return c;
+}
+
 /* ── 静的レイヤーキャッシュ ──
    雲・獅子は毎フレーム同じパスを繰り返し描画していた。
    OffscreenCanvas に事前描画しておき、drawImage() 1回で済ませる。 */
@@ -521,8 +544,8 @@ let _staticLayerCanvas = null; // 雲 + 獅子（PC のみ）を合成した透�
 
 function _prebuildStaticLayers() {
   /* OffscreenCanvas 未対応の古いブラウザではスキップ（通常描画にフォールバック） */
-  if (typeof OffscreenCanvas === 'undefined') return;
-  const oc  = new OffscreenCanvas(W * _dpr, H * _dpr);
+  if (!_CACHE_OK) return;
+  const oc  = _mkCache(W * _dpr, H * _dpr);
   const oc2 = oc.getContext('2d');
   oc2.scale(_dpr, _dpr);
 
@@ -542,7 +565,7 @@ function _prebuildStaticLayers() {
      oc2 に直接 globalAlpha=0.6 で描くと内部パーツもすべて半透明（X線状態）になるため
      この2段階方式で「内部は不透明・全体を 0.6 でブレンド」を実現する。 */
   if (!IS_PORTRAIT) {
-    const lc  = new OffscreenCanvas(W * _dpr, H * _dpr);
+    const lc  = _mkCache(W * _dpr, H * _dpr);
     const lc2 = lc.getContext('2d');
     lc2.scale(_dpr, _dpr);
     _drawShishiTo(lc2, 78,  360, 0.82, false);
@@ -594,14 +617,14 @@ const _COINS_FONT   = `bold 60px 'Hiragino Mincho ProN',serif`;
 const _COINS_TEXT_H = 72;
 let _coinsTextOC = null, _coinsTextW = 0, _coinsTextColor = '', _coinsTextStr = '';
 function _ensureCoinsTextOC(color) {
-  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (!_CACHE_OK) return null;
   if (_coinsTextOC && _coinsTextStr === _cachedCoinsStr && _coinsTextColor === color) return _coinsTextOC;
   ctx.save(); ctx.font = _COINS_FONT;
   const tw = Math.ceil(ctx.measureText(_cachedCoinsStr).width) + 8;
   ctx.restore();
   /* 幅が足りない時のみ再確保（桁数増加時）。既存が大きければ clearRect で再利用 */
   if (!_coinsTextOC || _coinsTextOC.width < tw * _dpr) {
-    _coinsTextOC = new OffscreenCanvas(tw * _dpr, _COINS_TEXT_H * _dpr);
+    _coinsTextOC = _mkCache(tw * _dpr, _COINS_TEXT_H * _dpr);
   }
   const c = _coinsTextOC.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -621,11 +644,11 @@ const _BET_FONT   = IS_PORTRAIT
 const _BET_TEXT_H = 56;
 let _betTextOC = null, _betTextStr = '';
 function _ensureBetTextOC() {
-  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (!_CACHE_OK) return null;
   if (_betTextOC && _betTextStr === _cachedBetStr) return _betTextOC;
   const tw = Math.ceil(_cachedBetNumW) + 8; // _updateDisplayCaches で計測済み
   if (!_betTextOC || _betTextOC.width < tw * _dpr) {
-    _betTextOC = new OffscreenCanvas(tw * _dpr, _BET_TEXT_H * _dpr);
+    _betTextOC = _mkCache(tw * _dpr, _BET_TEXT_H * _dpr);
   }
   const c = _betTextOC.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -816,13 +839,13 @@ let _cachedSyncChainVal = -1, _cachedSyncChainStr = '';
    毎フレーム stroke で描く（ブラーなしの stroke は安価）。 */
 const _GLOW_LEVELS = 8;
 const _wheelGlowSprites = (() => {
-  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (!_CACHE_OK) return null;
   const arr = [];
   const OFF = 4096; // 本体リングを画面外へ追い出すオフセット
   for (let i = 0; i < _GLOW_LEVELS; i++) {
     const blur = 50 + (i / (_GLOW_LEVELS - 1)) * 40;
     const half = Math.ceil(WR + 2 + blur * 0.9 + 8);
-    const oc = new OffscreenCanvas(half * 2, half * 2);
+    const oc = _mkCache(half * 2, half * 2);
     const c  = oc.getContext('2d');
     c.translate(half - OFF, half);
     c.shadowColor = Y; c.shadowBlur = blur; c.shadowOffsetX = OFF;
@@ -843,7 +866,7 @@ function _buildPointerSprite(fill, glow, blur) {
   const bw  = IS_PORTRAIT ? 21 : 26;
   const bh  = IS_PORTRAIT ? 24 : 23;
   const cw = bw + _PTR_PAD * 2, ch = bh + _PTR_PAD * 2;
-  const oc = new OffscreenCanvas(Math.ceil(cw * _dpr), Math.ceil(ch * _dpr));
+  const oc = _mkCache(Math.ceil(cw * _dpr), Math.ceil(ch * _dpr));
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.translate(_PTR_PAD - bx0, _PTR_PAD - by0); // ローカル座標 → スプライト座標
@@ -855,7 +878,7 @@ function _buildPointerSprite(fill, glow, blur) {
   c.closePath(); c.fill();
   return { oc, ox: bx0 - _PTR_PAD, oy: by0 - _PTR_PAD, w: cw, h: ch };
 }
-const _pointerSprites = (typeof OffscreenCanvas === 'undefined') ? null : {
+const _pointerSprites = (!_CACHE_OK) ? null : {
   inactive: _buildPointerSprite(YD, null, 0),
   locked:   _buildPointerSprite('#cc2200', '#ff4422', 18),
   active:   [0,1,2,3].map(i => _buildPointerSprite(Y, Y, 18 + (i / 3) * 18)),
@@ -865,10 +888,10 @@ const _pointerSprites = (typeof OffscreenCanvas === 'undefined') ? null : {
    毎フレーム最大256個 × shadowBlur=6 の save/restore を drawImage に置換。 */
 const _GIGI_SPRITE_R = 4, _GIGI_SPRITE_HALF = 14; // 描画半径4 + グロー余白10
 const _gigiSparkSprites = (() => {
-  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (!_CACHE_OK) return null;
   const m = {};
   for (const col of ['#fff', '#ffaa00', '#ff4400']) {
-    const oc = new OffscreenCanvas(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
+    const oc = _mkCache(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
     const c  = oc.getContext('2d');
     c.shadowColor = col; c.shadowBlur = 6;
     c.fillStyle = col;
@@ -1212,11 +1235,11 @@ function _releaseWheelOCs(ws) {
 const _RESULT_OC_HALF = 52; // 44px 文字 + 最大グロー30 を収める半径
 const _NO_RES_BLUR = _dbgFlag('noresblur'); // 下記の焼き込みからグローを外す（調査用）
 function _buildResultOC(w) {
-  if (typeof OffscreenCanvas === 'undefined') return;
+  if (!_CACHE_OK) return;
   const _t0 = PERF_ON ? performance.now() : 0;
   _mark('resOC');
   const sz = _RESULT_OC_HALF * 2 * _dpr;
-  const oc = _freeResultOCs.pop() || new OffscreenCanvas(sz, sz);
+  const oc = _freeResultOCs.pop() || _mkCache(sz, sz);
   const c  = oc.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, sz, sz);
@@ -4269,7 +4292,7 @@ function _buildSegWheelOC(w, opt) {
   const sz = Math.ceil(opt.ocR * 2 * _dpr);
   /* プールから再利用、なければ新規生成。サイズ不一致はwidth代入でリサイズ
      （キング的はKING_WRが縦画面初期化で確定するため、念のための保険） */
-  const oc = opt.pool.pop() || new OffscreenCanvas(sz, sz);
+  const oc = opt.pool.pop() || _mkCache(sz, sz);
   if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
   const c = oc.getContext('2d');
   /* 再利用時に前回の transform と内容をクリア */
@@ -4316,7 +4339,7 @@ const _WHEEL_OC_OPT = {
 };
 
 function _buildWheelOC(w) {
-  if (typeof OffscreenCanvas === 'undefined') return;
+  if (!_CACHE_OK) return;
   _buildSegWheelOC(w, _WHEEL_OC_OPT);
 }
 
@@ -4348,7 +4371,7 @@ function createWheel(x, y, feverChar) {
        作らずに済むものは作らない。未対応環境では描画側が必要になった時点で
        作る（_segFallbackGradient参照）。
        font は OC 描画でも使うので常に作る（fontOf: s => s.font） */
-    const grd = typeof OffscreenCanvas === 'undefined' ? _segFallbackGradient(c, mid) : null;
+    const grd = !_CACHE_OK ? _segFallbackGradient(c, mid) : null;
     const fontSize = Math.max(12, Math.min(33, (span / (Math.PI * 2)) * 116));
     const font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
     const s = { char: c, start: angle, span, gradient: grd, font };
@@ -5218,11 +5241,11 @@ const _ITEM_VARIANT_N   = 12;
 const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
 const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
 const _itemVariantSprites = (() => {
-  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (!_CACHE_OK) return null;
   const arr = [];
   const s = _ITEM_SPRITE_REF;
   for (let v = 0; v < _ITEM_VARIANT_N; v++) {
-    const oc = new OffscreenCanvas(_ITEM_SPRITE_HALF * 2 * _dpr, _ITEM_SPRITE_HALF * 2 * _dpr);
+    const oc = _mkCache(_ITEM_SPRITE_HALF * 2 * _dpr, _ITEM_SPRITE_HALF * 2 * _dpr);
     const c  = oc.getContext('2d');
     c.scale(_dpr, _dpr);
     c.translate(_ITEM_SPRITE_HALF, _ITEM_SPRITE_HALF);
@@ -6370,7 +6393,7 @@ let _victoryOutro = null; // { step, timer, items, seedItem, msgAlpha, gaugeAlph
 
 /* 予兆: 蓄積80%超のアイドル中、まれに画面を霊が横切る */
 function _spawnOmenGhost() {
-  if (typeof OffscreenCanvas === 'undefined' && !document.createElement) return;
+  if (!_CACHE_OK && !document.createElement) return;
   const fromLeft = Math.random() < 0.5;
   const { oc, sz, cy } = _makeGhostCanvas(22 + Math.random() * 10);
   _omenGhost = {
@@ -6461,11 +6484,11 @@ function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
 }
 
 function _buildBossOC() {
-  if (_bossOC || typeof OffscreenCanvas === 'undefined') return;
+  if (_bossOC || !_CACHE_OK) return;
   const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
   const half = Math.ceil(s * 0.75);
   const REF = 42, kk = s / REF;
-  const mkOC = () => new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  const mkOC = () => _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する
      （目鼻口眉はトーンの影響を受けさせず、白目の白さで焦げ色とのコントラストを
      出したいというユーザー要望に基づく。_renderKingBody 参照）。
@@ -6500,7 +6523,7 @@ function _buildBossOC() {
      確保しており、1140x1140＝約130万画素の確保が、的が回り始めるフレームに
      ぶつかって回転の速度ムラになっていた（実機指摘）。予兆は演出だけの区間なので、
      ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
-  const liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  const liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   _bossOC = { oc, bodyOC, faceOC, half, liveOC };
 }
 
@@ -7206,9 +7229,9 @@ let _scorchBlotSprite = null;
 
 /* 焼き目スタンプの元絵を初回に1回だけ生成（不定形の焦げ跡×3層） */
 function _buildScorchBlotSprite() {
-  if (_scorchBlotSprite || typeof OffscreenCanvas === 'undefined') return;
+  if (_scorchBlotSprite || !_CACHE_OK) return;
   const sz = 64, half = sz / 2;
-  const oc = new OffscreenCanvas(sz, sz);
+  const oc = _mkCache(sz, sz);
   const c = oc.getContext('2d');
   c.translate(half, half);
   /* 色・アルファは以前より濃く（コントラスト不足でGOOD/JUSTのサイズ差が
@@ -7259,7 +7282,7 @@ function _initBossBattle() {
   _kingMeterAtBattleStart = kingGyozaMeter;
   kingGyozaMeter = 0;
   lsSaveStats();
-  if (typeof OffscreenCanvas === 'undefined' || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
+  if (!_CACHE_OK || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
   _buildScorchBlotSprite();
   /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/
      ポーズ・ミュート/全画面）を除いた横幅いっぱいに広がるよう動的に決め直す
@@ -7292,7 +7315,7 @@ function _initBossBattle() {
      約130万画素の確保が、まさに的が回り始めるフレームに来ていた。確保回数を
      数えて確認したところ、戦闘開始時の6回のうち1回がこれだった */
   const liveOC = _bossOC.liveOC ||
-    (_bossOC.liveOC = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr));
+    (_bossOC.liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr));
   /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
      （個々の焦げ跡は _createKingMark がタップの都度その場で生成する） */
   const marks = [];
@@ -8166,9 +8189,9 @@ function drawKingCookGauge(achieved = false) {
    shadowBlurは使わず（プロジェクト規約: GPUブラーパス削減のため全廃済み）、
    グラデーション自体で縁をぼかすことでソリッドな円に見えないようにする */
 function _buildSteamSprite() {
-  if (_steamSprite || typeof OffscreenCanvas === 'undefined') return;
+  if (_steamSprite || !_CACHE_OK) return;
   const r = 32;
-  const oc = new OffscreenCanvas(r * 2 * _dpr, r * 2 * _dpr);
+  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
   const c = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.translate(r, r);
@@ -10430,10 +10453,10 @@ function touchToCanvas(touch) {
 /* リーチ用フリッカーリングのスプライト（初回リーチ時に1回だけ生成、shadowBlur 排除） */
 let _reachRingSprite = null;
 function _getReachRingSprite() {
-  if (_reachRingSprite || typeof OffscreenCanvas === 'undefined') return _reachRingSprite;
+  if (_reachRingSprite || !_CACHE_OK) return _reachRingSprite;
   const r = WR + 8, blur = 20;
   const half = Math.ceil(r + blur * 1.6 + 4);
-  const oc = new OffscreenCanvas(half * 2 * _dpr, half * 2 * _dpr);
+  const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr); c.translate(half, half);
   c.strokeStyle = 'rgba(245,208,32,0.7)'; c.lineWidth = 4;
@@ -10591,7 +10614,7 @@ function _titleCachePrune() {
 /* outText + shadowBlur 相当をキャッシュ付きで描く。(x,y) はテキスト中心。
    注意: 呼び出し時に ctx.shadowBlur が 0 であること（drawImage にも影が乗るため） */
 function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
-  if (typeof OffscreenCanvas === 'undefined') {
+  if (!_CACHE_OK) {
     ctx.font = font;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.shadowColor = glowC; ctx.shadowBlur = glowB;
@@ -10607,7 +10630,7 @@ function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
     const fs  = parseInt(font.match(/(\d+)px/)[1], 10);
     const pad = Math.ceil(glowB * 1.6 + lw + 8);
     const w = tw + pad * 2, h = fs + pad * 2;
-    const oc = new OffscreenCanvas(w * _dpr, h * _dpr);
+    const oc = _mkCache(w * _dpr, h * _dpr);
     const c  = oc.getContext('2d');
     c.scale(_dpr, _dpr);
     c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
@@ -10635,7 +10658,7 @@ function _bakeGlowStroke(key, text, font, stroke, lw, glowC, glowB) {
   const pad = Math.ceil(glowB * 1.6 + lw + 8);
   const w = tw + pad * 2, h = fs + pad * 2;
   const OFF = 4096; // 本体を画面外へ追い出して影だけスプライト内に落とす
-  const oc = new OffscreenCanvas(w * _dpr, h * _dpr);
+  const oc = _mkCache(w * _dpr, h * _dpr);
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
@@ -10753,7 +10776,7 @@ function drawEndScreen() {
       grad.addColorStop(0.5, `hsl(${(hue+120)%360},100%,65%)`);
       grad.addColorStop(0.75,`hsl(${(hue+200)%360},100%,65%)`);
       grad.addColorStop(1,   `hsl(${(hue+300)%360},100%,65%)`);
-      if (typeof OffscreenCanvas !== 'undefined') {
+      if (_CACHE_OK) {
         const e = _titleOCCache.get('rjp_t') ||
           _bakeGlowStroke('rjp_t', '超大当たり', _rjFont, 'rgba(0,0,0,0.92)', _fsR(13), '#fff', 60);
         ctx.drawImage(e.oc, -e.w/2, -e.h/2, e.w, e.h);
