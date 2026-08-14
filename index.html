@@ -250,6 +250,9 @@ function drawKeyDebug() {
    tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
    wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
 const PERF_ON = _dbgFlag('perf');
+/* ?nofilter: グレースケールのCSSフィルターを一切適用しない（見た目は変わるが、
+   フィルターが引っかかりの原因かどうかを実機で切り分けるための手段） */
+const GRAY_FILTER_OFF = _dbgFlag('nofilter');
 const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
@@ -400,7 +403,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.12';
+const VERSION = 'v6.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -9186,8 +9189,13 @@ function draw() {
      AudioParam.value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため
      JS 側で管理した grayRateCur を使用 */
   {
+    /* ?nofilter で無効化できる（実機A/B用）。実機指摘「キング戦の冒頭、半周ごとに
+       ほんのわずかに引っかかる」の切り分けのために用意した。フィルター値が変わった
+       フレームだけスタイルが書き換わるため、回復カーブが寝るにつれ書き換え間隔が
+       広がる＝引っかかりの間隔も広がる、という症状の出方と辻褄が合う。
+       ペインでの計測では戦闘開始からの3秒で57回書き換わっていた（その後は0回） */
     const rate = Math.max(0.001, Math.min(1, grayRateCur));
-    const f = rate < 0.995 ? `grayscale(${Math.round((1 - rate) * 90)}%)` : '';
+    const f = (GRAY_FILTER_OFF || rate >= 0.995) ? '' : `grayscale(${Math.round((1 - rate) * 90)}%)`;
     if (f !== _lastFilter) { canvas.style.filter = _lastFilter = f; }
   }
 
