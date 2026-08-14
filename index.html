@@ -265,7 +265,10 @@ const _PERF_PROBES = [
   { key: 'resOC',    label: 'resOC',    line: 2, withLast: true, note: 'shadowBlur' },
   { key: 'pre',      label: 'wheel',    line: 3, withLast: true, note: '事前構築1個' },
   { key: 'ls',       label: 'lsW',      line: 4, withLast: true },
-  { key: 'bar',      label: 'bar',      line: 4, withLast: true, note: 'BETバー描画' },
+  { key: 'bar',      label: 'bar',      line: 4, withLast: true, note: 'BETバー' },
+  { key: 'fx',       label: 'fx',       line: 5, withLast: true, note: '当たり演出+退場+アイテム' },
+  { key: 'whl',      label: 'whl',      line: 5, withLast: true, note: '的4個' },
+  { key: 'txt',      label: 'txt',      line: 5, withLast: true, note: '結果テキスト' },
 ];
 const _perf = {};
 for (const p of _PERF_PROBES) _perf[p.key] = { last: 0, max: 0, at: 0, ranAt: 0 };
@@ -379,7 +382,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.07';
+const VERSION = 'v6.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -9195,7 +9198,9 @@ function draw() {
     if (phase === 'startup') {
       for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.0375);
     } else {
+      const _tW = PERF_ON ? performance.now() : 0;
       for (let i=0;i<4;i++) drawWheel(i);
+      if (PERF_ON) _perfMark('whl', _tW);
     }
   }
 
@@ -9256,6 +9261,7 @@ function draw() {
   if (phase==='reach')              drawReachOverlay();
 
   /* 2. エフェクト面 */
+  const _tFx = PERF_ON ? performance.now() : 0;
   if (_activeEffect?.draw && endTimer >= (_activeEffect.drawDelay ?? 0)) _activeEffect.draw();
   /* 前トライの中当たりエフェクトの退場（_fxOutro参照）。現トライの演出と同じ
      レイヤーに重ねる。両者が同時に出るのは意図どおり（並行して進む） */
@@ -9263,6 +9269,7 @@ function draw() {
   /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
   if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
+  if (PERF_ON) _perfMark('fx', _tFx);
 
   /* 白フラッシュ (リーチ大当たり確定の瞬間) */
   if (reachFlash > 0) {
@@ -9275,6 +9282,7 @@ function draw() {
 
 
   /* 3. テキスト最前面 */
+  const _tTxt = PERF_ON ? performance.now() : 0;
   if (phase==='done'&&endTimer>45&&(!isMissResult||isGameOver)&&!_jackpotAutoReset) drawEndScreen();
   /* ポップアップ: phaseを問わず常時描画（トライ横断フェードアウト） */
   if (missPopups.length > 0)   drawMissPopup();
@@ -9283,6 +9291,7 @@ function draw() {
   if (feverStartBannerTimer > 0) drawFeverBanner(feverStartBannerTimer, null);
   if (feverEndBannerTimer > 0 && feverEndBannerReason) drawFeverBanner(feverEndBannerTimer, feverEndBannerReason);
   if (phase==='reach')              drawReachText();
+  if (PERF_ON) _perfMark('txt', _tTxt);
 
   /* スタートアップ画面 */
   drawStartup();
