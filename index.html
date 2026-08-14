@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.29';
+const VERSION = 'v6.30';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2406,7 +2406,15 @@ const _DORA_TONE_HZ   = 6000;  // 歪み後のローパス。シャリも同じ�
 const _DORA_SHIMMER_VOL   = 0.125; // シャリの音量。歪みバス（drive 2.6倍）を通すので、
                                    // ドライで鳴らしていた頃の値のままだと完全にクリップして
                                    // 白色ノイズ同然になる。前版と同じ明るさに揃う値をレンダで実測
-const _DORA_SHIMMER_ATK   = 0.11;  // 立ち上がり（遅れて広がる。本体の高次のピークと重ねる）
+/* 立ち上がり。実機評価「打撃した瞬間のシャリ音が目立ちすぎる」への対応で、
+   直線ではなく指数で増やす（頭が寝て終盤で伸びる形＝後から生えてくる）。
+   直線だと0.11秒設定でも打撃30-60msの時点で既に半分の音量に達しており、
+   打撃音そのものに高域の砂が混ざって聞こえていた（レンダの包絡で確認）。
+   さらに最初の_DELAY秒は完全に無音のまま保つ。頂点も0.11→0.24秒へ遅らせ、
+   遅らせた上位部分音（0.18-0.34秒）と足並みを揃える */
+const _DORA_SHIMMER_DELAY = 0.05;  // 打撃直後、まったく鳴らさない時間
+const _DORA_SHIMMER_SEED  = 0.02;  // 指数増加の起点（最終音量に対する比。約-34dB）
+const _DORA_SHIMMER_ATK   = 0.24;  // 頂点に達する時刻
 const _DORA_SHIMMER_DEC   = 2.6;   // 減衰。低域の余韻（最長2.9秒）に近い長さにする。
                                    // 短いと終盤で高域だけ先に消えて、また鐘の音に戻ってしまう
 /* 下端を最高部分音（16.3倍＝約1.8kHz）と重なる位置から始める。
@@ -2416,8 +2424,10 @@ const _DORA_SHIMMER_HP0   = 1500;  // 下端: 打撃直後
 const _DORA_SHIMMER_HP1   = 3200;  // 下端: 広がりきった後（帯域が上へ移っていく）
 /* 一体感のための設計メモ（実機評価「シャリと本体の一体感が足りない」への対応）。
    耳が2つの音を1つと聞くかどうかは、主に次の手がかりで決まる:
-     ・立ち上がりが揃っているか   → ATKを180msから110msへ縮め、本体の高次部分音の
-                                    ピーク（約100ms）と重ねた
+     ・立ち上がりが揃っているか   → 本体の高次部分音のブルームと頂点を揃える
+                                    （後に上位部分音を遅らせたので、シャリの頂点も
+                                    240msへ動かした。揃っていることが重要で、
+                                    早いことが重要なのではない）
      ・同じ増幅特性を共有するか   → シャリも歪みバスへ通す（本体が大きい間は
                                     押さえ込まれ、減衰すると出てくる＝同じ板の中の出来事）
      ・スペクトルが連続しているか → 下端を最高部分音と重なる1.5kHzから始め、
@@ -2485,8 +2495,11 @@ function _playDoraShimmer(ctx, t, dest) {
   lp.frequency.setValueAtTime(_DORA_SHIMMER_LP0, t);
   lp.frequency.exponentialRampToValueAtTime(_DORA_SHIMMER_LP1, t + _DORA_SHIMMER_ATK * 4);
   const gain = ctx.createGain();
+  /* 無音で保持 → 指数で増加 → 指数で減衰（_DORA_SHIMMER_DELAY/_SEED/_ATK 参照）。
+     直線増加だと打撃直後から砂が混ざって聞こえる */
   gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.linearRampToValueAtTime(_DORA_SHIMMER_VOL, t + _DORA_SHIMMER_ATK);
+  gain.gain.setValueAtTime(_DORA_SHIMMER_VOL * _DORA_SHIMMER_SEED, t + _DORA_SHIMMER_DELAY);
+  gain.gain.exponentialRampToValueAtTime(_DORA_SHIMMER_VOL, t + _DORA_SHIMMER_ATK);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + _DORA_SHIMMER_DEC);
   /* 橋渡し: 本体の最高部分音の付近を持ち上げ、本体とシャリの帯域を繋ぐ */
   const bridge = ctx.createBiquadFilter();
