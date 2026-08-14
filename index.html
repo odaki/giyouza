@@ -133,7 +133,7 @@ function _ensureCanvasFocus() {
   if (PERF_ON) _perfMark('focus', _t0);
 }
 /* ── デバッグ用URLパラメータの一元パース ──
-   ?portrait ?cheatpanel ?keydebug ?perf ?dpr ?king ?lat ?jlat の8種を、以前は
+   ?portrait ?cheatpanel ?perf ?dpr ?king ?lat ?jlat の7種を、以前は
    使う場所ごとに new URLSearchParams(location.search) して個別に解釈していた。
    増えるたびに書き方が分かれる（has/get/parseInt/parseFloatの混在、既定値の扱い）ため、
    入口をここ1つにまとめる。本番プレイではどのフラグも立たない。
@@ -221,46 +221,14 @@ function drawCheatPanel() {
   ctx.restore();
 }
 
-/* ?keydebug URL パラメータで、実機に届いたkeydownイベントの生の内容を
-   画面上に表示する診断オーバーレイ。「そもそもkeydownが届いているか」を
-   Web Inspector接続なしに実機の画面だけで判断できるようにするためのもので、
-   iPhone単体ではあらゆる対策後もkeydownが観測できなかった（一方でiPadでは
-   過去に動いていた可能性がある）という切り分けに使った。キーボードチート削除後も、
-   スペース・左右矢印というキーボード操作は残るので診断手段として残置する。
-   keydownハンドラの最も外側（他の早期returnより前）でログに追記するため、
-   ゲームのphase等に関係なく全てのkeydownを捕捉する */
-const KEY_DEBUG_ON = _dbgFlag('keydebug');
-let _keyDebugLog = [];
-function drawKeyDebug() {
-  if (!KEY_DEBUG_ON) return;
-  ctx.save();
-  ctx.font = '11px monospace';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  const lines = _keyDebugLog.length ? _keyDebugLog : ['(まだkeydownを受信していません)'];
-  const lineH = 14;
-  const boxH = lineH * lines.length + 8;
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(4, 4, W - 8, boxH);
-  ctx.fillStyle = '#0f0';
-  lines.forEach((line, i) => ctx.fillText(line, 8, 8 + i * lineH));
-  ctx.restore();
-}
 /* ?perf URL パラメータで、実機の「どこで詰まっているか」を数値で見るオーバーレイ。
    引っかかりの原因を推測で潰していくのをやめ、実機の数字で判断するために置く
-   （Web Inspectorを繋がなくても画面だけで読める。?keydebugと同じ位置づけで、
+   （Web Inspectorを繋がなくても画面だけで読める。?cheatpanel等と同じ位置づけで、
    パラメータを付けない限り計測も描画も一切走らない）。
    見方: frame work が16.7msを超えたフレームがあれば、その回のどれかが犯人。
    tap はタップ処理そのもの、resOC はロック時の結果文字焼き込み（shadowBlur使用）、
    wheel は次トライ用ホイールの事前構築（的1個ぶん）、lsW はlocalStorage書き出し。 */
 const PERF_ON = _dbgFlag('perf');
-/* ?nofilter: グレースケールのCSSフィルターを一切適用しない（見た目は変わるが、
-   フィルターが引っかかりの原因かどうかを実機で切り分けるための手段） */
-const GRAY_FILTER_OFF = _dbgFlag('nofilter');
-/* ?nobgm: BGMを一切鳴らさない（SEは鳴る）。「BGMの一周と同期して詰まる」という
-   実機報告に対し、オーディオスレッド由来かどうかを切り分けるための手段 */
-const BGM_OFF = _dbgFlag('nobgm');
-/* ?nowc: will-change: filter を一切付けない（合成レイヤーの持ち方を比較するため） */
-const WILL_CHANGE_OFF = _dbgFlag('nowc');
 const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
@@ -306,7 +274,7 @@ function _perfLogSpike(gapMs) {
   /* 直前のスパイクからの間隔。周期性のある事象は、この値が既知の周期
      （拍=約395ms、ボスBGMの1ループ、1秒など）に一致するかどうかで発生源を絞れる。
      実機では「BGMの一周と同期して詰まる」という体感報告が出ており、
-     ?nobgmでも再現したため、周期の実測値そのものが必要になった */
+     BGMを止めても再現したため、周期の実測値そのものが必要になった */
   _perfSpikes.unshift({
     gap: gapMs,
     phase: phase,
@@ -459,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.19';
+const VERSION = 'v6.20';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2746,7 +2714,6 @@ function applyMuteGain() {
 
 /* BGMソース起動（ミュート状態を問わず起動。gain が音量を制御する） */
 function startBGM() {
-  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx) return;
   if (!bgmBuffer) {
     /* バッファがまだレンダリング中 → 完了後に自動起動するフラグを立てる */
@@ -2838,7 +2805,6 @@ function _stopBossBGMForVictory(fadeMs = 120) {
 /* テープが回り始めるように加速（ゲームオーバーリセット専用）
    既存ソースがあればその位置から加速、なければ新規作成 */
 function startBGMTape(durationMs = 1400) {
-  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx) return;
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
@@ -2878,7 +2844,6 @@ function startBGMTape(durationMs = 1400) {
    持っていく。バッファの差し替えを伴うため既存ソースは使い回さず必ず
    作り直す（レンダリング未完でbossBgmBufferがまだ無い場合は通常BGMで代用） */
 function startBossBGMTape(durationMs = 1400) {
-  if (BGM_OFF) return; // ?nobgm: 切り分け用にBGMを起動しない
   if (!audioCtx || !bossBgmBuffer) { startBGMTape(durationMs); return; }
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
@@ -9252,15 +9217,14 @@ function draw() {
      AudioParam.value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため
      JS 側で管理した grayRateCur を使用 */
   {
-    /* グレースケール適用。?nofilterで無効化できる（実機A/B用）。
-       will-changeはフィルターが掛かっている間だけ付ける: 常時付けておくと
-       フィルター用の合成パスが維持され、掛かっていない間もGPUコストを払う。
-       ?nowcで「常時auto（付けない）」に固定して比較できる */
+    /* グレースケール適用。will-changeはフィルターが掛かっている間だけ付ける:
+       常時付けておくとフィルター用の合成パスが維持され、掛かっていない間も
+       GPUコストを払う（CSS側の宣言をやめてここで制御しているのはそのため） */
     const rate = Math.max(0.001, Math.min(1, grayRateCur));
-    const f = (GRAY_FILTER_OFF || rate >= 0.995) ? '' : `grayscale(${Math.round((1 - rate) * 90)}%)`;
+    const f = rate >= 0.995 ? '' : `grayscale(${Math.round((1 - rate) * 90)}%)`;
     if (f !== _lastFilter) {
       canvas.style.filter = _lastFilter = f;
-      if (!WILL_CHANGE_OFF) canvas.style.willChange = f ? 'filter' : 'auto';
+      canvas.style.willChange = f ? 'filter' : 'auto';
     }
   }
 
@@ -9638,8 +9602,6 @@ function draw() {
   _drawScreenFade();
   /* デバッグ用タップ式チートパネル（?cheatpanel時のみ、常に最前面） */
   drawCheatPanel();
-  /* デバッグ用keydown受信ログ（?keydebug時のみ、常に最前面） */
-  drawKeyDebug();
   drawPerf(); // ?perf 計測オーバーレイ（付けた時だけ描画）
 }
 
@@ -11596,10 +11558,6 @@ function cheatShoot(char) {
 }
 
 document.addEventListener('keydown', e=>{
-  if (KEY_DEBUG_ON) {
-    _keyDebugLog.unshift(`code=${e.code||'(空)'} key=${e.key||'(空)'} ctrl=${e.ctrlKey} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey}`);
-    if (_keyDebugLog.length > 6) _keyDebugLog.length = 6;
-  }
   if (phase === 'startup') {
     if (e.code === 'Space') { e.preventDefault(); if (!audioCtx) getAudioCtx(); initGame(); }
     return;
