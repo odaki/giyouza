@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.24';
+const VERSION = 'v6.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2335,40 +2335,75 @@ function _playKingCrackKin(ctx, t, dest) {
 }
 
 /* キングギヨウザ登場（誕生）の瞬間専用、ドラ（銅鑼）風の派手な一撃音
-   （ユーザー要望: 「バーン、とドラが鳴るような派手な感じにしたい」。
-   従来はboss_flash（雷鳴: ノイズ+A2単音）を流用していたが、boss_flashは
-   予兆収束開始・的破砕・こんがりしっぱい退場でも共用のSEのため、これを
-   派手にすると他3箇所も変わってしまう。登場の瞬間だけを差し替えたいので
-   新規ケースとして切り出す（_playAcidShootHit切り出し時と同じ隔離方針）。
-   構成は2層:
-   1. インパクト（バーン）: 低音の急減衰スライド（ドスンという衝撃）+
-      広帯域ノイズバースト（アタックのクラック感）
-   2. ドラの共鳴（金属的な唸り）: 基音（調内のA2、boss_flashと同じ音高で
-      統一）に対し非整数次の倍音比を複数重ね、それぞれ独立した長い減衰で
-      鳴らし続けて金属的な余韻を作る。整数次倍音列だと管楽器的な音になって
-      しまうため、あえて整数比から外す（ベル/銅鑼の加算合成の定石）。
-      高次倍音ほど音量を落とし・減衰を速くすることで自然な減衰特性にする */
+   （ユーザー要望: 「バーン、とドラが鳴るような派手な感じにしたい」→さらに
+   「バイーン！という本物っぽい音に近づけたい」）。
+   boss_flash（雷鳴）を流用すると予兆収束・的破砕・こんがりしっぱい退場でも
+   変わってしまうため、登場の瞬間だけを差し替えられるよう独立させてある。
+
+   当初は非整数次の部分音を単独のサイン波で6本重ねる構成だったが、それだと
+   澄んだ鐘の音になり銅鑼にならなかった。実物との差は次の3つで、いずれも
+   「金属板が非線形に振動する」ことから来る:
+   1. うなり  … 極近接した部分音どうしが干渉して数Hzで揺れる。1本の純音では
+                絶対に出ない音色なので、各部分音を±0.4〜1.2%ずらした2本組にする。
+                周波数差がそのままうなりの速さになる（例: 110Hz×0.6%≒0.7Hz）
+   2. ブルーム … 打った瞬間ではなく、少し遅れて高次成分が膨らむ。エネルギーが
+                低次から高次へ移る現象で、銅鑼が「育つ」ように聞こえる正体。
+                高次ほどアタックを遅らせ、ピークも後ろへずらす
+   3. しなり  … 打撃直後に張力が緩んでピッチがわずかに下がる。「バイーン」の
+                「イ」に当たる部分。低次の部分音だけに軽い下降グライドを掛ける
+                （高次まで下げると全体が間延びして聞こえる）
+   構成は3層（インパクト / 共鳴 / 余韻）。基音は boss_flash と同じ A2 で統一する。 */
+const _DORA_PARTIALS = [
+  /* ratio: 基音に対する比（非整数＝ベル/銅鑼の定石。整数比だと管楽器的になる）
+     vol  : 音量比 / decay: 減衰秒 / attack: 立ち上がり秒（ブルーム）
+     detune: 二重化する相方のずらし率（うなりの速さを決める） */
+  { ratio: 1.00, vol: 0.145, decay: 3.2, attack: 0.010, detune: 0.006 },
+  { ratio: 1.52, vol: 0.110, decay: 2.9, attack: 0.014, detune: 0.008 },
+  { ratio: 2.00, vol: 0.095, decay: 2.6, attack: 0.020, detune: 0.005 },
+  { ratio: 2.76, vol: 0.072, decay: 2.2, attack: 0.030, detune: 0.010 },
+  { ratio: 3.30, vol: 0.055, decay: 1.9, attack: 0.045, detune: 0.012 },
+  { ratio: 4.20, vol: 0.042, decay: 1.6, attack: 0.060, detune: 0.009 },
+  { ratio: 5.40, vol: 0.030, decay: 1.3, attack: 0.080, detune: 0.011 },
+  { ratio: 7.10, vol: 0.022, decay: 1.0, attack: 0.100, detune: 0.014 },
+];
+/* 音量は「合計してもマスターリミッターに潰されない」ことを基準に決めてある。
+   部分音を2本組にしたぶん本数が倍（16本）になっており、素直に重ねると合計振幅が
+   1.5に達してリミッターがアタックを削ってしまう（オフラインレンダで実測）。
+   結果として「派手にしたつもりが逆に鈍る」ため、合計が旧実装と同程度に収まるよう
+   各音量を約55%に引いてある。うなりとブルームは本数と時間差で作るので、
+   音量を下げても目的の音色は失われない */
+const _DORA_BEND = 0.972;     // 打撃直後の下降しなり（低次のみ・元の97.2%まで）
+const _DORA_BEND_SEC = 0.22;  // しなりに掛ける時間
 function _playDoraHit(ctx, t, dest) {
   const d = _seDest(ctx, dest);
-  _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4); // インパクト: 低音ドスン
-  playNoise(ctx, t, 0.12, 0.5, 1500, d); // インパクト: アタックのノイズクラック
+  /* 1. インパクト（バーン）: 低音の急減衰スライド＋ノイズ2種。
+        ノイズを2つに分けているのは、低め(1.5kHz)だけだと「ドスン」で終わり、
+        金属を叩いた瞬間の高い当たり音が出ないため。短い高域を重ねる */
+  _playSlideOsc(ctx, d, t, 'sine', 180, 45, 0.15, [[0, 0.9, 'set'], [0.35, 0.0001]], 0.4);
+  playNoise(ctx, t, 0.12, 0.50, 1500, d); // 胴鳴りのクラック
+  playNoise(ctx, t, 0.05, 0.22, 6000, d); // 金属の当たり（短く高い）
+  /* 2. 共鳴（金属的な唸り）: 各部分音を2本組で鳴らしてうなりを作る */
   const base = noteHz('A', 2); // boss_flashの雷鳴と同じ音高で統一
-  const partials = [1, 2.0, 2.76, 3.3, 4.2, 5.4]; // ベル/銅鑼特有の非整数次倍音比
-  partials.forEach((ratio, i) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(d);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(base * ratio, t);
-    const vol = 0.22 / (i + 1);
-    const decay = 1.8 - i * 0.15;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.linearRampToValueAtTime(vol, t + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + decay);
-    const stopAt = t + decay + 0.05;
-    osc.start(t); osc.stop(stopAt);
-    if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
-  });
+  for (const p of _DORA_PARTIALS) {
+    const isLow = p.ratio <= 2.0; // しなりを掛けるのは低次だけ
+    for (const sign of [-1, 1]) {
+      const f0 = base * p.ratio * (1 + sign * p.detune * 0.5);
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(d);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f0, t);
+      if (isLow) osc.frequency.exponentialRampToValueAtTime(f0 * _DORA_BEND, t + _DORA_BEND_SEC);
+      /* ブルーム: 高次ほど遅れて立ち上がる。2本組なので各1本の音量は半分 */
+      const vol = p.vol * 0.5;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(vol, t + p.attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + p.decay);
+      const stopAt = t + p.decay + 0.05;
+      osc.start(t); osc.stop(stopAt);
+      if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, osc, gain);
+    }
+  }
 }
 
 /* こんがり達成（キング撃破）専用の達成感あるファンファーレ
