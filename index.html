@@ -310,8 +310,15 @@ function _perfMark(key, t0) {
    フレームの合成時に来るので、performance.nowで測るframe workには出ない。
    「frame work 2msなのにgap 68ms」という数字はこれで説明がつく。
    計測器が計測対象より重い状態だったので、焼き直しは内容が変わったときだけ、
-   かつ最短でも_PERF_REDRAW_MS間隔に制限する。毎フレームの負担はdrawImage1回になる */
-const _PERF_REDRAW_MS = 200;
+   かつ最短でも_PERF_REDRAW_MS間隔に制限する。毎フレームの負担はdrawImage1回になる。
+
+   それでも「1回の焼き込み」のコストは残っている。実機で1射ごとに30msの
+   スパイクが出ており、?noresblur でも ?noelev でも数字が変わらなかったことから、
+   焼き直しがそのまま犯人である疑いが強い（射った瞬間は tap/touch/lsW/bar の値が
+   一斉に変わる＝内容が変わる＝焼き直しが射撃に同期して発火する）。
+   ?perfms=N で間隔を変えられるようにしたので、間隔を伸ばしてスパイクの頻度が
+   それに追従すれば確定する。計測器の影響を疑うときはこれで切り分ける */
+const _PERF_REDRAW_MS = _dbgNum('perfms', 200);
 let _perfOC = null, _perfOCText = '', _perfOCAt = 0, _perfOCH = 0;
 function drawPerf() {
   if (!PERF_ON) return;
@@ -437,7 +444,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.35';
+const VERSION = 'v6.36';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1224,10 +1231,10 @@ function _buildResultOC(w) {
   c.font = `bold 44px 'Hiragino Mincho ProN',serif`;
   c.textAlign = 'center'; c.textBaseline = 'middle';
   /* ?noresblur: グローを外して焼く調査用フラグ。
-     この焼き込みは射るたび（＝ロック時）に走り、実機の?perfで1射ごとに
-     30msのフレーム間隔スパイクが出ている。JS側は1msなので、疑っているのは
-     ぼかしのラスタライズ（canvasの描画コストはframe workに出ない）。
-     フラグ有りでスパイクが消えれば確定 */
+     「1射ごとの30msスパイクはこのぼかしのラスタライズではないか」という仮説の
+     検証用に用意したが、実機A/Bで**否定された**（フラグの有無でgap最大31ms・
+     spike 30ms前後が全く変わらなかった）。ここは犯人ではない。再度疑わないこと。
+     フラグは同種の切り分けに再利用できるので残置する */
   if (!_NO_RES_BLUR) { c.shadowColor = glowC; c.shadowBlur = 10 + w.syncScore * 20; }
   c.fillStyle = fillC;
   c.fillText(w.result, _RESULT_OC_HALF, _RESULT_OC_HALF);
