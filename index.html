@@ -382,7 +382,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.08';
+const VERSION = 'v6.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1195,8 +1195,8 @@ function _runWhenIdle(fn, delayMs) {
    1回あたりの塊を1/4にすること。合計でも約270msで、プレイヤーが4本射り終える
    より十分早く完了する（間に合わなかった場合はinit()側の同期生成に落ちるだけで
    壊れない） */
-const _PREBUILD_START_DELAY_MS = 150;
-const _PREBUILD_STEP_MS        = 40;
+const _PREBUILD_START_DELAY_MS = 100;
+const _PREBUILD_STEP_MS        = 30;
 function _scheduleWheelPreBuild() {
   if (_pendingWheelScheduled) return;
   _pendingWheelScheduled = true;
@@ -1208,21 +1208,22 @@ function _scheduleWheelPreBuild() {
      init()や_startBossOmenが次の世代を立ち上げうるため。古い世代がそのまま
      走り続けると、後から_pendingWheelsを1世代前の内容で上書きしてしまう */
   const gen = ++_pendingWheelGen;
-  const parts = [];
+  _releaseWheelOCs(_pendingWheels); // 前回の作り置きが残っていればプールへ返す
+  /* 進捗は _pendingWheels へ逐次公開する。以前は4個そろうまで公開しなかったため、
+     間に合わないと init() が4個まとめて同期生成していた。16分打ち（1拍に4射）だと
+     トライ1周が1〜2拍しかなく、その同期生成が毎トライ発生しうる（実機での指摘）。
+     逐次公開なら、間に合わなかったぶんだけを init() が作れば済む */
+  _pendingWheels = [];
   const step = () => {
-    if (gen !== _pendingWheelGen) { _releaseWheelOCs(parts); return; } // 世代交代済み: 作りかけを返却して降りる
-    if (parts.length < WXS.length) {
-      const i = parts.length;
-      const _t0 = PERF_ON ? performance.now() : 0;
-      parts.push(createWheel(WXS[i], WYS[i], null));
-      if (PERF_ON) _perfMark('pre', _t0);
-      _runWhenIdle(step, _PREBUILD_STEP_MS);
-      return;
-    }
-    /* 二重スケジュール（コールバック発火前に init() が再スケジュール）で
-       2回発火した場合、前回分のOCをプールへ返却してから上書きする */
-    _releaseWheelOCs(_pendingWheels);
-    _pendingWheels = parts;
+    /* 世代交代済み（init()やボス突入が次を立ち上げた）なら何も触らない。
+       作りかけの所有権は既にそちらへ移っているので、ここで返却すると二重解放になる */
+    if (gen !== _pendingWheelGen) return;
+    const i = _pendingWheels.length;
+    if (i >= WXS.length) return;
+    const _t0 = PERF_ON ? performance.now() : 0;
+    _pendingWheels.push(createWheel(WXS[i], WYS[i], null));
+    if (PERF_ON) _perfMark('pre', _t0);
+    if (_pendingWheels.length < WXS.length) _runWhenIdle(step, _PREBUILD_STEP_MS);
   };
   _runWhenIdle(step, _PREBUILD_START_DELAY_MS);
 }
@@ -3767,22 +3768,30 @@ function init(fromStartup, fromGameOver) {
   _releaseWheelOCs(wheels);
   /* 事前構築済みホイールを再利用（GCスパイク回避）。
      フィーバー発動時・未構築時は通常通り同期生成にフォールバック。 */
-  if (_pendingWheels && !isFever && !feverPending) {
-    wheels = _pendingWheels;
-    /* isSlowSpin はここで初めて確定するため speed のみ更新 */
-    for (const w of wheels) {
-      w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
-    }
-  } else {
-    /* フィーバー時等、事前構築分を使わない場合はOCをプールへ返却（リーク防止） */
-    _releaseWheelOCs(_pendingWheels);
-    wheels = WXS.map((x, i) => createWheel(x, WYS[i], isFever ? TARGET[i] : null));
-  }
+  /* 事前構築の作りかけを使えるだけ使い、足りないぶんだけここで作る。
+     フィーバー時は文字の偏りが変わるので作り置きは使わずプールへ返す */
+  const _ready = (_pendingWheels && !isFever && !feverPending) ? _pendingWheels : null;
+  if (!_ready) _releaseWheelOCs(_pendingWheels);
   _pendingWheels = null;
   _pendingWheelScheduled = false;
-  /* 次トライ用ホイールをアイドル時間に事前構築開始。
-     プレイヤーが4本射るまでの時間（≥270ms）で完成するため、
-     ハズレ自動リセット時も同期生成コストを回避できる。 */
+  _pendingWheelGen++; // 走っているチェーンを打ち切る（作りかけの所有権をこちらへ移す）
+  wheels = WXS.map((x, i) => {
+    if (_ready && _ready[i]) return _ready[i];
+    /* 同期生成ぶんも計測に含める。以前はチェーン側にしかプローブが無く、
+       「間に合わずここで4個作った」ときのコストが?perfから見えなかった */
+    const _t0 = PERF_ON ? performance.now() : 0;
+    const w = createWheel(x, WYS[i], isFever ? TARGET[i] : null);
+    if (PERF_ON) _perfMark('pre', _t0);
+    return w;
+  });
+  /* isSlowSpin はここで初めて確定するため speed のみ更新 */
+  for (const w of wheels) {
+    w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
+  }
+  /* 次トライ用ホイールをアイドル時間に事前構築開始。完成まで約190ms。
+     16分打ち（1拍に4射）だとトライ1周が1〜2拍しかなく間に合わないことがあるが、
+     その場合も作りかけを使って足りないぶんだけ上で同期生成するので、
+     最悪でも「4個まとめて同期生成」にはならない */
   _scheduleWheelPreBuild();
   curIdx     = 0;
   phase      = 'idle';
