@@ -437,7 +437,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.34';
+const VERSION = 'v6.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1210,6 +1210,7 @@ function _releaseWheelOCs(ws) {
 /* 結果文字（44px + グロー）を OC へ一度だけ描画する。
    色・グロー強度は syncScore 依存だが、ロック時に確定するため再描画不要。 */
 const _RESULT_OC_HALF = 52; // 44px 文字 + 最大グロー30 を収める半径
+const _NO_RES_BLUR = _dbgFlag('noresblur'); // 下記の焼き込みからグローを外す（調査用）
 function _buildResultOC(w) {
   if (typeof OffscreenCanvas === 'undefined') return;
   const _t0 = PERF_ON ? performance.now() : 0;
@@ -1222,7 +1223,12 @@ function _buildResultOC(w) {
   const [fillC, glowC] = _syncBarColor(w.syncScore);
   c.font = `bold 44px 'Hiragino Mincho ProN',serif`;
   c.textAlign = 'center'; c.textBaseline = 'middle';
-  c.shadowColor = glowC; c.shadowBlur = 10 + w.syncScore * 20;
+  /* ?noresblur: グローを外して焼く調査用フラグ。
+     この焼き込みは射るたび（＝ロック時）に走り、実機の?perfで1射ごとに
+     30msのフレーム間隔スパイクが出ている。JS側は1msなので、疑っているのは
+     ぼかしのラスタライズ（canvasの描画コストはframe workに出ない）。
+     フラグ有りでスパイクが消えれば確定 */
+  if (!_NO_RES_BLUR) { c.shadowColor = glowC; c.shadowBlur = 10 + w.syncScore * 20; }
   c.fillStyle = fillC;
   c.fillText(w.result, _RESULT_OC_HALF, _RESULT_OC_HALF);
   w._resOC = oc;
