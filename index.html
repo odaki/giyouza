@@ -427,7 +427,7 @@ canvas.height = H * _dpr;
 ctx.scale(_dpr, _dpr);
 
 
-const VERSION = 'v6.28';
+const VERSION = 'v6.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2374,9 +2374,12 @@ const _DORA_PARTIALS = [
   { ratio: 4.20, vol: 0.042, decay: 1.6, attack: 0.060, detune: 0.009 },
   { ratio: 5.40, vol: 0.030, decay: 1.3, attack: 0.080, detune: 0.011 },
   { ratio: 7.10, vol: 0.022, decay: 1.0, attack: 0.100, detune: 0.014 },
-  { ratio: 9.50, vol: 0.018, decay: 1.2, attack: 0.070, detune: 0.016 }, // ここから上は
-  { ratio: 12.4, vol: 0.014, decay: 1.0, attack: 0.090, detune: 0.019 }, // 「シャリ」を担う
-  { ratio: 16.3, vol: 0.010, decay: 0.8, attack: 0.110, detune: 0.022 }, // きらめき成分
+  /* 上位3本は「打ってから生えてくる」高次モード。立ち上がりを大きく遅らせ、
+     減衰も伸ばして、ノイズのシャリ層（2.6秒）と同じ時間を生きるようにする。
+     早く死ぬと余韻の途中で本体側の高域だけ先に消え、ノイズが浮いて聞こえる */
+  { ratio: 9.50, vol: 0.018, decay: 1.6, attack: 0.180, detune: 0.016 }, // ここから上は
+  { ratio: 12.4, vol: 0.014, decay: 1.5, attack: 0.260, detune: 0.019 }, // 「シャリ」を担う
+  { ratio: 16.3, vol: 0.010, decay: 1.4, attack: 0.340, detune: 0.022 }, // きらめき成分
 ];
 /* 歪み: 部分音を合成した「和」に対して掛ける。個々の部分音を歪ませても倍音が
    増えるだけだが、和を歪ませると部分音どうしの相互変調（和音・差音）が生まれる。
@@ -2424,7 +2427,11 @@ const _DORA_SHIMMER_HP1   = 3200;  // 下端: 広がりきった後（帯域が�
    手がかりになる。実装して測ったが改善が確認できず、原理的にも逆効果と判断した */
 const _DORA_SHIMMER_BRIDGE_HZ = 1800; // 本体の最高部分音（16.3倍）付近を持ち上げて繋ぐ
 const _DORA_SHIMMER_BRIDGE_DB = 6;
-const _DORA_SHIMMER_LP    = 9000;  // 上端（これより上はシャリではなく単なるノイズになる）
+/* 上端も下端と一緒に上げていく。帯域が丸ごと上へ移るので「細かくなっていく」
+   感じが強まる（上端が固定だと、下端が上がるぶん帯域が痩せるだけになる）。
+   9kHzより上はシャリではなく単なるノイズになるのでそこで止める */
+const _DORA_SHIMMER_LP0   = 5000;  // 上端: 打撃直後
+const _DORA_SHIMMER_LP1   = 9000;  // 上端: 広がりきった後
 const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭が潰れて音が痩せるため、
                                // 旧実装と同程度のピーク（約1.3）に戻す値をレンダで実測して決めた
 /* 音量は「合計してもマスターリミッターに潰されない」ことを基準に決めてある。
@@ -2435,6 +2442,19 @@ const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭�
    音量を下げても目的の音色は失われない */
 const _DORA_BEND = 0.972;     // 打撃直後の下降しなり（低次のみ・元の97.2%まで）
 const _DORA_BEND_SEC = 0.22;  // しなりに掛ける時間
+/* うなりの速さを時間とともに緩める。実物の板は振幅が大きいほどモード周波数が
+   ずれ、減衰するにつれて本来の値へ戻る。したがって「打撃直後は速く揺れ、
+   余韻では揺れがゆっくりになる」。定数のうなりだと機械的なトレモロに聞こえる。
+   これは本体自身の性質なので、撤回したシャリのLFO（本体と無関係な周期で揺れる）
+   とは違い、別音源の手がかりにはならない */
+const _DORA_BEAT_SPREAD = 1.6;  // 打撃直後のずらし幅（最終値の何倍か）
+const _DORA_BEAT_SEC    = 1.6;  // 本来のずらし幅へ戻るまでの時間
+/* 減衰を二段にする（ニー）。実物は打撃直後に急に落ちてから長く伸びる。
+   単一の指数減衰だと中盤がいつまでも大きく、「ずっと鳴っている電子音」に近づく。
+   二段にすると頭のバーンと余韻のシャリの対比が付き、歪みバス上でも本体が早く
+   引くぶんシャリが前に出てくる */
+const _DORA_KNEE_LEVEL = 0.45; // 一段目で落ちる先（ピークに対する比）
+const _DORA_KNEE_FRAC  = 0.10; // 一段目に使う時間（decayに対する比）
 /* シャリ層（_DORA_SHIMMER_* のコメント参照）。ノイズをループ再生し、
    バンドパスの中心を上へ動かしながら、遅れて立ち上げてゆっくり減衰させる。
    ノイズバッファはplayNoiseと同じ方針で使い分ける（実コンテキストでは事前生成の
@@ -2461,7 +2481,9 @@ function _playDoraShimmer(ctx, t, dest) {
   hp.frequency.setValueAtTime(_DORA_SHIMMER_HP0, t);
   hp.frequency.exponentialRampToValueAtTime(_DORA_SHIMMER_HP1, t + _DORA_SHIMMER_ATK * 2.5);
   const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = _DORA_SHIMMER_LP;
+  lp.type = 'lowpass'; lp.Q.value = 0.7;
+  lp.frequency.setValueAtTime(_DORA_SHIMMER_LP0, t);
+  lp.frequency.exponentialRampToValueAtTime(_DORA_SHIMMER_LP1, t + _DORA_SHIMMER_ATK * 4);
   const gain = ctx.createGain();
   gain.gain.setValueAtTime(0.0001, t);
   gain.gain.linearRampToValueAtTime(_DORA_SHIMMER_VOL, t + _DORA_SHIMMER_ATK);
@@ -2508,17 +2530,26 @@ function _playDoraHit(ctx, t, dest) {
   for (const p of _DORA_PARTIALS) {
     const isLow = p.ratio <= 2.0; // しなりを掛けるのは低次だけ
     for (const sign of [-1, 1]) {
-      const f0 = base * p.ratio * (1 + sign * p.detune * 0.5);
+      /* 打撃直後は広めにずらし、余韻へ向けて本来のずらし幅へ戻す＝うなりが緩む。
+         低次はしなり(_DORA_BEND)を経由するので、その到達点から続けて戻す */
+      const half = base * p.ratio * sign * p.detune * 0.5;
+      const fEnd = base * p.ratio + half;
+      const f0   = base * p.ratio + half * _DORA_BEAT_SPREAD;
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(d);
       osc.type = 'sine';
       osc.frequency.setValueAtTime(f0, t);
       if (isLow) osc.frequency.exponentialRampToValueAtTime(f0 * _DORA_BEND, t + _DORA_BEND_SEC);
+      osc.frequency.exponentialRampToValueAtTime(
+        fEnd * (isLow ? _DORA_BEND : 1), t + _DORA_BEAT_SEC);
       /* ブルーム: 高次ほど遅れて立ち上がる。2本組なので各1本の音量は半分 */
       const vol = p.vol * 0.5;
       gain.gain.setValueAtTime(0.0001, t);
       gain.gain.linearRampToValueAtTime(vol, t + p.attack);
+      /* 二段減衰（_DORA_KNEE_* 参照）。ニーは立ち上がり切ってから掛ける */
+      gain.gain.exponentialRampToValueAtTime(
+        vol * _DORA_KNEE_LEVEL, t + p.attack + p.decay * _DORA_KNEE_FRAC);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + p.decay);
       const stopAt = t + p.decay + 0.05;
       osc.start(t); osc.stop(stopAt);
