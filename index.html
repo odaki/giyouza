@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.57';
+const VERSION = 'v6.58';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7443,7 +7443,7 @@ let _kingCrackKinLastMs = -Infinity;
    打ち込み: 5タップ（4マーク＋発射）はすべてハイハット(kingShoot)で生・即時。
      入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
      ここで守られる。各タップの時刻は _bgmJudgePos → 8分スロットへ量子化して記録。
-   再生: 記録した相対オフセットを1小節へ収めて、スネア(kingBeam)で鳴らす。
+   再生: 記録した相対オフセットの「長い隙間だけ」を詰めて、スネア(kingBeam)で鳴らす。
      こんがりが揃った時だけ発生し、ミス時は従来どおり（篩い落とし→衝突→ひび）。
      音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
      16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえるため。
@@ -7457,19 +7457,26 @@ const KING_SEQ_QUANT = BGM_BEAT / 2;   // 量子化の刻み＝8分音符（calc
    区切って描く（drawKingCookGauge参照） */
 const KING_BATTERY_BEATS = 28;
 const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節）
-/* 再生の長さの上限＝1小節（7拍＝8分14個）。実機評価「再生側が長く感じる」への
-   対応で、打ち込みの尺と1:1だった再生をここへ収める（バッテリーを28拍にした
-   ぶん、再生の最悪ケースも9.05秒まで伸びていた）。
-   1小節を超えたぶんだけ比率で圧縮し、収まっているものは伸ばさない: 速く打ち
-   終わったパターンを小節いっぱいへ広げると「速く打てば速く終わる」報酬が消え、
-   詰めて叩いた密度も薄まるため。圧縮してもリズムの形（どの隙間が長いか）は
-   比率として保たれ、圧縮後にもう一度8分グリッドへ丸めるので量子化も保たれる。
-   5音目（アクセント）はこの小節の中に入れず、直後のダウンビート（=マップ後の
-   スロット14）に置く。小節の最後の8分に置くと0.45秒鳴るスネアの行き場が無く、
-   また「4発が小節を走って頭で締める」ほうがフレーズとして解決する。
-   なお圧縮は遅く叩いたパターンほど強く効くので、もたついた打ち込みほど密な
-   フィルとして鳴る（副作用としてユーザー了承済み・一旦静観） */
-const KING_SEQ_SPAN_SLOTS = KING_BATTERY_GROUP * 2;
+/* 隙間の上限（8分いくつ分か）。実機評価「再生側が長く感じる」への対応。
+   打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」で
+   あってリズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ
+   切り詰める。実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分が
+   ある形（例: 隙間 2,28,4,6 → 2,4,4,4）は保たれる。
+
+   4（＝2拍）を選んだ理由:
+   - 上限2（1拍）だと隙間2と隙間28が両方2になり、「速い部分がある」形が消える
+   - 偶数なので、詰まった隙間は必ず拍の上に乗る。全部詰まったパターンが8分の裏に
+     散らからず、素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる
+   - タップ間は最大4つ（4マーク＋発射）なので上限が 4×4=16スロット＝8拍＝2.63秒で
+     割り切れ、比率圧縮を使わずに単一ルールで完結する
+
+   これで以前の比率圧縮（打ち込み全体を1小節へ縮める方式）が持っていた
+   「遅く叩くほど密なフィルになる」副作用がルールごと無くなる。 */
+const KING_SEQ_GAP_MAX = 4;
+/* 再生スパンの上限。KING_SEQ_GAP_MAX が効いていれば超えないので通常は発火しない
+   保険（上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
+   超えた場合だけ比率で縮める。 */
+const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
 /* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
    ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
 const KING_SEQ_MIN_LEAD = 0.15;
@@ -8006,29 +8013,40 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      8分の裏から始めるとバッテリーの目盛りも裏拍で刻まれて気持ち悪くなる */
   let anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
   if (anchor % 2 !== 0) anchor++;
-  /* 打ち込み全体の長さ（8分いくつ分か）を1小節へ収める倍率。
-     縮めるだけで伸ばさない（KING_SEQ_SPAN_SLOTS の定義部参照） */
-  const rawSpan = accentSlot - baseSlot;
+  /* 隙間クランプ（KING_SEQ_GAP_MAX の定義部参照）。5タップ（4マーク＋発射）の
+     間の隙間それぞれに上限を掛け、超えたぶんを切り詰めた新しいオフセットを作る。
+     短い隙間＝実際に叩いている部分はそのまま残り、長い待ち時間だけが詰まる。
+     OK以下のタップ（ビームも焦げ跡も出ない）も時間としては隙間を持つので、
+     ここでは markRef の有無に関わらず全タップを並べる */
+  const taps = rec.map(r => r.slot); taps.push(accentSlot);
+  const off = [0];
+  for (let i = 1; i < taps.length; i++) {
+    off.push(off[i - 1] + Math.min(Math.max(0, taps[i] - taps[i - 1]), KING_SEQ_GAP_MAX));
+  }
+  /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
+  const rawSpan = off[off.length - 1];
   const scale = rawSpan > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / rawSpan : 1;
-  const mapOff = o => Math.round(o * scale); // 圧縮後にもう一度8分グリッドへ丸める
+  const mapOff = i => Math.round(off[i] * scale);
   const events = [];
-  for (const r of rec) {
+  for (let i = 0; i < rec.length; i++) {
     /* OK以下のタップは焦げ跡もビームも無い（既存仕様）＝そのスロットは無音になり、
        打ち込んだパターンに穴が開く。雑に叩くとリズムが歯抜けになるという形で
        精度が音に出る */
-    if (!r.flight.markRef) continue;
-    const at = _bgmBufPosToCtxTime((anchor + mapOff(r.slot - baseSlot)) * KING_SEQ_QUANT);
+    if (!rec[i].flight.markRef) continue;
+    const at = _bgmBufPosToCtxTime((anchor + mapOff(i)) * KING_SEQ_QUANT);
     if (at === null) return false;
     /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
-    events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: r.flight });
-    events.push({ at, kind: 'impact', f: r.flight });
+    events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: rec[i].flight });
+    events.push({ at, kind: 'impact', f: rec[i].flight });
   }
-  /* 5音目（アクセント）＝マップ後の末尾。ここが次のトライの開始と同じ瞬間になる
+  /* 5音目（アクセント）＝クランプ後の末尾。ここが次のトライの開始と同じ瞬間になる
      （ユーザー選択: 死に時間をゼロにして、アクセントがそのまま次の「1」になる）。
      そのため次トライのバッテリー起点として位置も持たせる。
+     隙間が詰まった打ち込みではオフセットが KING_SEQ_GAP_MAX の倍数＝拍の上に
+     乗るので、次トライの目盛りも拍から刻まれる。
      焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
      不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
-  const accentPos = (anchor + mapOff(rawSpan)) * KING_SEQ_QUANT;
+  const accentPos = (anchor + mapOff(off.length - 1)) * KING_SEQ_QUANT;
   const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
   events.push({ at: accentAt, kind: 'accent', gain, flights, dud: events.length === 0, nextPos: accentPos });
