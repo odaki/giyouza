@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.56';
+const VERSION = 'v6.57';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7443,7 +7443,7 @@ let _kingCrackKinLastMs = -Infinity;
    打ち込み: 5タップ（4マーク＋発射）はすべてハイハット(kingShoot)で生・即時。
      入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
      ここで守られる。各タップの時刻は _bgmJudgePos → 8分スロットへ量子化して記録。
-   再生: 記録した相対オフセットのまま、スネア(kingBeam)で鳴らす。
+   再生: 記録した相対オフセットを1小節へ収めて、スネア(kingBeam)で鳴らす。
      こんがりが揃った時だけ発生し、ミス時は従来どおり（篩い落とし→衝突→ひび）。
      音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
      16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえるため。
@@ -7457,6 +7457,19 @@ const KING_SEQ_QUANT = BGM_BEAT / 2;   // 量子化の刻み＝8分音符（calc
    区切って描く（drawKingCookGauge参照） */
 const KING_BATTERY_BEATS = 28;
 const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節）
+/* 再生の長さの上限＝1小節（7拍＝8分14個）。実機評価「再生側が長く感じる」への
+   対応で、打ち込みの尺と1:1だった再生をここへ収める（バッテリーを28拍にした
+   ぶん、再生の最悪ケースも9.05秒まで伸びていた）。
+   1小節を超えたぶんだけ比率で圧縮し、収まっているものは伸ばさない: 速く打ち
+   終わったパターンを小節いっぱいへ広げると「速く打てば速く終わる」報酬が消え、
+   詰めて叩いた密度も薄まるため。圧縮してもリズムの形（どの隙間が長いか）は
+   比率として保たれ、圧縮後にもう一度8分グリッドへ丸めるので量子化も保たれる。
+   5音目（アクセント）はこの小節の中に入れず、直後のダウンビート（=マップ後の
+   スロット14）に置く。小節の最後の8分に置くと0.45秒鳴るスネアの行き場が無く、
+   また「4発が小節を走って頭で締める」ほうがフレーズとして解決する。
+   なお圧縮は遅く叩いたパターンほど強く効くので、もたついた打ち込みほど密な
+   フィルとして鳴る（副作用としてユーザー了承済み・一旦静観） */
+const KING_SEQ_SPAN_SLOTS = KING_BATTERY_GROUP * 2;
 /* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
    ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
 const KING_SEQ_MIN_LEAD = 0.15;
@@ -7993,23 +8006,32 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      8分の裏から始めるとバッテリーの目盛りも裏拍で刻まれて気持ち悪くなる */
   let anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
   if (anchor % 2 !== 0) anchor++;
+  /* 打ち込み全体の長さ（8分いくつ分か）を1小節へ収める倍率。
+     縮めるだけで伸ばさない（KING_SEQ_SPAN_SLOTS の定義部参照） */
+  const rawSpan = accentSlot - baseSlot;
+  const scale = rawSpan > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / rawSpan : 1;
+  const mapOff = o => Math.round(o * scale); // 圧縮後にもう一度8分グリッドへ丸める
   const events = [];
   for (const r of rec) {
     /* OK以下のタップは焦げ跡もビームも無い（既存仕様）＝そのスロットは無音になり、
        打ち込んだパターンに穴が開く。雑に叩くとリズムが歯抜けになるという形で
        精度が音に出る */
     if (!r.flight.markRef) continue;
-    const at = _bgmBufPosToCtxTime((anchor + (r.slot - baseSlot)) * KING_SEQ_QUANT);
+    const at = _bgmBufPosToCtxTime((anchor + mapOff(r.slot - baseSlot)) * KING_SEQ_QUANT);
     if (at === null) return false;
     /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
     events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: r.flight });
     events.push({ at, kind: 'impact', f: r.flight });
   }
-  const accentAt = _bgmBufPosToCtxTime((anchor + (accentSlot - baseSlot)) * KING_SEQ_QUANT);
+  /* 5音目（アクセント）＝マップ後の末尾。ここが次のトライの開始と同じ瞬間になる
+     （ユーザー選択: 死に時間をゼロにして、アクセントがそのまま次の「1」になる）。
+     そのため次トライのバッテリー起点として位置も持たせる。
+     焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
+     不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
+  const accentPos = (anchor + mapOff(rawSpan)) * KING_SEQ_QUANT;
+  const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
-  /* 5音目（アクセント）。焦げ跡が1つも無ければダメージ自体が無いので、
-     アクセントではなく既存の不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
-  events.push({ at: accentAt, kind: 'accent', gain, flights, dud: events.length === 0 });
+  events.push({ at: accentAt, kind: 'accent', gain, flights, dud: events.length === 0, nextPos: accentPos });
   /* 同一スロットの重なりは間引かずそのまま重ねる（プレイヤーの入力を補正しない
      という原則を全イベントに一様に適用する）。同時発音は振幅が重なるが、
      masterGain出力のセーフティリミッターが歪みを防ぐ */
@@ -8031,15 +8053,15 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
 function _kingSeqStep() {
   if (!_king || _king.seqEvents.length === 0 || !audioCtx) return;
   const now = audioCtx.currentTime;
-  while (_king.seqEvents.length > 0 && _king.seqEvents[0].at <= now) _kingSeqFire(_king.seqEvents.shift());
+  while (_king.seqEvents.length > 0 && _king.seqEvents[0].at <= now) _kingSeqFire(_king.seqEvents.shift(), false);
 }
 
-function _kingSeqFire(e) {
+function _kingSeqFire(e, flush) {
   if      (e.kind === 'shot')   _kingFireBeam(e.f);
   /* resolve を立てるだけにして実際の着地は _updateKingCharFlights に委ねる。
      直接 _stickKingChar を呼ぶと、まだ飛翔中（'fly'）の文字が瞬間移動する */
   else if (e.kind === 'impact') e.f.resolve = 'stick';
-  else if (e.kind === 'accent') _kingSeqAccent(e);
+  else if (e.kind === 'accent') _kingSeqAccent(e, flush);
 }
 
 /* 残りの再生イベントを時刻を待たず全て確定させる（ポーズ時に呼ぶ）。
@@ -8049,22 +8071,31 @@ function _kingSeqFire(e) {
    ここで畳んでおけばポーズ中に状態が確定し、復帰後は次のトライから再開できる */
 function _kingSeqFlush() {
   if (!_king) return;
-  while (_king.seqEvents.length > 0) _kingSeqFire(_king.seqEvents.shift());
+  while (_king.seqEvents.length > 0) _kingSeqFire(_king.seqEvents.shift(), true);
 }
 
 /* 5音目のアクセント。4つの焦げ跡が一斉に発光し、キング全体が光ってのけぞり、
    全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約しているため、
    ゲージと焼き色が同じ瞬間に動く）。従来キングは被弾しても無反応だった */
-function _kingSeqAccent(e) {
+function _kingSeqAccent(e, flush) {
   /* 鳴らす対象が無かった飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
      画面に残し続ける理由が無いため */
   for (const f of e.flights) if (f.resolve === null) f.resolve = 'stick';
-  if (e.dud) return; // 焦げ跡ゼロ＝ダメージ無し。全身リアクションもしない
-  _kingApplyGain(e.gain);
-  _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
-  _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
-  _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
-  _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+  if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら全身リアクションもしない
+    _kingApplyGain(e.gain);
+    _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
+    _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
+    _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
+    _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+  }
+  /* ユーザー選択: アクセントのダウンビートを次のトライの開始と同じ瞬間にする
+     （死に時間がゼロになり、アクセントがそのまま次の小節の「1」になる）。
+     勝敗が決まった場合は次のトライへ進ませない。
+     ポーズによる畳み込み（_kingSeqFlush）は時刻が過去なので、ここで起こすと
+     バッテリーの起点が過去になって復帰直後に切れる。その場合は attemptFired を
+     立てたままにして、復帰後の _kingTrialGate へ委ねる */
+  if (flush || _king.pendingVictory || _king.pendingDefeat) return;
+  _kingStartTrial(e.nextPos);
 }
 
 /* こんがり%の加算と勝利予約。勝利はここで確定させず予約だけする（この試技の
