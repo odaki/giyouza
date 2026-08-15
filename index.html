@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.54';
+const VERSION = 'v6.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1709,21 +1709,55 @@ function getBeatPulse() {
 /* 現在の入力タイミングがビートにどれだけ近いかを 0-1 で返す
    atPerfMs: 入力イベントの timeStamp（performance.now() 基準 ms、省略時は現在時刻）
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
-function calcSyncScore(atPerfMs) {
-  const loopDur = _curQuantizedLoopDur();
-  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || loopDur <= 0) return 0.5;
-  /* 判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
-     表示先読み _BEAT_DISPLAY_ADVANCE は描画パイプライン補償なので判定には含めない
-     — リング自体が表示遅延を経て光るため、見た目のピークと判定グリッドは体感上一致する。
-     最後の積算tickから入力までの経過は performance クロック同士で補間する
-     （出力タイムラインとスケジュールタイムラインを混在させると Bluetooth 遅延環境で
-      extra が常に0へクランプされ、tick量子化バイアス＋ジッターが判定に乗る）。
-     _JUDGE_TRIM（?jlat）は判定グリッドのみを較正する（表示には影響しない） */
+/* 入力時刻を「聴こえている音」基準のバッファ内積算位置（秒・ループをまたいで単調増加）
+   へ変換する。判定（calcSyncScore）とキング戦リズムシーケンサの量子化
+   （_kingSeqSlotAt）が必ず同じ時計を使うための共通ヘルパー。
+   別々に計算すると「JUSTを取ったタップが8分スロットの境界に乗らない」という
+   食い違いが起きる（採点はグリッドAに乗っているのに再生はグリッドBへ量子化される）。
+   判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
+   表示先読み _BEAT_DISPLAY_ADVANCE は描画パイプライン補償なので判定には含めない
+   — リング自体が表示遅延を経て光るため、見た目のピークと判定グリッドは体感上一致する。
+   最後の積算tickから入力までの経過は performance クロック同士で補間する
+   （出力タイムラインとスケジュールタイムラインを混在させると Bluetooth 遅延環境で
+    extra が常に0へクランプされ、tick量子化バイアス＋ジッターが判定に乗る）。
+   _JUDGE_TRIM（?jlat）は判定グリッドのみを較正する（表示には影響しない）。
+   音声が使えない場合は null（呼び出し側が従来動作へ退避する） */
+function _bgmJudgePos(atPerfMs) {
+  if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null) return null;
   const rate    = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
   const nowPerf = (atPerfMs ?? performance.now()) / 1000;
   const extra   = Math.max(0, Math.min(nowPerf - _bgmAccumLastPerf, 0.1)); // 最後のstepから入力までの差分
-  const audioPos = _bgmAccumAudioTime + extra * rate;
-  const rawPos   = audioPos + (_JUDGE_TRIM - _hwLatency) * rate; // 聴取基準 + 判定較正
+  return _bgmAccumAudioTime + extra * rate + (_JUDGE_TRIM - _hwLatency) * rate; // 聴取基準 + 判定較正
+}
+
+/* バッファ内位置 p（_bgmAccumAudioTime と同じ系）が出力へ送り出される
+   audioCtx.currentTime を返す（キング戦シーケンサの先行スケジュール用）。
+   _bgmAccumAudioTime は _bgmAccumLastWall 時点の値なので、currentTime ではなく
+   そこを基準に外挿する（currentTime 基準にすると最大1フレーム分ずれる）。
+   出力遅延の補正は入れない: 予約したSEもBGMと同じ出力経路を通って同じだけ遅れて
+   聴こえるため、送り出しの時刻を揃えれば聴感上も揃う。
+   レートランプ中（テープ演出）は将来の位置を線形外挿できないため null を返す。 */
+function _bgmBufPosToCtxTime(p) {
+  if (!audioCtx || _bgmAccumLastWall === null || _bgmRateRamping()) return null;
+  const rate = _bgmRateTo;
+  if (rate <= 0) return null;
+  return _bgmAccumLastWall + (p - _bgmAccumAudioTime) / rate;
+}
+
+/* レートランプ（テープ演出）が「今まさに進行中」か。_bgmRateDur はランプ完了後も
+   最後の値を保持したままなので、`_bgmRateDur > 0` だけでは一度でもランプを
+   通した後は常に真になってしまう（_updateBossBgmTier と同じ判定式）。
+   ランプ中は将来のバッファ位置を線形外挿できないため、シーケンサはこの間だけ
+   組成を見送る */
+function _bgmRateRamping() {
+  return _bgmRateDur > 0 && audioCtx !== null &&
+         (audioCtx.currentTime - _bgmRateStart) < _bgmRateDur;
+}
+
+function calcSyncScore(atPerfMs) {
+  const loopDur = _curQuantizedLoopDur();
+  const rawPos  = _bgmJudgePos(atPerfMs);
+  if (rawPos === null || loopDur <= 0) return 0.5;
   const loopN    = Math.floor(rawPos / loopDur);
   const posInLoop = rawPos - loopN * loopDur;
   /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
@@ -2570,12 +2604,20 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    リバーブノードはこのプロジェクトに無いため、時間差ノイズの重ね打ちで
    「残響がある感じ」を近似する（_playDoraHitの倍音重ねと同じ加算合成の
    考え方を、時間軸方向のエコーに応用したもの） */
-function _playKingBeamHit(ctx, t, dest) {
+/* accent=true は再生シーケンス5音目（フレーズ末尾）用。TRシリーズのACCENTに倣い、
+   音程（ボディのスライド周波数）は一切変えず、レベルとスナッピー量だけを上げる。
+   実機のTR-808/909のACCENTはステップごとのベロシティであって音源の再チューニングは
+   しないので、これが方針（TB-303+TRシリーズ）どおりの作り方になる。
+   音程を動かさないため「上昇感は一本の層だけに担わせる」（着弾音の音程変更が
+   2度否定された経緯）にも抵触しない。 */
+function _playKingBeamHit(ctx, t, dest, accent = false) {
   const d = _seDest(ctx, dest);
-  _playSlideOsc(ctx, d, t, 'triangle', 200, 55, 0.12, [[0, 0.65, 'set'], [0.35, 0.0001]], 0.38); // ボディ
-  playNoise(ctx, t,        0.42, 0.48, 1400, d); // スナッピー本体
-  playNoise(ctx, t + 0.05, 0.30, 0.22,  700, d); // 残響エコー1
-  playNoise(ctx, t + 0.11, 0.26, 0.11,  500, d); // 残響エコー2
+  const v = accent ? 1.35 : 1;   // ACCENT = レベル
+  _playSlideOsc(ctx, d, t, 'triangle', 200, 55, 0.12,
+    [[0, 0.65 * v, 'set'], [accent ? 0.42 : 0.35, 0.0001]], accent ? 0.45 : 0.38); // ボディ（周波数は共通）
+  playNoise(ctx, t,        accent ? 0.50 : 0.42, 0.48 * v, 1400, d); // スナッピー本体
+  playNoise(ctx, t + 0.05, 0.30, 0.22 * v,  700, d); // 残響エコー1
+  playNoise(ctx, t + 0.11, 0.26, 0.11 * v,  500, d); // 残響エコー2
 }
 
 /* 的にひびが入る瞬間の「キン」（硬い金属を叩いた音）。ユーザー要望:
@@ -3479,8 +3521,16 @@ function playSE(name, atTime) {
       break;
     }
     case 'kingBeam': {
-      /* キングギヨウザ戦、ビーム発射音（スネアドラム風、_playKingBeamHit参照） */
+      /* キングギヨウザ戦、ビーム着弾音（スネアドラム風、_playKingBeamHit参照）。
+         リズムシーケンサの再生（_kingSeqStep）では打ち込んだスロットの時刻を
+         atTime で渡して先行スケジュールする */
       _playKingBeamHit(ctx, t);
+      break;
+    }
+    case 'kingBeamAccent': {
+      /* 再生シーケンス5音目（発射タップ）のアクセント。同じスネアをTRのACCENTの
+         作法で強く鳴らす（音程は変えない。_playKingBeamHit参照） */
+      _playKingBeamHit(ctx, t, null, true);
       break;
     }
     case 'kingCrack': {
@@ -3517,7 +3567,7 @@ function playSE(name, atTime) {
     }
     case 'kingBeamDud': {
       /* ビーム不発音: こんがりは揃ったが4タップ全てOK止まりで、焦げ跡＝ビームが
-         1本も出ないケース専用（_kingApplyHit参照）。kingBeamの「パーン」から
+         1本も出ないケース専用（_kingApplyBeams・_kingBuildSequence参照）。kingBeamの「パーン」から
          打撃のヌケとスナッピーを取り去り、低くこもった空振りだけを残す
          （鳴らさない選択もあるが、無音だと入力を取りこぼしたのか成功したのかが
          分からないため、弱くても反応は返す） */
@@ -4712,7 +4762,7 @@ function _buildKingReelOC(w) {
 
 /* 的の三角ポインタ先端のワールド座標。ポインタは画面の向きによらず常に的の
    真上固定（当たり位置は hitResult 呼び出し側で常に -PI/2 を渡して揃える）。
-   drawKingReelの描画と_kingApplyHitのビーム発射元の両方から参照する共通式 */
+   drawKingReelの描画と_kingFireBeamのビーム発射元の両方から参照する共通式 */
 function _kingReelPointerPos(w) {
   const pointer = -Math.PI / 2;
   return { x: w.x + Math.cos(pointer) * (KING_WR + 12), y: w.y + Math.sin(pointer) * (KING_WR + 12) };
@@ -4725,6 +4775,11 @@ function _kingReelPointerPos(w) {
    切り替えることで静電気のような点滅を表現する（パーティクル・プール化は
    的4本ぶんの極小描画のため不要、プロジェクト規約の描画最適化対象外） */
 function _drawKingReelCharge(px, py, idx) {
+  /* 帯電の勢いをバッテリー残量に連動させる（副表示）。プレイヤーの視線は的に
+     釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
+     分かるようにする。満充電で従来どおり、切れかけるとほぼ消える */
+  const pw = KING_BATTERY_BEATS > 0 ? _kingBatteryLeft() / KING_BATTERY_BEATS : 1;
+  const vigor = 0.25 + 0.75 * pw;
   let seed = Math.floor(performance.now() / 45) + idx * 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
   ctx.save();
@@ -4732,10 +4787,10 @@ function _drawKingReelCharge(px, py, idx) {
   ctx.strokeStyle = Y;
   ctx.lineWidth = 1.5;
   ctx.lineCap = 'round';
-  ctx.globalAlpha = 0.5 + rnd() * 0.5;
+  ctx.globalAlpha = (0.5 + rnd() * 0.5) * vigor;
   for (let b = 0; b < 3; b++) {
     const baseAng = (b / 3) * Math.PI * 2 + rnd() * 0.6;
-    const len = 6 + rnd() * 6;
+    const len = (6 + rnd() * 6) * vigor;
     const midAng = baseAng + (rnd() - 0.5) * 0.8;
     const midLen = len * 0.55;
     ctx.beginPath();
@@ -6828,6 +6883,9 @@ function _cleanupKingBattleState() {
   _bossBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
   _kingImpactShake = 0;          // 着弾の画面揺れ残量（同上）
+  _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
+  _kingAccentRecoil = 0;
+  _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
@@ -7376,6 +7434,41 @@ let _kingImpactShake = 0;
    （_addKingReelCrackAtCollision参照）。ミリ秒・wall-clock基準 */
 const KING_CRACK_KIN_MIN_GAP_MS = 60;
 let _kingCrackKinLastMs = -Infinity;
+/* ══ リズムシーケンサ（打ち込み→再生）══
+   1トライは「打ち込み（最大KING_BATTERY_BEATS拍）→ 再生 → 次のトライ」の3段。
+   小節には固定せず8分音符グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
+   速く次へ進む＝テンポが腕前に直結する）。
+
+   打ち込み: 5タップ（4マーク＋発射）はすべてハイハット(kingShoot)で生・即時。
+     入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
+     ここで守られる。各タップの時刻は _bgmJudgePos → 8分スロットへ量子化して記録。
+   再生: 記録した相対オフセットのまま、スネア(kingBeam)で鳴らす。
+     こんがりが揃った時だけ発生し、ミス時は従来どおり（篩い落とし→衝突→ひび）。
+     音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
+     16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえるため。
+   量子化はプレイヤーの入力そのものを書き換えるのではなく「後から鳴らす別の演奏」に
+   掛かる（実機のMPC等と同じ、録音中は生・再生はクオンタイズ）。採点（こんがり%）は
+   生のタイミングのままなので報酬構造は変わらない。 */
+const KING_SEQ_QUANT = BGM_BEAT / 2;   // 量子化の刻み＝8分音符（calcSyncScoreの評価グリッドと同一）
+const KING_BATTERY_BEATS = 7;          // 打ち込みの持ち時間（拍）＝バッテリーのセル数
+/* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
+   ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
+const KING_SEQ_MIN_LEAD = 0.15;
+/* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
+   スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
+   8分=164msに対して約30%＝確実に聴こえるズレになるため、着弾がスロットに
+   合うよう発射側を前へずらす（飛翔時間が距離によらず一定という性質は不変） */
+const KING_SEQ_BEAM_LEAD = KING_LASER_TRAVEL_FRAMES / 60;
+/* 5音目（アクセント）の全身リアクション。的4つは焦げ跡を点で刻み、5音目で
+   ダメージが確定する（こんがり%の加算＝全身の焼き色とゲージの伸びをここへ集約）。
+   従来キングは被弾しても無反応だったので、その穴もここで埋まる */
+const KING_ACCENT_FLASH_FRAMES  = 10;  // 全身フラッシュ＋焦げ跡の発光
+const KING_ACCENT_RECOIL_FRAMES = 14;  // のけぞり
+const KING_ACCENT_RECOIL_PX     = 10;
+let _kingAccentFlash  = 0;
+let _kingAccentRecoil = 0;
+let _kingAccentMarks  = []; // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
+let _kingFlashSprite  = null; // 焦げ跡の発光用スプライト（初回使用時に生成）
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
@@ -7458,6 +7551,7 @@ function _initBossBattle() {
   lsSaveStats();
   if (!_CACHE_OK || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
   _buildScorchBlotSprite();
+  _buildKingFlashSprite(); // 5音目アクセントの焦げ跡発光（戦闘中に初回生成しないよう先に確保）
   /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/
      ポーズ・ミュート/全画面）を除いた横幅いっぱいに広がるよう動的に決め直す
      （実機要望: 「小さすぎる、アイコン部を除いた横幅と同程度に」）。
@@ -7552,6 +7646,13 @@ function _initBossBattle() {
     siftPending: false, siftTimer: null,
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（{poly,angle}の配列。drawKingReel参照。再スピンをまたいで残る）
     reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
+    /* リズムシーケンサ（KING_SEQ_*の定義部参照）。
+       rec         : 打ち込み記録 [{slot, flight}]（slot=絶対8分インデックス、強制発射分はnull）
+       recStartPos : 打ち込み開始のバッファ位置（拍境界）。バッテリー残量の起点。
+                     nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
+       seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
+       nextTrialPos: 次トライを開始するバッファ位置（拍境界）。nullなら未予約 */
+    rec: [], recStartPos: null, seqEvents: [], nextTrialPos: null,
   };
   _kingLasers = [];
   _kingCharFlights = [];
@@ -7662,9 +7763,11 @@ function _renderKingBody() {
    位置を使うことで、結果確定時に位置を作り直す必要が一切なくなる（実機指摘:
    待機中は中心寄りの仮位置にして結果確定時に本来の位置へ動かす実装を
    していたが、そもそも最初から本来の位置に配置してほしいという要望だった） */
+/* 生成した飛翔体を返す（リズムシーケンサが打ち込み記録と紐付けるため。
+   _kingReelShoot 参照） */
 function _spawnKingCharFlight(w, reelIdx) {
   const tier = w.syncScore >= 0.667 ? 'just' : w.syncScore >= 0.333 ? 'good' : null;
-  _kingCharFlights.push({
+  const f = {
     char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
     /* ハズレ時の復路（_startKingCharBounce）が戻る先＝的の上部、三角ポインタ
@@ -7676,7 +7779,9 @@ function _spawnKingCharFlight(w, reelIdx) {
     tier, markRef: tier ? _createKingMark() : null,
     state: 'fly', frames: 0, resolve: null, attemptToken: null,
     rot: 0, rotSpd: 0, // 弾き飛ばし後の回転演出（衝突時に設定、drawKingCharFlights参照）
-  });
+  };
+  _kingCharFlights.push(f);
+  return f;
 }
 
 /* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布）。サイズはtierに
@@ -7733,30 +7838,50 @@ function _kingCurrentFlightPos(f) {
    毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える。
    'wait'状態（着地して結果待ち）にはタイムアウトが無いため、発射までの
    待機がどれだけ延びても安全（_updateKingCharFlights参照） */
-function _kingReelShoot(inputPerfMs) {
+function _kingReelShoot(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || _king.reelIdx >= 4 || _king.awaitingFire) return;
   const w = _king.reels[_king.reelIdx];
   w.result = hitResult(w, -Math.PI/2); // 的の三角ポインタは常に真上（drawKingReel参照）
   w.locked = true;
-  w.syncScore = (audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5;
-  playSE('kingShoot');
-  _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
-  _spawnKingCharFlight(w, _king.reelIdx);
+  /* forced=バッテリー切れの強制発射で自動確定した的。プレイヤーが狙っていないので
+     精度を与えない（syncScore=0 → tier=null → 焦げ跡もビームも音も無し）。
+     配分の学習（_adjustKingCharWeight）も行わない: あれは「その的で狙って当てた
+     文字」だけを基準にする仕組みなので、自動確定を混ぜると意味が壊れる。
+     打ち込み記録にも積まない（鳴らす対象が無いスロットになるため） */
+  w.syncScore = forced ? 0 : ((audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5);
+  if (!forced) {
+    playSE('kingShoot');
+    _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
+  }
+  const f = _spawnKingCharFlight(w, _king.reelIdx);
+  _king.rec.push({ slot: forced ? null : _kingSeqSlotAt(inputPerfMs), flight: f });
   _king.reelIdx++;
   if (_king.reelIdx >= 4) _king.awaitingFire = true; // 4本マーク完了。発射は次の入力で_kingFireAttackが行う
 }
 
+/* 入力時刻を絶対8分スロットのインデックスへ量子化する。採点（calcSyncScore）と
+   同じ _bgmJudgePos から導くため、JUSTを取ったタップは必ずスロット境界に乗る。
+   ループ内位置ではなく単調増加の絶対位置を使うので、1トライがBGMのループ境界を
+   跨いでもオフセットの計算が壊れない（量子化グリッドとループ長の丸め差は
+   1ループあたり1サンプル未満＝1トライ内では無視できる）。音声が無ければ null */
+function _kingSeqSlotAt(atPerfMs) {
+  const pos = _bgmJudgePos(atPerfMs);
+  return pos === null ? null : Math.round(pos / KING_SEQ_QUANT);
+}
+
 /* 4本マーク後の発射入力（handleGameClickのphase==='boss'分岐、_king.awaitingFire
-   がtrueの間はこちらに委譲される）。こ・ん・が・り全一致なら _kingApplyHit で
-   発射、不一致なら何も起きない。いずれの場合も4本の結果文字を表示したまま
-   静止させ、その後に再スピンする（_updateBossBattle が resultTimer を監視。
-   解放条件は通常モードの的判定＝KING_RESULT_MIN_WAIT + onBeatGrid() と同じ仕様）。
-   確定した4文字が読めないまま次に進んでしまうという実機指摘で追加
-   （ミス時のペナルティは現状なし。将来M3でここに追加する） */
-function _kingFireAttack() {
+   がtrueの間はこちらに委譲される）。こ・ん・が・り全一致なら打ち込んだリズムを
+   再生シーケンスへ組んで（_kingBuildSequence）攻撃を鳴らし、不一致なら従来どおり
+   篩い落とし→衝突→ひびへ進む。いずれの場合も4本の結果文字を表示したまま静止させ、
+   次のトライは _kingTrialGate が拍境界で解放する。
+   forced=true はバッテリー切れによる強制発射（_kingBatteryCheck から呼ばれる）。 */
+function _kingFireAttack(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || !_king.awaitingFire) return;
   _king.awaitingFire = false;
   _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
+  /* 発射タップも打ち込み中はハイハット。スネアは再生側（_kingBuildSequence）で
+     鳴らす＝「打ち込みはハイハット、再生は特定の音色」という設計 */
+  if (!forced) playSE('kingShoot');
   const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
   if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
@@ -7765,19 +7890,31 @@ function _kingFireAttack() {
          _createKingMarkで生成済み、_spawnKingCharFlight参照）を、当たりが
          確定したこの時点で初めて _king.marks へ正式登録する（不一致なら
          登録されず消える＝「文字が飛んでいっていない場所に焦げが発生する」
-         を避けるための設計を踏襲）。スコア平均（avgScore）はレーザー色・SE・
-         JUST/GOOD/OKラベル表示のみに使う（_kingApplyHit参照。%やサイズには
-         使わない＝1本ずつ個別判定という要望のため） */
+         を避けるための設計を踏襲）。ただし実際に見えるのは revealedAt が打たれて
+         から（_stickKingChar）＝再生で各文字が撃ち込まれた瞬間。
+         %の加算自体は5音目のアクセントへ集約する（_kingSeqAccent参照。
+         1発ごとに+0.5〜1.0%を4回刻むより、まとめて伸ばすほうが目に見えるため）。
+         スコア平均（avgScore）はビーム色・JUST/GOOD/OKラベル表示のみに使う
+         （%やサイズには使わない＝1本ずつ個別判定という要望のため） */
       const thisAttempt = _kingCharFlights.filter(f => f.resolve === null);
+      let gain = 0;
       for (const f of thisAttempt) {
         if (!f.markRef) continue; // OK以下のタップは焦げ跡なし
         _king.marks.push(f.markRef);
-        _king.cookPct = Math.min(100, _king.cookPct + (f.tier === 'just' ? KING_JUST_PCT : KING_GOOD_PCT));
+        gain += (f.tier === 'just' ? KING_JUST_PCT : KING_GOOD_PCT);
       }
-      _kingApplyHit(avgScore, thisAttempt);
-      /* 勝利はここで確定させず予約だけする（この試技のビームを見せきってから
-         _updateBossBattle が確定させる。pendingVictory の扱いはそちらのコメント参照） */
-      if (_king.cookPct >= 100) _king.pendingVictory = true;
+      _kingSetSyncLabel(avgScore);
+      _king.resultMatched = true;
+      _king.resultTimer = 0;
+      _king.missAttemptToken = null;
+      if (_kingBuildSequence(inputPerfMs, forced, gain, thisAttempt)) return; // 以降は_kingSeqStepが進める
+      /* 音声の時計が引けない場合（BGM未開始・テープ演出のレートランプ中など）は
+         従来どおり即時に適用する。シーケンサは音楽が鳴っていて初めて意味を持つので、
+         鳴っていない状況では旧来の「4本同時着弾」に退避するのが正しい */
+      _kingApplyGain(gain);
+      _kingApplyBeams(thisAttempt);
+      for (const f of thisAttempt) f.resolve = 'stick';
+      return;
     } else {
       /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
          ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が
@@ -7802,28 +7939,198 @@ function _kingFireAttack() {
          （_updateBossBattleが判定。KING_SIFT_*の定義部参照） */
       _king.siftPending = true;
     }
-    _king.resultMatched = matched;
-    _king.resultTimer = 0; // 結果表示保持タイマー開始（_updateBossBattle参照）
+    /* ここから下はハズレ経路だけ（当たりは上のブランチで return 済み）。
+       ハズレは再生シーケンスを作らず、従来どおり即座に4体へ結果を伝える */
+    _king.resultMatched = false;
+    _king.resultTimer = 0; // 結果表示保持タイマー開始（音声が無い場合のフォールバック用）
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先は
-       スポーン時から確定済みのためここでの位置変更は不要
-       （こんがり=そのまま吸い込まれる／ハズレ=そこから跳ね返る）。
+       スポーン時から確定済みのためここでの位置変更は不要（そこから跳ね返る）。
        ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が
        全て入り終えたか」（シャッター演出のトリガー、_updateKingCharFlights参照）、
        aliveは「4体とも画面外へ消えて配列から取り除かれたか」（次のトライを
-       許可する条件、_updateBossBattle参照）を別々に数える。衝突完了と画面外
+       許可する条件、_kingTrialGate参照）を別々に数える。衝突完了と画面外
        退場はタイミングが異なる（衝突後もfall状態でしばらく画面内に残る）ため
        2つのカウンタが必要 */
-    const resolveAs = matched ? 'stick' : 'bounce';
-    const attemptToken = matched ? null : { remaining: 0, alive: 0 };
+    const attemptToken = { remaining: 0, alive: 0 };
     for (const f of _kingCharFlights) {
       if (f.resolve !== null) continue;
-      f.resolve = resolveAs;
-      if (attemptToken) { f.attemptToken = attemptToken; attemptToken.remaining++; attemptToken.alive++; }
+      f.resolve = 'bounce';
+      f.attemptToken = attemptToken; attemptToken.remaining++; attemptToken.alive++;
     }
     /* ユーザー要望: 「こんがりが揃わなかった場合、落下してきた文字が的にぶつかって
        全て画面外に消えるまで、次のトライができないようにしてほしい」。
-       _king側に保持し、_updateBossBattleの再スピン可否判定で参照する */
+       _king側に保持し、_kingTrialGateの再スピン可否判定で参照する */
     _king.missAttemptToken = attemptToken;
+}
+
+/* ── 打ち込んだリズムの再生（KING_SEQ_*の定義部参照） ── */
+
+/* 打ち込んだ5タップを再生シーケンスへ組み、音を先行スケジュールする。
+   組めた場合のみ true（false なら呼び出し側が従来の即時適用へ退避する）。
+   スロットは絶対8分インデックスで記録されているので、最初のマークからの
+   相対オフセットを取ればアンカーを好きな位置に置ける＝小節に固定せず、
+   発射の直後の拍境界から鳴らし始められる（速く打ち終われば速く再生も終わる）。 */
+function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
+  if (!audioCtx || _bgmRateRamping()) return false; // レートランプ中は将来位置を外挿できない
+  /* 打ち込みの起点が定まらないまま進んだトライ（戦闘開始直後のテープ演出中に
+     叩き切った場合）は、記録したスロットがレート変動下の値で相対間隔が歪んでいる。
+     そのまま再生すると打ったリズムと違うものが鳴るので組まない */
+  if (_king.recStartPos === null) return false;
+  const nowPos = _bgmJudgePos();
+  /* 強制発射にはタップが無いので、その瞬間を5音目の位置として使う */
+  const accentSlot = forced ? _kingSeqSlotAt() : _kingSeqSlotAt(inputPerfMs);
+  if (nowPos === null || accentSlot === null) return false;
+  const rec = _king.rec.filter(r => r.slot !== null);
+  if (rec.length === 0) return false;
+  const baseSlot = rec[0].slot;
+  /* 再生開始アンカー: 最低リードを確保した先の拍境界（偶数スロット＝4分音符）。
+     8分の裏から始めるとバッテリーの目盛りも裏拍で刻まれて気持ち悪くなる */
+  let anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
+  if (anchor % 2 !== 0) anchor++;
+  const events = [];
+  for (const r of rec) {
+    /* OK以下のタップは焦げ跡もビームも無い（既存仕様）＝そのスロットは無音になり、
+       打ち込んだパターンに穴が開く。雑に叩くとリズムが歯抜けになるという形で
+       精度が音に出る */
+    if (!r.flight.markRef) continue;
+    const at = _bgmBufPosToCtxTime((anchor + (r.slot - baseSlot)) * KING_SEQ_QUANT);
+    if (at === null) return false;
+    /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
+    events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: r.flight });
+    events.push({ at, kind: 'impact', f: r.flight });
+  }
+  const accentAt = _bgmBufPosToCtxTime((anchor + (accentSlot - baseSlot)) * KING_SEQ_QUANT);
+  if (accentAt === null) return false;
+  /* 5音目（アクセント）。焦げ跡が1つも無ければダメージ自体が無いので、
+     アクセントではなく既存の不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
+  events.push({ at: accentAt, kind: 'accent', gain, flights, dud: events.length === 0 });
+  /* 同一スロットの重なりは間引かずそのまま重ねる（プレイヤーの入力を補正しない
+     という原則を全イベントに一様に適用する）。同時発音は振幅が重なるが、
+     masterGain出力のセーフティリミッターが歪みを防ぐ */
+  events.sort((a, b) => a.at - b.at);
+  _king.seqEvents = events;
+  /* 音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
+     16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえる。
+     ミュート中・contextがrunningでない場合は playSE 側が自前で弾くので、
+     視覚イベントだけが進む */
+  for (const e of events) {
+    if      (e.kind === 'impact') playSE('kingBeam', e.at);
+    else if (e.kind === 'accent') playSE(e.dud ? 'kingBeamDud' : 'kingBeamAccent', e.at);
+  }
+  return true;
+}
+
+/* 予約済み再生イベントのうち、時刻が来たものを発火する（音は予約済みなので
+   ここで進めるのは視覚と状態のみ）。_updateBossBattle から毎フレーム呼ぶ */
+function _kingSeqStep() {
+  if (!_king || _king.seqEvents.length === 0 || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  while (_king.seqEvents.length > 0 && _king.seqEvents[0].at <= now) _kingSeqFire(_king.seqEvents.shift());
+}
+
+function _kingSeqFire(e) {
+  if      (e.kind === 'shot')   _kingFireBeam(e.f);
+  /* resolve を立てるだけにして実際の着地は _updateKingCharFlights に委ねる。
+     直接 _stickKingChar を呼ぶと、まだ飛翔中（'fly'）の文字が瞬間移動する */
+  else if (e.kind === 'impact') e.f.resolve = 'stick';
+  else if (e.kind === 'accent') _kingSeqAccent(e);
+}
+
+/* 残りの再生イベントを時刻を待たず全て確定させる（ポーズ時に呼ぶ）。
+   音は audioCtx の時刻で予約済みで、ポーズ中は masterGain が0なので鳴らずに
+   流れてしまう。予約を残したまま復帰すると全イベントの時刻が過去になり、
+   1フレームで一斉に発火して「打ち込んだリズムと違うもの」が見える。
+   ここで畳んでおけばポーズ中に状態が確定し、復帰後は次のトライから再開できる */
+function _kingSeqFlush() {
+  if (!_king) return;
+  while (_king.seqEvents.length > 0) _kingSeqFire(_king.seqEvents.shift());
+}
+
+/* 5音目のアクセント。4つの焦げ跡が一斉に発光し、キング全体が光ってのけぞり、
+   全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約しているため、
+   ゲージと焼き色が同じ瞬間に動く）。従来キングは被弾しても無反応だった */
+function _kingSeqAccent(e) {
+  /* 鳴らす対象が無かった飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
+     画面に残し続ける理由が無いため */
+  for (const f of e.flights) if (f.resolve === null) f.resolve = 'stick';
+  if (e.dud) return; // 焦げ跡ゼロ＝ダメージ無し。全身リアクションもしない
+  _kingApplyGain(e.gain);
+  _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
+  _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
+  _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
+  _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+}
+
+/* こんがり%の加算と勝利予約。勝利はここで確定させず予約だけする（この試技の
+   ビームを見せきってから _updateBossBattle が確定させる） */
+function _kingApplyGain(gain) {
+  if (gain <= 0) return;
+  _king.cookPct = Math.min(100, _king.cookPct + gain);
+  if (_king.cookPct >= 100) _king.pendingVictory = true;
+}
+
+/* 打ち込みの持ち時間（バッテリー）の残りセル数。0で充電切れ。
+   実時間で失効すべきガードなので audio-clock 基準にする（CLAUDE.mdの時間条件規約。
+   フレームカウンタだと document.hidden で rAF が止まっている間に失効しない）。
+   recStartPos が未確定の間（音声の時計が引けるようになるまで）は満充電扱い＝
+   時間制限なしで動かす */
+function _kingBatteryLeft() {
+  if (!_king || _king.recStartPos === null) return KING_BATTERY_BEATS;
+  const pos = _bgmJudgePos();
+  if (pos === null) return KING_BATTERY_BEATS;
+  const used = Math.floor((pos - _king.recStartPos) / BGM_BEAT);
+  return Math.max(0, Math.min(KING_BATTERY_BEATS, KING_BATTERY_BEATS - used));
+}
+
+/* 充電切れの監視。切れたら残りの的をその瞬間の目で自動確定して強制発射する。
+   ほぼ確実に不一致になり、既存のハズレ経路（篩い落とし→衝突→ひび→failCount）へ
+   そのまま合流する＝時間切れ専用の敗北経路を作らない */
+function _kingBatteryCheck() {
+  if (_king.attemptFired) return; // 打ち込みが終わっていれば無関係
+  if (_king.recStartPos === null) {
+    /* 戦闘開始直後はテープ演出のレートランプ中で位置が引けない。使えるようになった
+       最初のフレームで、直近の拍境界を起点として打つ */
+    const pos = _bgmJudgePos();
+    if (pos !== null && !_bgmRateRamping()) _king.recStartPos = Math.floor(pos / BGM_BEAT) * BGM_BEAT;
+    return;
+  }
+  if (_kingBatteryLeft() > 0) return;
+  while (_king.reelIdx < 4) _kingReelShoot(null, true);
+  _kingFireAttack(null, true);
+}
+
+/* 次トライの解放。再生が終わり（ハズレなら4体が画面外へ消え切り）、その後の
+   最初の拍境界で的を回し直す。速く打ち終われば速く再生が終わり、速く次へ進む */
+function _kingTrialGate() {
+  if (!_king.attemptFired || _king.pendingDefeat || _king.pendingVictory) return;
+  if (_king.seqEvents.length > 0) return; // 再生中
+  const missClear = _king.resultMatched || !_king.missAttemptToken || _king.missAttemptToken.alive <= 0;
+  if (!missClear) return;
+  const pos = _bgmJudgePos();
+  if (pos === null || _bgmRateRamping()) {
+    /* 音声の時計が使えない場合は従来の解放条件（フレーム数＋16分グリッド）へ退避 */
+    if (_king.resultTimer === null) return;
+    _king.resultTimer++;
+    const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
+    if (_king.resultTimer > minWait && onBeatGrid()) _kingStartTrial(null);
+    return;
+  }
+  if (_king.nextTrialPos === null) {
+    let s = Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
+    if (s % 2 !== 0) s++; // 拍境界へ揃える
+    _king.nextTrialPos = s * KING_SEQ_QUANT;
+  }
+  if (pos >= _king.nextTrialPos) _kingStartTrial(_king.nextTrialPos);
+}
+
+function _kingStartTrial(startPos) {
+  _respinKingReels();
+  _king.rec = [];
+  _king.seqEvents = [];
+  _king.resultTimer = null;
+  _king.missAttemptToken = null;
+  _king.nextTrialPos = null;
+  _king.recStartPos = startPos; // バッテリーの起点（nullなら_kingBatteryCheckが後から打つ）
 }
 
 /* 4本とも即座に再スピン（ヒット・ミス問わず毎回呼ばれる） */
@@ -7860,38 +8167,45 @@ function _adjustKingCharWeight(posIdx, char) {
   }
 }
 
-/* こんがり一致成立時の焼き攻撃演出（レーザー・SE・JUST/GOOD/OKラベル）。
-   こんがり%・焦げ跡サイズはタップ個別の精度で決まる（_spawnKingCharFlight・
-   _kingReelShoot参照）。ここでのscore（4タップ平均）はSE・ラベル表示のみに使う。
-   レーザーは的ごと・マークごとに個別発射する（ユーザー要望: 「射った的の三角
+/* ビーム1本を撃つ（的の三角 → 対応するマーク）。ユーザー要望: 「射った的の三角
    からそれぞれ対応するマークに向かってビームを発射したい。ビームの色はマーク
-   の色と一致させたい」）。マークが無い（OK以下）タップは対応するビームも無し
-   ＝的とマークが1:1で対応する見た目を保つ */
-function _kingApplyHit(score, flights) {
+   の色と一致させたい」。マークが無い（OK以下）タップは対応するビームも無し
+   ＝的とマークが1:1で対応する見た目を保つ（5本目を足さないのもこの原則のため。
+   5音目のアクセントはビームではなくキング本体のリアクションで表現する）。
+   飛翔時間は距離によらずKING_LASER_TRAVEL_FRAMESで一定という性質はそのままで、
+   リズムシーケンサでは「撃つ時刻」だけが1本ずつずれる */
+function _kingFireBeam(f) {
+  if (!f.markRef) return false; // 焦げ跡が無いタップはビームも発射しない
+  const p1 = _kingReelPointerPos(_king.reels[f.reelIdx]);
+  const p2 = _kingFlightTargetPos(f);
+  /* マークの色＝そのタップの飛翔文字の色（drawKingCharFlightsのf.score基準の
+     色付けと同一。_syncBarColor(f.score)）にビーム色を一致させる */
+  const [col, glow] = _syncBarColor(f.score);
+  _kingLasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
+    age: 0, life: 14, maxLife: 14, color: col, glow });
+  return true;
+}
+
+function _kingSetSyncLabel(score) {
   let label = '';
   if      (score >= 0.667) label = 'JUST!';
   else if (score >= 0.333) label = 'GOOD';
   else                     label = 'OK'; // scoreは常に>0（calcSyncScoreの下限は約0.016）
-  let fired = 0;
-  for (const f of flights) {
-    if (!f.markRef) continue; // 焦げ跡が無いタップはビームも発射しない
-    const p1 = _kingReelPointerPos(_king.reels[f.reelIdx]);
-    const p2 = _kingFlightTargetPos(f);
-    /* マークの色＝そのタップの飛翔文字の色（drawKingCharFlightsのf.score基準の
-       色付けと同一。_syncBarColor(f.score)）にビーム色を一致させる */
-    const [col, glow] = _syncBarColor(f.score);
-    _kingLasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
-      age: 0, life: 14, maxLife: 14, color: col, glow });
-    fired++;
-  }
-  /* こ・ん・が・りが揃っても4タップ全てがOK止まりだとmarkRefが無く、ビームが
-     1本も出ず焦げ跡もこんがり%も増えない（JUST/GOODのみ加点という既存の
-     バランス仕様どおり）。この時に発射音を鳴らすと「音は撃ったと言っているのに
-     画面は無反応」になるため、音の方を実際の見た目に合わせて弱い不発音にする
-     （バランスは変えず演出の整合だけを取る方針。タイミング精度が報酬の核という
-     設計思想を薄めないため、OKティアへの加点はしない） */
-  playSE(fired > 0 ? 'kingBeam' : 'kingBeamDud');
   syncJustLabel = label; syncJustTimer = 50; syncJustScore = score;
+}
+
+/* 4本同時にビームを撃つ旧来の一撃（音声の時計が引けずシーケンサを組めなかった
+   場合のフォールバック専用。通常は _kingBuildSequence が1本ずつ時刻を付けて撃つ）。
+   こ・ん・が・りが揃っても4タップ全てがOK止まりだとmarkRefが無く、ビームが
+   1本も出ず焦げ跡もこんがり%も増えない（JUST/GOODのみ加点という既存の
+   バランス仕様どおり）。この時に発射音を鳴らすと「音は撃ったと言っているのに
+   画面は無反応」になるため、音の方を実際の見た目に合わせて弱い不発音にする
+   （バランスは変えず演出の整合だけを取る方針。タイミング精度が報酬の核という
+   設計思想を薄めないため、OKティアへの加点はしない） */
+function _kingApplyBeams(flights) {
+  let fired = 0;
+  for (const f of flights) if (_kingFireBeam(f)) fired++;
+  playSE(fired > 0 ? 'kingBeam' : 'kingBeamDud');
 }
 
 /* 誕生演出の鎮座位置→戦闘位置、戦闘位置→勝利拡大、それぞれのジャンプをなくすための
@@ -7943,6 +8257,10 @@ function _updateKingCommonFx() {
     if (_king.siftTimer === KING_SIFT_RELEASE_FRAME) _king.gazeUp = 0; // 底で視線を戻す
     if (_king.siftTimer > KING_SIFT_RELEASE_FRAME + KING_SIFT_SETTLE_FRAMES) _king.siftTimer = null;
   }
+  /* 5音目アクセントの全身リアクション残量（KING_ACCENT_*の定義部参照）。
+     映像の進行に紐づく演出なのでフレームカウンタでよい */
+  if (_kingAccentFlash  > 0) _kingAccentFlash--;
+  if (_kingAccentRecoil > 0) _kingAccentRecoil--;
   _updateKingCharFlights();
   for (const l of _kingLasers) { l.age++; l.life--; }
   swapRemove(_kingLasers, _predLife); // 既存の共通predを使う（毎フレームのクロージャ生成を避ける）
@@ -7963,6 +8281,34 @@ function _kingSiftOffsetY() {
   }
   const p = Math.min(1, (t - KING_SIFT_RELEASE_FRAME) / KING_SIFT_SETTLE_FRAMES);
   return KING_SIFT_AMP * (1 - p) * Math.cos(p * Math.PI * 3);
+}
+
+/* 5音目アクセントののけぞり（描画時オフセット）。文字は的（下）からキングへ
+   撃ち込まれるので、上へ弾かれてから戻る。篩い落としと同じ「描画時だけ掛ける」
+   方式に揃える（dbyを触ると_easeKingXformとの綱引きになる） */
+function _kingAccentOffsetY() {
+  if (_kingAccentRecoil <= 0) return 0;
+  const p = 1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES; // 0→1
+  return -KING_ACCENT_RECOIL_PX * Math.sin(p * Math.PI) * (1 - p * 0.4);
+}
+
+/* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。shadowBlurは使わず
+   （プロジェクト規約: GPUブラーパス削減のため全廃済み）、放射状グラデーション
+   自体で縁をぼかす。_buildSteamSpriteと同じ作り */
+function _buildKingFlashSprite() {
+  if (_kingFlashSprite || !_CACHE_OK) return;
+  const r = 32;
+  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(r, r);
+  const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
+  grd.addColorStop(0,    'rgba(255,226,150,0.95)');
+  grd.addColorStop(0.45, 'rgba(255,180,70,0.45)');
+  grd.addColorStop(1,    'rgba(255,150,40,0)');
+  c.fillStyle = grd;
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
+  _kingFlashSprite = oc;
 }
 
 /* 篩い落としのスカッシュ倍率（描画時のみ。底で最大、離脱後に戻る）。
@@ -8178,6 +8524,7 @@ function _updateBossBattle() {
   for (const w of _king.reels) if (!w.locked) w.rot += w.speed;
   _updateKingCommonFx();
   _updateBossBgmTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
+  _kingSeqStep();       // 打ち込んだリズムの再生（音は予約済み・ここは視覚と状態）
   /* 篩い落としの発動判定: 予約済みかつ「降ろす対象の文字が全員キングへ到着済み」
      になったら振り始める（ユーザー選択の案(b)）。到着済みの判定は
      bounce予定の文字が1つも'fly'に残っていないこと。最速発射でも常に
@@ -8203,15 +8550,12 @@ function _updateBossBattle() {
      演出の完了を待つ」形に揃える。ビームが1本も出なかった場合
      （全タップOK以下でmarkRefが無い）は_kingLasersが空なので即座に確定する */
   if (_king.pendingVictory) {
-    if (_kingLasers.length === 0) { _startBossVictory(); }
+    /* 再生シーケンスを撃ち切り、ビームも消えきってから勝利を確定する */
+    if (_kingLasers.length === 0 && _king.seqEvents.length === 0) { _startBossVictory(); }
     return;
   }
-  /* 4本確定後の結果表示保持: 通常モードの的判定（endTimer + onBeatGrid()、2582行目
-     付近）と同じ仕様に合わせる。ハズレ待ち時間が長くBGMとも同期していないという
-     実機指摘で、wall-clockの固定待ち時間（旧KING_RESULT_HOLD_SEC）から、
-     フレームカウンタ+BGM拍グリッド同期の解放条件に変更した。演奏・演出の進行に
-     紐づくゲートなのでフレームカウンタが正しい（CLAUDE.md参照） */
-  /* 6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示した
+  /* 打ち込みの持ち時間（バッテリー）と、次トライの解放。
+     6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示した
      ままロックされ続け、文字の衝突（ひび）→破砕へそのまま進む。
      以前はKING_RESULT_MIN_WAIT.miss（2フレーム）＋拍同期ですぐ再スピンして
      いたが、文字の衝突（シャッター発動）は復路込みで32フレーム以上先のため、
@@ -8219,24 +8563,10 @@ function _updateBossBattle() {
      attemptを撃ててしまうバグがあった（最悪ケース: 追加attemptでこんがり
      100%到達→_startBossVictoryの後に、先行attemptの衝突完了でシャッターが
      発動し、勝利フローと敗北フローが衝突する）。再スピンを止めれば
-     reelIdx=4のまま_kingReelShootの既存ガードで入力も塞がれる */
-  if (_king.resultTimer !== null && !_king.pendingDefeat) {
-    _king.resultTimer++;
-    const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
-    /* ハズレの場合、弾き飛ばされた4体が全て画面外に消え終える
-       （missAttemptToken.alive<=0）まで再スピンしない（ユーザー要望:
-       「こんがりが揃わなかった場合、落下してきた文字が的にぶつかって全て
-       画面外に消えるまで、次のトライができないようにしてほしい」）。
-       reelIdx=4のまま再スピンを止めれば_kingReelShootの既存ガードで
-       入力（次のトライ）も自動的に塞がれる。的中（stick）はフェードが
-       10フレームと短く体感の待ちにならないため、この待ちは課さない */
-    const missClear = _king.resultMatched || !_king.missAttemptToken || _king.missAttemptToken.alive <= 0;
-    if (_king.resultTimer > minWait && onBeatGrid() && missClear) {
-      _king.resultTimer = null;
-      _king.missAttemptToken = null;
-      _respinKingReels();
-    }
-  }
+     reelIdx=4のまま_kingReelShootの既存ガードで入力も塞がれる
+     （_kingTrialGate の先頭で pendingDefeat を弾いている） */
+  _kingBatteryCheck();
+  _kingTrialGate();
 }
 
 /* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
@@ -8304,17 +8634,43 @@ function drawBossBattle() {
   /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用）。
      位置・スケールは dbx/dby/dscale（誕生演出からの収束中の表示値）を使う */
   const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
+  const accentDy = _kingAccentOffsetY();
   ctx.save();
-  /* 篩い落としの縦変位とスカッシュは描画時にのみ掛ける（dby/dscaleは触らない。
-     _kingSiftOffsetY / _kingSiftSquash の定義部参照）。文字の離脱位置には
-     この変位を反映しない（ユーザー判断: 座標計算への波及を避ける） */
-  ctx.translate(_king.dbx, _king.dby + _kingSiftOffsetY());
+  /* 篩い落としの縦変位とスカッシュ、アクセントののけぞりは描画時にのみ掛ける
+     （dby/dscaleは触らない。_kingSiftOffsetY / _kingSiftSquash /
+     _kingAccentOffsetY の定義部参照）。文字の離脱位置にはこの変位を反映しない
+     （ユーザー判断: 座標計算への波及を避ける） */
+  ctx.translate(_king.dbx, _king.dby + _kingSiftOffsetY() + accentDy);
   const sq = _kingSiftSquash();
   if (sq) ctx.scale(breath * sq.sx, breath * sq.sy);
   else    ctx.scale(breath, breath);
   const bodySrc = _renderKingBody();
   ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  /* 5音目アクセントの全身フラッシュ。同じ絵を 'lighter' で重ねて明度を持ち上げる
+     （白い板を被せると輪郭やシルエットが潰れるため、本体の色を活かして光らせる） */
+  if (_kingAccentFlash > 0) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = (_kingAccentFlash / KING_ACCENT_FLASH_FRAMES) * 0.75;
+    ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
+  /* その試技で焼いた焦げ跡を一斉に発光させる（アクセントの視覚。焦げ跡は
+     liveOCへ合成済みで個別に光らせられないため、ワールド座標へ重ねて描く。
+     _kingFlightTargetPos と同じ座標変換） */
+  if (_kingAccentFlash > 0 && _kingAccentMarks.length > 0 && _kingFlashSprite) {
+    const fa = _kingAccentFlash / KING_ACCENT_FLASH_FRAMES;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = fa;
+    for (const m of _kingAccentMarks) {
+      const rr = m.r * breath * 1.6;
+      const mx = _king.dbx + m.lx * breath, my = _king.dby + accentDy + m.ly * breath;
+      ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
+    }
+    ctx.restore();
+  }
   /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
   drawKingCharFlights();
   /* こんがりミニリール4連（旧: 砲台）。破砕演出中は的の絵柄の代わりに
@@ -8346,6 +8702,27 @@ function drawKingCookGauge(achieved = false) {
     roundRect(bx, by, bw * pct, bh, 7);
     ctx.fillStyle = pct >= 1 ? '#ffdd55' : '#c87830';
     ctx.fill();
+  }
+  /* 打ち込みの持ち時間（バッテリー）。1セル=1拍で、拍境界ごとに1つ落ちる
+     （KING_SEQ_*の定義部参照）。ラベル行の右側に置き、こんがりバーとは分ける。
+     achieved=true（退場演出中）は打ち込み自体が無いので出さない */
+  if (!achieved && _king.recStartPos !== null && !_king.attemptFired) {
+    const left = _kingBatteryLeft();
+    const cw = 7, ch = 12, cgap = 3;
+    const bwTotal = KING_BATTERY_BEATS * cw + (KING_BATTERY_BEATS - 1) * cgap;
+    const bx0 = mx + mw - 14 - bwTotal, by0 = my + (mh - bh - 10) / 2 + 4 - ch / 2;
+    for (let i = 0; i < KING_BATTERY_BEATS; i++) {
+      const x = bx0 + i * (cw + cgap);
+      ctx.beginPath(); ctx.rect(x, by0, cw, ch);
+      if (i < left) {
+        /* 残り2セル以下は赤へ（数えなくても切迫が分かるように） */
+        ctx.fillStyle = left <= 2 ? '#ff6a3a' : (left <= 4 ? '#ffb03a' : Y);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fill();
+        ctx.strokeStyle = 'rgba(200,140,40,0.45)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+    }
   }
   ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px 'Hiragino Mincho ProN',serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = Y;
@@ -11832,6 +12209,7 @@ function togglePause() {
     /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
        逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
     _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
+    _kingSeqFlush(); // キング戦の再生予約を畳む（_kingSeqFlush の定義部参照）
     /* BGM・ジングル・restartタイマーを一括停止し再生位置を記録する。
        AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
        ジングル中(bgmSource=null)でもここで止めることで、サスペンド状態のコンテキストで
@@ -12019,7 +12397,7 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'boss') {
-    if (_king && _king.awaitingFire) _kingFireAttack(); else _kingReelShoot(inputPerfMs);
+    if (_king && _king.awaitingFire) _kingFireAttack(inputPerfMs); else _kingReelShoot(inputPerfMs);
     return;
   }
   if (phase === 'bossShatter') {
