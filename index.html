@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.45';
+const VERSION = 'v6.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3131,11 +3131,29 @@ function _updateBossBgmTier() {
 /* ── BGM制御API ── */
 
 /* ── ミュート制御（masterGain のみ制御。bgmGain/ソースは触らない） ── */
+/* ゲインを段差なしで切り替える。
+   1サンプルで値を飛ばすと、その瞬間の波形の値がそのまま不連続として残り、
+   プチッというクリックになる。実機報告「リロード後にミュートを解除すると
+   ノイズが聴こえることがある。バッファにゴミが残っているような音」の正体がこれで、
+   波形を捕まえて確認した: 音楽そのものの隣接サンプル差が0.0046なのに対し、
+   解除の瞬間だけ 0 → 0.385 の段差（84倍）が入っていた。段差の大きさは解除した
+   瞬間の波形の位置で決まるので、「たまに」しか気付かないのも説明が付く。
+   数msかけて渡せば聞こえなくなる */
+const _GAIN_RAMP_SEC = 0.015; // 15ms。これより長いと切り替えが鈍く感じる
+function _rampGain(param, to, sec = _GAIN_RAMP_SEC) {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  /* 進行中のランプは現在値で止めてから張り直す。cancelScheduledValues だけだと
+     「予約が入る前の値」へ戻るため、そこでまた段差が生まれる */
+  if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(now);
+  else { const v = param.value; param.cancelScheduledValues(now); param.setValueAtTime(v, now); }
+  param.linearRampToValueAtTime(to, now + sec);
+}
+
 function applyMuteGain() {
   if (!masterGain || !audioCtx) return;
-  masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
   /* ポーズ中は MUTE 状態に関わらず無音を維持する */
-  masterGain.gain.setValueAtTime((audioMuted || isPaused) ? 0 : 1, audioCtx.currentTime);
+  _rampGain(masterGain.gain, (audioMuted || isPaused) ? 0 : 1);
 }
 
 /* BGMソース起動（ミュート状態を問わず起動。gain が音量を制御する） */
@@ -3160,11 +3178,9 @@ function startBGM() {
 function stopBGM() {
   if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
   stopJingle();
-  /* ソースは停止せず gain だけ 0 にする（SE中もBGMはループし続ける） */
-  if (bgmGain && audioCtx) {
-    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-    bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
-  }
+  /* ソースは停止せず gain だけ 0 にする（SE中もBGMはループし続ける）。
+     ここも段差を作らない（_rampGain参照。ミュートと同じクリックが出る経路） */
+  if (bgmGain && audioCtx) _rampGain(bgmGain.gain, 0);
 }
 
 /* SE終了後に bgmGain を 1 に戻す（ミュート制御は masterGain が担うので無条件で 1） */
@@ -3172,10 +3188,7 @@ function scheduleBGMRestart(delayMs) {
   if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
   bgmRestartTimer = setTimeout(() => {
     bgmRestartTimer = null;
-    if (bgmGain && audioCtx) {
-      bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-      bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
-    }
+    if (bgmGain && audioCtx) _rampGain(bgmGain.gain, 1);
   }, delayMs);
 }
 
@@ -8872,6 +8885,9 @@ function _startTrueEnding(replay) {
        ユーザーの能動的な操作であり緩やかな余韻を残す必然性がないため、
        フェードを挟まず即座に無音化してから鳴らす（_destroyBGMSourceを直接
        呼ぶ。ボス勝利側の演出上の余韻フェードとは意図的に区別する） */
+    /* ここはランプにしない。直後に _destroyBGMSource() でソースごと止めるので
+       ランプが渡り切らず意味が無い（この経路は「フェードを挟まず即座に無音化」が
+       意図。上のコメント参照）。鳴り続けるソースの音量を動かす経路とは別物 */
     if (bgmGain && audioCtx) {
       bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
       bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
