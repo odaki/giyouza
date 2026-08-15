@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.50';
+const VERSION = 'v6.51';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1829,15 +1829,35 @@ function _updateBgmToneShelf() {
    unlk が47msになっており、これは音声経路が開く瞬間と重なる。オーディオスレッドの
    処理落ち（＝ざらついた雑音）とタップの引っかかりの両方の要因になる。
 
-   1本ずつ・間を空けて焼けば、1回あたりの負荷は通常BGM1本ぶん（実測68ms）で済み、
-   キング戦に入るまでには十分間に合う。未完のまま突入しても通常BGMで代用される */
+   ただし「後回し」にしただけでは、king値が閾値近くで保存されている状態でリロード
+   されると、焼き上がる前に突入しうる（ユーザー指摘。未完なら通常BGMで代用される
+   仕様なので無音にはならないが、暗黒BGMも段階切り替えも効かないまま戦うことになる）。
+   そこで2つの保険を置く:
+     ・保存されたking値が予兆割合を超えていれば、最初の1本の待ちを短くする
+     ・予兆に入った時点で未完なら、待たずにその場で焼く（_startBossOmenから呼ぶ。
+       予兆はテープストップ1.6秒＋演出が続くので、1本ぶんの時間は十分に取れる） */
 const _BOSS_BGM_FIRST_DELAY_MS = 4000; // 最初の1本を焼くまで（音声経路が落ち着くのを待つ）
+const _BOSS_BGM_NEAR_DELAY_MS  = 800;  // king値が予兆割合を超えている場合の短縮版
 const _BOSS_BGM_GAP_MS         = 1500; // 2本目以降の間隔
-function _scheduleBossBgmRenders(tier = 0) {
-  if (tier >= BGM_TIER_COUNT) return;
-  _runWhenIdle(() => {
+let _bossBgmNextTier = 0;    // 次に焼く段階
+let _bossBgmBusy     = false;// レンダ実行中
+let _bossBgmTimer    = null; // 予約中のタイマー（緊急時に取り消して即実行するのでidを持つ）
+function _scheduleBossBgmRenders(immediate = false) {
+  if (_bossBgmBusy || _bossBgmNextTier >= BGM_TIER_COUNT) return;
+  if (_bossBgmTimer !== null) {
+    if (!immediate) return;                 // すでに予約済み
+    clearTimeout(_bossBgmTimer); _bossBgmTimer = null; // 緊急: 待たずに走る
+  }
+  const start = () => {
+    _bossBgmTimer = null;
     if (!audioCtx || !bossBgmBuffers) return;
-    const next = () => _scheduleBossBgmRenders(tier + 1);
+    const tier = _bossBgmNextTier;
+    _bossBgmBusy = true;
+    const done = () => {
+      _bossBgmNextTier = tier + 1;
+      _bossBgmBusy = false;
+      _scheduleBossBgmRenders(); // 続きは通常の間隔で（緊急でも一気に焼かない）
+    };
     renderBGMBuffer(audioCtx.sampleRate, {
       bassArr: BGM_BASS_BOSS_7,
       /* 最終段だけメロディ層を長3度へ持ち上げてAメジャー化（BGM_MEL_BOSS_BRIGHT参照）。
@@ -1855,9 +1875,14 @@ function _scheduleBossBgmRenders(tier = 0) {
     }).then(buf => {
       bossBgmBuffers[tier] = buf;
       if (tier === 0) bossBgmBuffer = buf; // 既存コード（startBossBGMTape等）との互換
-      next();
-    }).catch(e => { console.warn(`Boss BGM render failed (tier${tier}):`, e); next(); });
-  }, tier === 0 ? _BOSS_BGM_FIRST_DELAY_MS : _BOSS_BGM_GAP_MS);
+      done();
+    }).catch(e => { console.warn(`Boss BGM render failed (tier${tier}):`, e); done(); });
+  };
+  if (immediate) { start(); return; }
+  const near = kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO;
+  _bossBgmTimer = setTimeout(start,
+    _bossBgmNextTier === 0 ? (near ? _BOSS_BGM_NEAR_DELAY_MS : _BOSS_BGM_FIRST_DELAY_MS)
+                           : _BOSS_BGM_GAP_MS);
 }
 
 function getAudioCtx() {
@@ -6703,6 +6728,8 @@ function _startBossOmen() {
   slowRampEndTime = 0;
   slowHandLockUntil = 0;
   _buildBossOC();
+  /* 暗黒BGMが未完のまま突入しうるので、ここで待たずに焼く（_scheduleBossBgmRenders参照） */
+  _scheduleBossBgmRenders(true);
   _omen = { step: 0, timer: 0, items: [], flash: 0 };
   phase = 'bossOmen';
   stopBGMTape(1600);      // 世界が止まる（テープストップ+グレースケール）
