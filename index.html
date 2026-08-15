@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.53';
+const VERSION = 'v6.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2074,6 +2074,23 @@ function _elevateAudioSession() {
   _iosSessionTries++;
   _iosAudioEl.play().catch(() => {});
 }
+
+/* バックグラウンドでは無音要素を止める。
+
+   **理由はノイズ対策ではない**（バックグラウンド復帰時のノイズには効かないことを
+   実機で確認済み。ルール10-d参照。効かないからと一度撤去したが、別の理由で復活させた）。
+   Safariは再生中の音声要素があるとバックグラウンドでも再生を続け、「再生中」の
+   メディアセッションを保持する。実害は、コントロールセンターに再生中として出続けること、
+   他の音楽アプリの再生を止めうること（実機報告「PAUSEがかかった状態でも
+   iPhoneで音再生中になるのが気になる」）。無音を裏で鳴らし続ける意味は無い。
+
+   復帰後は次のタップで _elevateAudioSession() が鳴らし直す（毎タップその場で
+   確認する設計）。フラグは触らない＝再開を妨げる抑制を入れない（過去に2度これで
+   無音にした）。なお要素を止めるとAudioContextは中断されるので、復帰は
+   PAUSE解除のタップで作り直す経路（_resumeAudioCtx）に乗る */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !_iosAudioEl.paused) { try { _iosAudioEl.pause(); } catch(_e) {} }
+});
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
