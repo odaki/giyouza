@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.55';
+const VERSION = 'v6.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7435,7 +7435,8 @@ let _kingImpactShake = 0;
 const KING_CRACK_KIN_MIN_GAP_MS = 60;
 let _kingCrackKinLastMs = -Infinity;
 /* ══ リズムシーケンサ（打ち込み→再生）══
-   1トライは「打ち込み（最大KING_BATTERY_BEATS拍）→ 再生 → 次のトライ」の3段。
+   1トライは「打ち込み（最大KING_BATTERY_BEATS拍＝BGMループ2周ぶん）→ 再生 →
+   次のトライ」の3段。
    小節には固定せず8分音符グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
 
@@ -7450,7 +7451,12 @@ let _kingCrackKinLastMs = -Infinity;
    掛かる（実機のMPC等と同じ、録音中は生・再生はクオンタイズ）。採点（こんがり%）は
    生のタイミングのままなので報酬構造は変わらない。 */
 const KING_SEQ_QUANT = BGM_BEAT / 2;   // 量子化の刻み＝8分音符（calcSyncScoreの評価グリッドと同一）
-const KING_BATTERY_BEATS = 7;          // 打ち込みの持ち時間（拍）＝バッテリーのセル数
+/* 打ち込みの持ち時間（拍）＝バッテリーのセル数。実機評価「全然間に合わない」で
+   7拍（2.30秒）から4倍にした。28拍＝9.21秒＝BGMループちょうど2周
+   （1ループ14拍）、7拍子で4小節ぶん。表示もこの4×7を活かして7セルごとに
+   区切って描く（drawKingCookGauge参照） */
+const KING_BATTERY_BEATS = 28;
+const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節）
 /* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
    ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
 const KING_SEQ_MIN_LEAD = 0.15;
@@ -8704,24 +8710,27 @@ function drawKingCookGauge(achieved = false) {
     ctx.fill();
   }
   /* 打ち込みの持ち時間（バッテリー）。1セル=1拍で、拍境界ごとに1つ落ちる
-     （KING_SEQ_*の定義部参照）。ラベル行の右側に置き、こんがりバーとは分ける。
+     （KING_SEQ_*の定義部参照）。28セルはラベル行の右側に入らないので、パネル
+     上端に横幅いっぱいの細いストリップとして置く（こんがりバーと同じ左右位置
+     に揃える）。KING_BATTERY_GROUP（7拍＝1小節）ごとに広めの隙間を空けて、
+     数えなくても「あと何小節ぶん」が読めるようにする。
      achieved=true（退場演出中）は打ち込み自体が無いので出さない */
   if (!achieved && _king.recStartPos !== null && !_king.attemptFired) {
     const left = _kingBatteryLeft();
-    const cw = 7, ch = 12, cgap = 3;
-    const bwTotal = KING_BATTERY_BEATS * cw + (KING_BATTERY_BEATS - 1) * cgap;
-    const bx0 = mx + mw - 14 - bwTotal, by0 = my + (mh - bh - 10) / 2 + 4 - ch / 2;
+    const groups = Math.ceil(KING_BATTERY_BEATS / KING_BATTERY_GROUP);
+    const ch = 4, cgap = 1.5, ggap = 5;
+    const cw = (bw - (groups - 1) * ggap - (KING_BATTERY_BEATS - groups) * cgap) / KING_BATTERY_BEATS;
+    const by0 = my + (IS_PORTRAIT ? 5 : 3); // ラベル文字の上端より上（パネル上端の細帯）
+    /* 残量が少ないほど橙→赤へ。しきい値はセル数で直書きせずKING_BATTERY_BEATSに
+       対する割合で持つ（拍数を変えても警告の出方が変わらない） */
+    const warm = left <= KING_BATTERY_BEATS * 2 / 7 ? '#ffb03a' : Y;
+    const col  = left <= KING_BATTERY_BEATS / 7 ? '#ff6a3a' : warm;
+    let x = bx;
     for (let i = 0; i < KING_BATTERY_BEATS; i++) {
-      const x = bx0 + i * (cw + cgap);
       ctx.beginPath(); ctx.rect(x, by0, cw, ch);
-      if (i < left) {
-        /* 残り2セル以下は赤へ（数えなくても切迫が分かるように） */
-        ctx.fillStyle = left <= 2 ? '#ff6a3a' : (left <= 4 ? '#ffb03a' : Y);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fill();
-        ctx.strokeStyle = 'rgba(200,140,40,0.45)'; ctx.lineWidth = 1; ctx.stroke();
-      }
+      if (i < left) { ctx.fillStyle = col; ctx.fill(); }
+      else          { ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fill(); }
+      x += cw + ((i + 1) % KING_BATTERY_GROUP === 0 ? ggap : cgap);
     }
   }
   ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px 'Hiragino Mincho ProN',serif`;
