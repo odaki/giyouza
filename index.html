@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.49';
+const VERSION = 'v6.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1822,6 +1822,44 @@ function _updateBgmToneShelf() {
   bgmToneShelf.gain.setTargetAtTime(target, audioCtx.currentTime, BGM_TONE_SHELF_TAU);
 }
 
+/* ボスBGMの事前レンダリングを、手が空いたときに1本ずつ行う。
+
+   まとめて走らせてはいけない。実測（Mac）で5本同時だと完了まで308ms、
+   ノードのスケジュールだけでメインスレッドを28ms塞ぐ。実機の?perfでも初回タップの
+   unlk が47msになっており、これは音声経路が開く瞬間と重なる。オーディオスレッドの
+   処理落ち（＝ざらついた雑音）とタップの引っかかりの両方の要因になる。
+
+   1本ずつ・間を空けて焼けば、1回あたりの負荷は通常BGM1本ぶん（実測68ms）で済み、
+   キング戦に入るまでには十分間に合う。未完のまま突入しても通常BGMで代用される */
+const _BOSS_BGM_FIRST_DELAY_MS = 4000; // 最初の1本を焼くまで（音声経路が落ち着くのを待つ）
+const _BOSS_BGM_GAP_MS         = 1500; // 2本目以降の間隔
+function _scheduleBossBgmRenders(tier = 0) {
+  if (tier >= BGM_TIER_COUNT) return;
+  _runWhenIdle(() => {
+    if (!audioCtx || !bossBgmBuffers) return;
+    const next = () => _scheduleBossBgmRenders(tier + 1);
+    renderBGMBuffer(audioCtx.sampleRate, {
+      bassArr: BGM_BASS_BOSS_7,
+      /* 最終段だけメロディ層を長3度へ持ち上げてAメジャー化（BGM_MEL_BOSS_BRIGHT参照）。
+         差し替えはループ先頭ぴったりで行うため、段階間で内容が違っても位相は
+         連続しクリックは出ない（_swapBossBgmBuffer参照） */
+      melArr: tier === BGM_BRIGHT_TIER ? BGM_MEL_BOSS_BRIGHT : BGM_MEL_BOSS,
+      hatArr: BGM_HAT_BOSS, kickSet: BGM_KICK_BOSS,
+      taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
+      /* こんがり度が上がるほど合いの手の食い込みを増やす（BGM_TAIKO_PICKUP_TIERS参照） */
+      taikoPickupSet: _taikoPickupSetForTier(tier),
+      bassDurMul: 0.85, bassDecay: 0.05,
+      useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
+      useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
+      rumbleMellow: tier / (BGM_TIER_COUNT - 1),
+    }).then(buf => {
+      bossBgmBuffers[tier] = buf;
+      if (tier === 0) bossBgmBuffer = buf; // 既存コード（startBossBGMTape等）との互換
+      next();
+    }).catch(e => { console.warn(`Boss BGM render failed (tier${tier}):`, e); next(); });
+  }, tier === 0 ? _BOSS_BGM_FIRST_DELAY_MS : _BOSS_BGM_GAP_MS);
+}
+
 function getAudioCtx() {
   if (!audioCtx) {
     audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
@@ -1847,35 +1885,16 @@ function getAudioCtx() {
         startBGM();
       }
     }).catch(e => { console.warn('BGM render failed:', e); });
-    /* ボス戦用（暗黒版）バッファも並行してレンダリング。通常BGMと独立に
-       完了するため、起動タイミングは_initBossBattle側でbossBgmBufferの
-       有無を確認する（未完なら通常BGMで代用。startBossBGMTape参照）。
-       こんがり度の段階ぶん（BGM_TIER_COUNT個）を並行して事前レンダリングし、
-       こんがり度の上昇に合わせてループの継ぎ目で差し替える（段階で変わる3要素は
-       BGM_TIER_COUNTの定義部、切り替えの仕組みは_updateBossBgmTierを参照）。
-       tier0は従来のbossBgmBufferと同一内容 */
+    /* ボス戦用（暗黒版）バッファは、ここでは焼かずに後回しにする。
+       起動タイミングは_initBossBattle側でbossBgmBufferの有無を確認しており、
+       未完ならその時点の通常BGMで代用される（startBossBGMTape参照）ので、
+       初回タップに間に合わせる必要はまったく無い。キング戦に入るには
+       1000ギヨウザ必要で何トライもかかる。
+       こんがり度の段階ぶん（BGM_TIER_COUNT個）を用意し、上昇に合わせてループの
+       継ぎ目で差し替える（段階で変わる3要素はBGM_TIER_COUNTの定義部、
+       切り替えの仕組みは_updateBossBgmTierを参照）。tier0は従来のbossBgmBufferと同一内容 */
     bossBgmBuffers = new Array(BGM_TIER_COUNT).fill(null);
-    for (let tier = 0; tier < BGM_TIER_COUNT; tier++) {
-      const mellow = tier / (BGM_TIER_COUNT - 1);
-      renderBGMBuffer(audioCtx.sampleRate, {
-        bassArr: BGM_BASS_BOSS_7,
-        /* 最終段だけメロディ層を長3度へ持ち上げてAメジャー化（BGM_MEL_BOSS_BRIGHT参照）。
-           差し替えはループ先頭ぴったりで行うため、段階間で内容が違っても位相は
-           連続しクリックは出ない（_swapBossBgmBuffer参照） */
-        melArr: tier === BGM_BRIGHT_TIER ? BGM_MEL_BOSS_BRIGHT : BGM_MEL_BOSS,
-        hatArr: BGM_HAT_BOSS, kickSet: BGM_KICK_BOSS,
-        taikoStrongSet: BGM_TAIKO_STRONG_BOSS, taikoFlourishSet: BGM_TAIKO_FLOURISH_BOSS, // 7拍子化（ユーザー要望）
-        /* こんがり度が上がるほど合いの手の食い込みを増やす（BGM_TAIKO_PICKUP_TIERS参照） */
-        taikoPickupSet: _taikoPickupSetForTier(tier),
-        bassDurMul: 0.85, bassDecay: 0.05,
-        useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
-        useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
-        rumbleMellow: mellow,
-      }).then(buf => {
-        bossBgmBuffers[tier] = buf;
-        if (tier === 0) bossBgmBuffer = buf; // 既存コード（startBossBGMTape等）との互換
-      }).catch(e => { console.warn(`Boss BGM render failed (tier${tier}):`, e); });
-    }
+    _scheduleBossBgmRenders();
     /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
        resume()後に値が確定するので少し待って再計測 */
     _updateBeatDisplayAdvance();
@@ -1941,31 +1960,35 @@ function _resumeAudioCtx(callback) {
    そこで実時間を持つ無音WAV（8kHz・8bit・モノラル・0.5秒）を実行時に組み立て、
    loop再生で鳴らし続ける。再生が途切れないのでセッションはPlaybackのまま保たれ、
    play()は最初の1回で済む。8bit PCMの無音は0x80。 */
-/* 長さの決め方: 短いとループ境界の処理が頻繁に来て、フレーム間隔の乱れになる
-   （0.5秒だと毎秒2回。v6.34ではこれを避けるために再生を止める＝待避を入れたが、
-   今度は「リロード後の初回ミュート解除でざらざらした雑音が混ざる」という
-   実機報告を生んだ。止めると出力ストリームが途切れ、Web Audioが鳴り出すときに
-   経路が張り直されるため。20秒にすればループ境界は40分の1になり、
-   鳴らし続けたまま両方の問題を避けられる。生成コストは実測1.8ms・データURIは208KB */
-const _SILENT_WAV_SEC = 20;
+/* 形式は端末の出力に合わせる（48kHz・16bit・モノラル）。
+   実機A/Bで「無音要素を鳴らしている時だけ、経路が変わる瞬間にノイズが出る」ことが
+   確定した（?noelev では中断・復帰とも無音）。8kHz・8bitで鳴らしていたため、
+   出力(48kHz)へのリサンプリングが常に挟まっており、経路の再構成時にその状態が
+   ゴミを出している疑いが強い。同じ形式なら変換自体が不要になる。
+   16bit PCMの無音は0なので、確保した時点でゼロ埋め済み＝fill不要。
+
+   長さ: 短いとループ境界の処理が頻繁に来てフレーム間隔の乱れになる（0.5秒だと毎秒2回。
+   v6.34ではこれを避けるために再生を止める＝待避を入れたが、それが上記のノイズを
+   生んだので撤回済み）。10秒あればループ境界は実用上ほぼ無視できる */
+const _SILENT_WAV_RATE = 48000;
+const _SILENT_WAV_SEC  = 10;
 const _SILENT_WAV_URI = (() => {
-  const rate = 8000, n = rate * _SILENT_WAV_SEC;
+  const rate = _SILENT_WAV_RATE, n = rate * _SILENT_WAV_SEC * 2; // 16bit = 2バイト/サンプル
   const bytes = new Uint8Array(44 + n);
   const dv = new DataView(bytes.buffer);
   const ascii = (off, s) => { for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i); };
   ascii(0, 'RIFF');  dv.setUint32(4, 36 + n, true);   ascii(8, 'WAVE');
   ascii(12, 'fmt '); dv.setUint32(16, 16, true);      dv.setUint16(20, 1, true); // PCM
   dv.setUint16(22, 1, true);                          dv.setUint32(24, rate, true);
-  dv.setUint32(28, rate, true);                       dv.setUint16(32, 1, true);
-  dv.setUint16(34, 8, true);                          ascii(36, 'data');
+  dv.setUint32(28, rate * 2, true);                   dv.setUint16(32, 2, true); // byteRate / blockAlign
+  dv.setUint16(34, 16, true);                         ascii(36, 'data');
   dv.setUint32(40, n, true);
-  bytes.fill(0x80, 44);
-  /* 1文字ずつ連結すると長い入力で遅くなるため、チャンクに分けて変換する */
-  let s = '';
+  /* データ部は16bit PCMの無音＝0で、Uint8Arrayは確保時点でゼロ埋めされている */
+  let str = '';
   for (let i = 0; i < bytes.length; i += 8192) {
-    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    str += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
   }
-  return 'data:audio/wav;base64,' + btoa(s);
+  return 'data:audio/wav;base64,' + btoa(str);
 })();
 const _iosAudioEl = document.createElement('audio');
 _iosAudioEl.src = _SILENT_WAV_URI;
