@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.51';
+const VERSION = 'v6.52';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1964,7 +1964,9 @@ function _recreateAudioGraph() {
    - suspended: resume() で復帰。Promise 解決後に setTimeout(callback, 0)
    ※ ユーザーアクティベーション（touchstart/touchend/click）内から呼ぶこと。 */
 function _resumeAudioCtx(callback) {
-  if (audioCtx.state === 'interrupted') {
+  /* closed は ?closebg（バックグラウンド移行時に閉じる）で入りうる状態。
+     interrupted と同じく resume() では戻らないので作り直す */
+  if (audioCtx.state === 'interrupted' || audioCtx.state === 'closed') {
     _recreateAudioGraph();
     setTimeout(callback, 0);
   } else {
@@ -1986,11 +1988,12 @@ function _resumeAudioCtx(callback) {
    loop再生で鳴らし続ける。再生が途切れないのでセッションはPlaybackのまま保たれ、
    play()は最初の1回で済む。8bit PCMの無音は0x80。 */
 /* 形式は端末の出力に合わせる（48kHz・16bit・モノラル）。
-   実機A/Bで「無音要素を鳴らしている時だけ、経路が変わる瞬間にノイズが出る」ことが
-   確定した（?noelev では中断・復帰とも無音）。8kHz・8bitで鳴らしていたため、
-   出力(48kHz)へのリサンプリングが常に挟まっており、経路の再構成時にその状態が
-   ゴミを出している疑いが強い。同じ形式なら変換自体が不要になる。
-   16bit PCMの無音は0なので、確保した時点でゼロ埋め済み＝fill不要。
+   8kHz・8bitで鳴らしていたため出力(48kHz)へのリサンプリングが常に挟まっていた。
+   同じ形式なら変換自体が不要になる。16bit PCMの無音は0なので、
+   確保した時点でゼロ埋め済み＝fill不要。
+   （なお「バックグラウンド復帰時のノイズは無音要素が原因」という見立ては
+   実機で否定された。?noelev でも再現する。原因はパイプラインに残る音声で、
+   対策は _CLOSE_ON_BG を参照）
 
    長さ: 短いとループ境界の処理が頻繁に来てフレーム間隔の乱れになる（0.5秒だと毎秒2回。
    v6.34ではこれを避けるために再生を止める＝待避を入れたが、それが上記のノイズを
@@ -3409,9 +3412,26 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
+/* ?closebg: バックグラウンド移行時に AudioContext を閉じる調査用フラグ。
+
+   実機報告「バックグラウンドから復帰した瞬間にノイズが鳴る。ただしBGMが
+   ちょうど止むタイミングで移行した場合は鳴らない」。この「無音の瞬間なら鳴らない」が
+   決め手で、鳴っているのは**移行の時点で既に出力パイプラインへ送り込まれていた
+   BGMそのもの**。セッションが生きたまま中断されるとその中身が破棄されずに残り、
+   復帰時に吐き出される。こちらでフェードを掛けても、送信済みの分（AirPodsなら
+   約163msぶん）には手が届かない。
+
+   残る手は移行時にパイプラインごと畳むこと＝close()。ただしここは過去に何度も
+   無音の退行を出している箇所なので、既定にはせず実機A/Bで確かめてから決める。
+   復帰は PAUSE 解除のタップで作り直す（_resumeAudioCtx が closed を扱う） */
+const _CLOSE_ON_BG = _dbgFlag('closebg');
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (!isPaused && phase !== 'startup') togglePause();
+    if (_CLOSE_ON_BG && audioCtx && audioCtx.state !== 'closed') {
+      /* togglePause がBGMソースの破棄と再生位置の保存を済ませた後に閉じる */
+      try { audioCtx.close(); } catch (_e) {}
+    }
   }
   /* フォアグラウンド復帰時の resume() は削除。
      interrupted 状態を suspended に変えてしまい、PAUSEボタンの
