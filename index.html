@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.58';
+const VERSION = 'v6.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1712,7 +1712,7 @@ function getBeatPulse() {
 /* 入力時刻を「聴こえている音」基準のバッファ内積算位置（秒・ループをまたいで単調増加）
    へ変換する。判定（calcSyncScore）とキング戦リズムシーケンサの量子化
    （_kingSeqSlotAt）が必ず同じ時計を使うための共通ヘルパー。
-   別々に計算すると「JUSTを取ったタップが8分スロットの境界に乗らない」という
+   別々に計算すると「JUSTを取ったタップが量子化スロットの境界に乗らない」という
    食い違いが起きる（採点はグリッドAに乗っているのに再生はグリッドBへ量子化される）。
    判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
    表示先読み _BEAT_DISPLAY_ADVANCE は描画パイプライン補償なので判定には含めない
@@ -7437,42 +7437,54 @@ let _kingCrackKinLastMs = -Infinity;
 /* ══ リズムシーケンサ（打ち込み→再生）══
    1トライは「打ち込み（最大KING_BATTERY_BEATS拍＝BGMループ2周ぶん）→ 再生 →
    次のトライ」の3段。
-   小節には固定せず8分音符グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
+   小節には固定せず量子化グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
 
    打ち込み: 5タップ（4マーク＋発射）はすべてハイハット(kingShoot)で生・即時。
      入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
-     ここで守られる。各タップの時刻は _bgmJudgePos → 8分スロットへ量子化して記録。
+     ここで守られる。各タップの時刻は _bgmJudgePos → スロットへ量子化して記録。
    再生: 記録した相対オフセットの「長い隙間だけ」を詰めて、スネア(kingBeam)で鳴らす。
      こんがりが揃った時だけ発生し、ミス時は従来どおり（篩い落とし→衝突→ひび）。
      音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
-     16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえるため。
+     16.7msのジッタが乗り、16分=82msに対して約20%のヨレとして聴こえるため。
    量子化はプレイヤーの入力そのものを書き換えるのではなく「後から鳴らす別の演奏」に
    掛かる（実機のMPC等と同じ、録音中は生・再生はクオンタイズ）。採点（こんがり%）は
    生のタイミングのままなので報酬構造は変わらない。 */
-const KING_SEQ_QUANT = BGM_BEAT / 2;   // 量子化の刻み＝8分音符（calcSyncScoreの評価グリッドと同一）
+/* 1拍の分割数＝量子化の細かさ。4で16分音符（ユーザー要望）。
+   スロット数で表す各定数（KING_SEQ_GAP_MAX 等）と「拍境界かどうか」の判定は
+   すべてここから導出する。直接2や4で判定を書くと、この値を変えたときに
+   拍の境界がずれて静かに壊れる（8分→16分にした際に実際に踏んだ）。
+
+   採点グリッド（calcSyncScore）は8分のままである点に注意。8分の位置は16分の
+   位置でもあるので「JUSTを取ったタップは必ずスロット境界に乗る」という不変条件は
+   保たれる。一方GOODの許容幅（±55.6ms）は16分の半分（±41ms）より広いので、
+   遅れ気味のGOODは隣の16分＝裏に置かれるようになる＝より忠実に再現される。 */
+const KING_SEQ_DIV = 4;
+const KING_SEQ_QUANT = BGM_BEAT / KING_SEQ_DIV; // 量子化の刻み（16分音符 ≈ 82ms）
+/* スロット s を「次の拍境界」へ切り上げる（再生開始アンカー・次トライ開始の位置決め用） */
+const _kingSeqBeatUp = s => Math.ceil(s / KING_SEQ_DIV) * KING_SEQ_DIV;
 /* 打ち込みの持ち時間（拍）＝バッテリーのセル数。実機評価「全然間に合わない」で
    7拍（2.30秒）から4倍にした。28拍＝9.21秒＝BGMループちょうど2周
    （1ループ14拍）、7拍子で4小節ぶん。表示もこの4×7を活かして7セルごとに
    区切って描く（drawKingCookGauge参照） */
 const KING_BATTERY_BEATS = 28;
 const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節）
-/* 隙間の上限（8分いくつ分か）。実機評価「再生側が長く感じる」への対応。
+/* 隙間の上限＝2拍。実機評価「再生側が長く感じる」への対応。
    打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」で
    あってリズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ
    切り詰める。実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分が
-   ある形（例: 隙間 2,28,4,6 → 2,4,4,4）は保たれる。
+   ある形（例: 隙間 4,56,8,12 → 4,8,8,8）は保たれる。
 
-   4（＝2拍）を選んだ理由:
-   - 上限2（1拍）だと隙間2と隙間28が両方2になり、「速い部分がある」形が消える
-   - 偶数なので、詰まった隙間は必ず拍の上に乗る。全部詰まったパターンが8分の裏に
-     散らからず、素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる
-   - タップ間は最大4つ（4マーク＋発射）なので上限が 4×4=16スロット＝8拍＝2.63秒で
+   2拍を選んだ理由:
+   - 1拍だと「1拍待った」と「7拍待った」が両方1拍になり、「速い部分がある」形が消える
+   - 拍の整数倍なので、詰まった隙間は必ず拍の上に乗る。全部詰まったパターンが
+     裏拍へ散らからず素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる
+   - タップ間は最大4つ（4マーク＋発射）なので上限が 2拍×4＝8拍＝2.63秒で
      割り切れ、比率圧縮を使わずに単一ルールで完結する
 
    これで以前の比率圧縮（打ち込み全体を1小節へ縮める方式）が持っていた
    「遅く叩くほど密なフィルになる」副作用がルールごと無くなる。 */
-const KING_SEQ_GAP_MAX = 4;
+const KING_SEQ_GAP_MAX = 2 * KING_SEQ_DIV;
 /* 再生スパンの上限。KING_SEQ_GAP_MAX が効いていれば超えないので通常は発火しない
    保険（上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
    超えた場合だけ比率で縮める。 */
@@ -7482,7 +7494,7 @@ const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
 const KING_SEQ_MIN_LEAD = 0.15;
 /* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
    スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
-   8分=164msに対して約30%＝確実に聴こえるズレになるため、着弾がスロットに
+   16分=82msに対して約61%＝確実に聴こえるズレになるため、着弾がスロットに
    合うよう発射側を前へずらす（飛翔時間が距離によらず一定という性質は不変） */
 const KING_SEQ_BEAM_LEAD = KING_LASER_TRAVEL_FRAMES / 60;
 /* 5音目（アクセント）の全身リアクション。的4つは焦げ跡を点で刻み、5音目で
@@ -7673,7 +7685,7 @@ function _initBossBattle() {
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（{poly,angle}の配列。drawKingReel参照。再スピンをまたいで残る）
     reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
     /* リズムシーケンサ（KING_SEQ_*の定義部参照）。
-       rec         : 打ち込み記録 [{slot, flight}]（slot=絶対8分インデックス、強制発射分はnull）
+       rec         : 打ち込み記録 [{slot, flight}]（slot=絶対スロットインデックス、強制発射分はnull）
        recStartPos : 打ち込み開始のバッファ位置（拍境界）。バッテリー残量の起点。
                      nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
@@ -7885,7 +7897,7 @@ function _kingReelShoot(inputPerfMs, forced = false) {
   if (_king.reelIdx >= 4) _king.awaitingFire = true; // 4本マーク完了。発射は次の入力で_kingFireAttackが行う
 }
 
-/* 入力時刻を絶対8分スロットのインデックスへ量子化する。採点（calcSyncScore）と
+/* 入力時刻を絶対スロットのインデックス（KING_SEQ_QUANT刻み）へ量子化する。採点（calcSyncScore）と
    同じ _bgmJudgePos から導くため、JUSTを取ったタップは必ずスロット境界に乗る。
    ループ内位置ではなく単調増加の絶対位置を使うので、1トライがBGMのループ境界を
    跨いでもオフセットの計算が壊れない（量子化グリッドとループ長の丸め差は
@@ -7993,7 +8005,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
 
 /* 打ち込んだ5タップを再生シーケンスへ組み、音を先行スケジュールする。
    組めた場合のみ true（false なら呼び出し側が従来の即時適用へ退避する）。
-   スロットは絶対8分インデックスで記録されているので、最初のマークからの
+   スロットは絶対インデックスで記録されているので、最初のマークからの
    相対オフセットを取ればアンカーを好きな位置に置ける＝小節に固定せず、
    発射の直後の拍境界から鳴らし始められる（速く打ち終われば速く再生も終わる）。 */
 function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
@@ -8009,10 +8021,10 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   const rec = _king.rec.filter(r => r.slot !== null);
   if (rec.length === 0) return false;
   const baseSlot = rec[0].slot;
-  /* 再生開始アンカー: 最低リードを確保した先の拍境界（偶数スロット＝4分音符）。
-     8分の裏から始めるとバッテリーの目盛りも裏拍で刻まれて気持ち悪くなる */
-  let anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
-  if (anchor % 2 !== 0) anchor++;
+  /* 再生開始アンカー: 最低リードを確保した先の拍境界（_kingSeqBeatUp）。
+     拍の途中から始めると、アクセント＝次トライ開始も拍から外れ、バッテリーの
+     目盛りが裏で刻まれて気持ち悪くなる */
+  const anchor = _kingSeqBeatUp(Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
   /* 隙間クランプ（KING_SEQ_GAP_MAX の定義部参照）。5タップ（4マーク＋発射）の
      間の隙間それぞれに上限を掛け、超えたぶんを切り詰めた新しいオフセットを作る。
      短い隙間＝実際に叩いている部分はそのまま残り、長い待ち時間だけが詰まる。
@@ -8056,7 +8068,7 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   events.sort((a, b) => a.at - b.at);
   _king.seqEvents = events;
   /* 音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
-     16.7msのジッタが乗り、8分=164msに対して約10%のヨレとして聴こえる。
+     16.7msのジッタが乗り、16分=82msに対して約20%のヨレとして聴こえる。
      ミュート中・contextがrunningでない場合は playSE 側が自前で弾くので、
      視覚イベントだけが進む */
   for (const e of events) {
@@ -8171,9 +8183,8 @@ function _kingTrialGate() {
     return;
   }
   if (_king.nextTrialPos === null) {
-    let s = Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
-    if (s % 2 !== 0) s++; // 拍境界へ揃える
-    _king.nextTrialPos = s * KING_SEQ_QUANT;
+    const s = _kingSeqBeatUp(Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
+    _king.nextTrialPos = s * KING_SEQ_QUANT; // 拍境界へ揃える（バッテリーの目盛りが裏拍で刻まれないように）
   }
   if (pos >= _king.nextTrialPos) _kingStartTrial(_king.nextTrialPos);
 }
