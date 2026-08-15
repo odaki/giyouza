@@ -371,7 +371,7 @@ function drawPerf() {
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠 */
-    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try park${_iosSessionParked ? 1 : 0} el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(2)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
+    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(1)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
   ];
   /* 出力遅延の内訳。Bluetooth（AirPods等）で音が遅れて感じるときはここを見る。
      hw = 補正に使っている値。base/out はブラウザの申告値、
@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.46';
+const VERSION = 'v6.47';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1913,7 +1913,6 @@ function _recreateAudioGraph() {
      無音要素がまだ鳴り続けていれば次のタップで即座に「昇格済み」と再判定され、
      割り込みで止められていれば play() から再開される */
   _iosSessionElevated = false;
-  _iosSessionParked   = false; // 待避も解除する（新しいセッションでは鳴らし直しから）
 }
 
 /* iOS Safari: AudioContext を確実に running 状態にしてから callback を呼ぶ。
@@ -1942,8 +1941,15 @@ function _resumeAudioCtx(callback) {
    そこで実時間を持つ無音WAV（8kHz・8bit・モノラル・0.5秒）を実行時に組み立て、
    loop再生で鳴らし続ける。再生が途切れないのでセッションはPlaybackのまま保たれ、
    play()は最初の1回で済む。8bit PCMの無音は0x80。 */
+/* 長さの決め方: 短いとループ境界の処理が頻繁に来て、フレーム間隔の乱れになる
+   （0.5秒だと毎秒2回。v6.34ではこれを避けるために再生を止める＝待避を入れたが、
+   今度は「リロード後の初回ミュート解除でざらざらした雑音が混ざる」という
+   実機報告を生んだ。止めると出力ストリームが途切れ、Web Audioが鳴り出すときに
+   経路が張り直されるため。20秒にすればループ境界は40分の1になり、
+   鳴らし続けたまま両方の問題を避けられる。生成コストは実測1.8ms・データURIは208KB */
+const _SILENT_WAV_SEC = 20;
 const _SILENT_WAV_URI = (() => {
-  const rate = 8000, n = rate / 2;            // 0.5秒
+  const rate = 8000, n = rate * _SILENT_WAV_SEC;
   const bytes = new Uint8Array(44 + n);
   const dv = new DataView(bytes.buffer);
   const ascii = (off, s) => { for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i); };
@@ -1954,8 +1960,11 @@ const _SILENT_WAV_URI = (() => {
   dv.setUint16(34, 8, true);                          ascii(36, 'data');
   dv.setUint32(40, n, true);
   bytes.fill(0x80, 44);
+  /* 1文字ずつ連結すると長い入力で遅くなるため、チャンクに分けて変換する */
   let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += 8192) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
   return 'data:audio/wav;base64,' + btoa(s);
 })();
 const _iosAudioEl = document.createElement('audio');
@@ -1969,42 +1978,18 @@ let _iosSessionTries = 0;        // play()の試行回数（?perfでの状態確
    Bluetooth出力の遅延が悪化したという実機報告の切り分けに使った。
    このフラグを付けると消音モード（🔕）では音が出なくなるので、常用してはいけない */
 const _NO_ELEVATE = _dbgFlag('noelev');
-/* 昇格を確認できたら無音要素を止める（＝待避）。
-   実機報告「AirPods Pro 3 でタップから発射音までの遅れが酷くなった」の対策。
-   ?noelev との実機A/Bで分かったこと（iPhone + AirPods Pro 3、?perf）:
-     ・outputLatency は 163ms で、無音要素の有無に関わらず同じ。
-       これは AirPods のリンク遅延そのもので、こちらでは縮められない
-     ・違いが出たのはフレーム間隔。gap最大 47ms→31ms、spike 46/32/26→29/31/30ms
-   つまり犯人は出力バッファではなく、0.5秒のWAVをループ再生し続けることで
-   毎秒2回来るループ境界の処理だった。16分音符で射っていると、その引っかかりが
-   タップの遅れとして体感に出る。無音要素は「一度鳴らせば昇格する」ためのもので、
-   鳴らし続ける必要はないので、確認できしだい止める。
+/* **無音要素は止めない（鳴らし続ける）。**
+   v6.34で「昇格を確認したら止める（待避）」を入れたが、これは失敗だった。
+   実機報告「リロード後の初回ミュート解除で、BGMにざらざらした雑音が混ざることがある」
+   の発生時期がv6.34付近と一致する。止めると出力ストリームが途切れ、そのあと
+   Web Audioが鳴り出すときに経路が張り直されるため、Bluetooth側の古いバッファが
+   吐き出される（ユーザーの見立て「リロード前のバッファ残存」と一致する）。
 
-   止めても昇格が保たれるかは iOS 側の実装次第なので、次の経路で必ず再武装する:
-     ・AudioContext の作り直し（_recreateAudioGraph）＝割り込み復帰
-     ・バックグラウンドから戻ったとき（visibilitychange）
-   ?holdelev を付けると従来どおり鳴らし続ける（消音モードで音が出なくなった場合の
-   切り分け・退避用）。消音モードではこの昇格が唯一の発音経路なので、
-   実機で「内蔵スピーカー＋消音スイッチON で音が出ること」を確認するまでは暫定とする
-   （Bluetooth出力は消音スイッチの対象外なので、AirPods接続中は要否を判定できない） */
-const _ELEV_HOLD = _dbgFlag('holdelev');
-const _ELEV_MIN_SEC  = 0.3;  // これだけ実際に鳴らしてから待避する
-let _iosSessionParked = false;
-/* 待避の実行。タップ経路と timeupdate の両方から呼ぶ。
-   要素側のイベントを併用するのは、タップが来ないまま鳴り続ける時間を作らないため
-   （待避条件をタップ任せにすると、放置中はループ境界の割り込みが続く） */
-function _parkSilentEl() {
-  if (_ELEV_HOLD || _iosSessionParked) return;
-  if (_iosAudioEl.paused || _iosAudioEl.currentTime < _ELEV_MIN_SEC) return;
-  _iosSessionElevated = true; // 実際に鳴っていた＝昇格できている
-  _iosAudioEl.pause();
-  _iosSessionParked = true;
-}
+   待避を入れた元の理由は「0.5秒のWAVのループ境界が毎秒2回来る」ことだったので、
+   そちらはWAVを20秒にして解消した（_SILENT_WAV_SEC参照。境界は40分の1になる）。
+   止める方向で解こうとしないこと */
 function _elevateAudioSession() {
   if (_NO_ELEVATE) return;
-  /* 待避中: 再武装は上記の2経路が _iosSessionParked を降ろすことで行う。
-     「一度立てたら降ろさないフラグ」にしないこと（過去に無音の退行を出した） */
-  if (_iosSessionParked) return;
   /* 成功するまで、タップのたびに無条件で試み続ける。ここに「賢い」抑制を入れてはいけない。
      この昇格はAVAudioSessionをAmbient→Playbackに上げて消音スイッチをバイパスする
      ためのもので、昇格できないまま試行をやめると消音モードで一切音が出なくなる。
@@ -2027,11 +2012,7 @@ function _elevateAudioSession() {
      （_SILENT_WAV_URI参照）。pausedも併せて見るのは、システム側の割り込みで
      止められた場合に再開できるようにするため。
      判定が真にならないうちは毎タップ試み続けるので、諦めて無音になる経路は無い */
-  if (!_iosAudioEl.paused && _iosAudioEl.currentTime > 0) {
-    _iosSessionElevated = true;
-    _parkSilentEl(); // 十分に鳴っていれば止める（ループ境界の割り込みを残さない）
-    return;
-  }
+  if (!_iosAudioEl.paused && _iosAudioEl.currentTime > 0) { _iosSessionElevated = true; return; }
   /* ループの境目でcurrentTimeが0付近を返す一瞬だけのために鳴らし直さない。
      再生中（paused=false）かつ一度でも進行を確認できていれば、そのまま昇格済み扱い */
   if (!_iosAudioEl.paused && _iosSessionElevated) return;
@@ -2042,18 +2023,6 @@ function _elevateAudioSession() {
   _iosSessionTries++;
   _iosAudioEl.play().catch(() => {});
 }
-/* 待避は要素自身の進行イベントで駆動する。play()からの固定タイマーでは駄目で、
-   ローカル検証では再生が実際に始まるまで約860msかかり、700msのタイマーが
-   「まだ鳴っていない」時点で空振りして鳴りっぱなしになった。
-   timeupdateなら実際に鳴った分だけで判断できるので、開始の遅れに影響されない */
-_iosAudioEl.addEventListener('timeupdate', _parkSilentEl);
-/* 待避の再武装（フォアグラウンド復帰）。バックグラウンドの間にセッションが
-   降ろされている可能性があるため、次のタップで昇格をやり直せるようにする。
-   ここで resume() や play() を呼ばないこと（ジェスチャー外の再生要求は失敗し、
-   visibilitychange での resume は interrupted の検知を壊す。README/メモ参照） */
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) _iosSessionParked = false;
-});
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
