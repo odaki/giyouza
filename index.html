@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.59';
+const VERSION = 'v6.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7489,6 +7489,13 @@ const KING_SEQ_GAP_MAX = 2 * KING_SEQ_DIV;
    保険（上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
    超えた場合だけ比率で縮める。 */
 const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
+/* 再生タイミングの倍率。打ち込んだ間隔をそのまま鳴らすのではなく1/2に詰める
+   （ユーザー要望）。BGMのテンポは変えない＝あくまで叩いたパターンの再生速度。
+   人の指では16分（82ms）連打はまず出ないので、実際の打ち込みは8分より粗い間隔に
+   なる。それを1/2に詰めると16分前後のグリッドへ収まり、間延びした反復ではなく
+   ドラムのフィルらしい密度になる。
+   上限スパンは 32スロット×0.5＝16スロット＝4拍＝1.32秒（詰める前は2.63秒）。 */
+const KING_SEQ_PLAY_SCALE = 0.5;
 /* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
    ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
 const KING_SEQ_MIN_LEAD = 0.15;
@@ -8038,7 +8045,10 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
   const rawSpan = off[off.length - 1];
   const scale = rawSpan > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / rawSpan : 1;
-  const mapOff = i => Math.round(off[i] * scale);
+  /* 再生位置（スロット単位・小数可）。KING_SEQ_PLAY_SCALE で打ち込みの間隔を詰める。
+     整数へ丸め直さないのが要点: 丸めると16分で捉えた分解能が実質8分へ戻ってしまう
+     （1/2に詰めた位置は32分の粒度に乗るが、秒へ変換して予約するので小数のままでよい） */
+  const mapOff = i => off[i] * scale * KING_SEQ_PLAY_SCALE;
   const events = [];
   for (let i = 0; i < rec.length; i++) {
     /* OK以下のタップは焦げ跡もビームも無い（既存仕様）＝そのスロットは無音になり、
@@ -8054,8 +8064,11 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   /* 5音目（アクセント）＝クランプ後の末尾。ここが次のトライの開始と同じ瞬間になる
      （ユーザー選択: 死に時間をゼロにして、アクセントがそのまま次の「1」になる）。
      そのため次トライのバッテリー起点として位置も持たせる。
-     隙間が詰まった打ち込みではオフセットが KING_SEQ_GAP_MAX の倍数＝拍の上に
-     乗るので、次トライの目盛りも拍から刻まれる。
+     隙間が詰まった打ち込みは KING_SEQ_GAP_MAX の倍数×KING_SEQ_PLAY_SCALE＝拍の
+     整数倍になるので、次トライの目盛りも拍から刻まれる。詰まっていない（速い）
+     打ち込みではプレイヤー自身の置き方がそのまま残るため拍から外れうるが、
+     ずれるのはバッテリー表示の刻みの位相だけで、録音のグリッドは絶対位置基準
+     （_kingSeqSlotAt）なので影響しない。
      焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
      不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
   const accentPos = (anchor + mapOff(off.length - 1)) * KING_SEQ_QUANT;
