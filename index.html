@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.52';
+const VERSION = 'v6.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1964,8 +1964,8 @@ function _recreateAudioGraph() {
    - suspended: resume() で復帰。Promise 解決後に setTimeout(callback, 0)
    ※ ユーザーアクティベーション（touchstart/touchend/click）内から呼ぶこと。 */
 function _resumeAudioCtx(callback) {
-  /* closed は ?closebg（バックグラウンド移行時に閉じる）で入りうる状態。
-     interrupted と同じく resume() では戻らないので作り直す */
+  /* closed も interrupted と同じく resume() では戻らないので作り直す
+     （こちらから閉じることは無いが、システム側で閉じられた場合の保険） */
   if (audioCtx.state === 'interrupted' || audioCtx.state === 'closed') {
     _recreateAudioGraph();
     setTimeout(callback, 0);
@@ -2074,21 +2074,6 @@ function _elevateAudioSession() {
   _iosSessionTries++;
   _iosAudioEl.play().catch(() => {});
 }
-
-/* バックグラウンドでは無音要素を止める。
-   無音を裏で鳴らし続ける意味は無く、AudioContext だけが中断されて要素は生きている、
-   という半端な状態を作らないため（実機報告「バックグラウンドへ入る瞬間と、
-   フロントへ戻した瞬間にノイズが鳴る」の対策。こちらのグラフ側は段差ゼロまで
-   詰めてあり、復帰の瞬間にJSは何も実行していないので、残る変数がここだった）。
-
-   これは v6.34 の「待避」とは別物。あれは通常のプレイ中に止めるもので、
-   出力ストリームが途切れて経路が張り直され、リロード後の初回解除でノイズが出た。
-   ここで止めるのはバックグラウンドの間だけで、復帰後は次のタップで
-   _elevateAudioSession() が鳴らし直す（毎タップその場で確認する設計）。
-   フラグは触らない＝再開を妨げる抑制を入れない（過去に2度これで無音にした） */
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && !_iosAudioEl.paused) { try { _iosAudioEl.pause(); } catch(_e) {} }
-});
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
@@ -3412,26 +3397,17 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
-/* ?closebg: バックグラウンド移行時に AudioContext を閉じる調査用フラグ。
-
-   実機報告「バックグラウンドから復帰した瞬間にノイズが鳴る。ただしBGMが
-   ちょうど止むタイミングで移行した場合は鳴らない」。この「無音の瞬間なら鳴らない」が
-   決め手で、鳴っているのは**移行の時点で既に出力パイプラインへ送り込まれていた
-   BGMそのもの**。セッションが生きたまま中断されるとその中身が破棄されずに残り、
-   復帰時に吐き出される。こちらでフェードを掛けても、送信済みの分（AirPodsなら
-   約163msぶん）には手が届かない。
-
-   残る手は移行時にパイプラインごと畳むこと＝close()。ただしここは過去に何度も
-   無音の退行を出している箇所なので、既定にはせず実機A/Bで確かめてから決める。
-   復帰は PAUSE 解除のタップで作り直す（_resumeAudioCtx が closed を扱う） */
-const _CLOSE_ON_BG = _dbgFlag('closebg');
+/* 「バックグラウンドから復帰した瞬間にノイズが鳴る」は**ページからは直せない**、
+   というのが実機での結論（2026-08-15）。決め手は「BGMがちょうど止むタイミングで
+   移行した場合は鳴らない」という観測で、鳴っているのは移行の時点で既にOSの出力キューへ
+   渡り終えていたBGMそのもの。試して効かなかったもの:
+     ・移行時のフェードアウト（v6.48）→ 渡し終えた分には手が届かない
+     ・AudioContext を閉じる（?closebg）→ 閉じてもキューの中身は消えない
+     ・無音<audio>要素の有無（?noelev）→ 無関係。出力先(スピーカー/AirPods)にも依らない
+   OSの出力キューに渡った音声はこちらのどの操作でも取り消せない。追わないこと */
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (!isPaused && phase !== 'startup') togglePause();
-    if (_CLOSE_ON_BG && audioCtx && audioCtx.state !== 'closed') {
-      /* togglePause がBGMソースの破棄と再生位置の保存を済ませた後に閉じる */
-      try { audioCtx.close(); } catch (_e) {}
-    }
   }
   /* フォアグラウンド復帰時の resume() は削除。
      interrupted 状態を suspended に変えてしまい、PAUSEボタンの
