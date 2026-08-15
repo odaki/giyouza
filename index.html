@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.48';
+const VERSION = 'v6.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2023,6 +2023,21 @@ function _elevateAudioSession() {
   _iosSessionTries++;
   _iosAudioEl.play().catch(() => {});
 }
+
+/* バックグラウンドでは無音要素を止める。
+   無音を裏で鳴らし続ける意味は無く、AudioContext だけが中断されて要素は生きている、
+   という半端な状態を作らないため（実機報告「バックグラウンドへ入る瞬間と、
+   フロントへ戻した瞬間にノイズが鳴る」の対策。こちらのグラフ側は段差ゼロまで
+   詰めてあり、復帰の瞬間にJSは何も実行していないので、残る変数がここだった）。
+
+   これは v6.34 の「待避」とは別物。あれは通常のプレイ中に止めるもので、
+   出力ストリームが途切れて経路が張り直され、リロード後の初回解除でノイズが出た。
+   ここで止めるのはバックグラウンドの間だけで、復帰後は次のタップで
+   _elevateAudioSession() が鳴らし直す（毎タップその場で確認する設計）。
+   フラグは触らない＝再開を妨げる抑制を入れない（過去に2度これで無音にした） */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !_iosAudioEl.paused) { try { _iosAudioEl.pause(); } catch(_e) {} }
+});
 
 /* iOS Safari: あらゆるタッチで呼ぶ「機会があれば unlock する」関数。
    resume() + masterGain 経由サイレントバッファで AVAudioSession を開通させる。
