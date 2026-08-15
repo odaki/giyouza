@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.47';
+const VERSION = 'v6.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2966,7 +2966,9 @@ async function renderBGMBuffer(sampleRate, {
    _destroyBGMSourceが呼ばれた場合、こちらも一緒に止めて後始末する */
 let _pendingBgmTierOldSrc = null;
 
-function _destroyBGMSource() {
+/* fadeSec>0 なら、その時間で音量を落としきってから停止を予約する。
+   鳴っている最中に止める経路（ポーズ・バックグラウンド移行）で使う */
+function _destroyBGMSource(fadeSec = 0) {
   if (_pendingBgmTierOldSrc) {
     _pendingBgmTierOldSrc.onended = null;
     try { _pendingBgmTierOldSrc.stop(); } catch(e) {}
@@ -2974,10 +2976,24 @@ function _destroyBGMSource() {
     _pendingBgmTierOldSrc = null;
   }
   if (bgmSource) {
-    bgmSource.onended = null;
-    try { bgmSource.stop(); } catch(e) {}
-    bgmSource.disconnect();
+    const src = bgmSource;
     bgmSource = null;
+    src.onended = null;
+    if (fadeSec > 0 && audioCtx && bgmGain) {
+      /* 波形の途中で即座に止めると段差になり、それがそのままクリックとして
+         出力パイプラインへ入る。バックグラウンドへ移る瞬間の停止では、その段差が
+         Bluetoothのバッファに残ったまま凍結し、フォアグラウンド復帰で吐き出される
+         （実機報告「復帰した瞬間にノイズが鳴る」）。
+         停止はオーディオクロックで予約する。JSが止まっても正しい時刻で効くので、
+         バックグラウンド移行のように直後にJSが凍る場面でも確実にフェードが渡る */
+      const t = audioCtx.currentTime;
+      _rampGain(bgmGain.gain, 0, fadeSec);
+      try { src.stop(t + fadeSec + 0.005); } catch(e) {}
+      src.onended = () => { try { src.disconnect(); } catch(e) {} };
+    } else {
+      try { src.stop(); } catch(e) {}
+      src.disconnect();
+    }
   }
 }
 
@@ -11748,7 +11764,7 @@ function togglePause() {
       /* bgmSource があれば現在位置を保存、なければ先頭(0)から再開 */
       _pauseBgmPos  = bgmSource ? _bgmAccumAudioTime : 0;
       _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
-      _destroyBGMSource();
+      _destroyBGMSource(_GAIN_RAMP_SEC); // 段差を作らずに止める（上記参照）
     }
     applyMuteGain();
     draw(); // オーバーレイを即座に描画
@@ -11806,8 +11822,11 @@ function togglePause() {
             bgmPhaseRef = t - _pauseBgmPos;
             _bgmAccumLastWall = t;
             _bgmAccumLastPerf = performance.now() / 1000;
+            /* 再開位置(offset)の波形の値は0とは限らないため、いきなり音量1で
+               鳴らし始めると段差になる。数msで立ち上げて段差を消す */
             bgmGain.gain.cancelScheduledValues(t);
-            bgmGain.gain.setValueAtTime(1, t);
+            bgmGain.gain.setValueAtTime(0, t);
+            bgmGain.gain.linearRampToValueAtTime(1, t + _GAIN_RAMP_SEC);
           }
         }, 100);
       };
