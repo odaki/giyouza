@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.75';
+const VERSION = 'v6.76';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4819,28 +4819,51 @@ function _kingReelPointerPos(w) {
 function _drawKingReelCharge(px, py, idx) {
   /* 帯電の勢いをバッテリー残量に連動させる（副表示）。プレイヤーの視線は的に
      釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
-     分かるようにする。満充電で従来どおり、切れかけるとほぼ消える */
+     分かるようにする。満充電で最大、切れかけると弱々しくなる */
   const pw = KING_BATTERY_BEATS > 0 ? _kingBatteryLeft() / KING_BATTERY_BEATS : 1;
-  const vigor = 0.25 + 0.75 * pw;
+  const vigor = 0.35 + 0.65 * pw;
   let seed = Math.floor(performance.now() / 45) + idx * 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  /* 大きさは的の半径基準にする。実機評価「スパークエフェクトが小さすぎてよく見えない。
+     もっと派手に（大きめに）帯電している感じを表現できますか」で、固定6〜12pxから
+     的の半径と同程度（0.55〜1.15倍）へ引き上げた。縦横でKING_WRが変わるので比で持つ。
+     三角ポインタは的の縁から少し外（KING_WR+12）にあるので、この長さだと稲妻が的の
+     上半分を包むように広がって見える */
+  const R = KING_WR;
+  const flick = 0.55 + rnd() * 0.45; // 明滅
   ctx.save();
   ctx.translate(px, py);
-  ctx.strokeStyle = Y;
-  ctx.lineWidth = 1.5;
   ctx.lineCap = 'round';
-  ctx.globalAlpha = (0.5 + rnd() * 0.5) * vigor;
-  for (let b = 0; b < 3; b++) {
-    const baseAng = (b / 3) * Math.PI * 2 + rnd() * 0.6;
-    const len = (6 + rnd() * 6) * vigor;
-    const midAng = baseAng + (rnd() - 0.5) * 0.8;
-    const midLen = len * 0.55;
-    ctx.beginPath();
+  ctx.lineJoin = 'round';
+  /* 稲妻は本数を増やし（3→6）、折れも1回から3回にして荒れた放電に見せる。
+     全部を1本のパスへ積んでから「太く暗いグロー → 細く明るい芯」の順で2回ストローク
+     する。shadowBlurを使わずに光らせる既存のビーム描画（drawBossBattle）と同じ手法で、
+     的あたりのストロークも2回に収まる */
+  ctx.beginPath();
+  const N = 7;
+  for (let b = 0; b < N; b++) {
+    const baseAng = (b / N) * Math.PI * 2 + rnd() * 0.9;
+    const len = R * (0.55 + rnd() * 0.60) * vigor;
     ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(midAng) * midLen, Math.sin(midAng) * midLen);
-    ctx.lineTo(Math.cos(baseAng) * len, Math.sin(baseAng) * len);
-    ctx.stroke();
+    for (let s = 1; s <= 3; s++) {
+      const t = s / 3;
+      /* 根元ほど大きく振れ、先端へ向かって収束させると稲妻らしくなる */
+      const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - t * 0.5);
+      ctx.lineTo(Math.cos(a) * len * t, Math.sin(a) * len * t);
+    }
   }
+  ctx.globalAlpha = 0.40 * flick * vigor;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = Math.max(5, R * 0.22);
+  ctx.stroke();
+  ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = Math.max(2, R * 0.075);
+  ctx.stroke();
+  /* 根元の輝き。稲妻だけだと中心が空くので、帯びている芯を1枚置く */
+  ctx.globalAlpha = 0.30 * flick * vigor;
+  ctx.fillStyle = Y;
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.18 * (0.85 + 0.3 * flick), 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
@@ -4852,23 +4875,32 @@ function _drawKingReelDischarge(px, py, idx) {
   const k = _kingFireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
   let seed = idx * 13 + 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  /* 帯電（_drawKingReelCharge）を的の半径基準へ拡大したので、こちらも同じ基準に
+     揃える。片方だけ小さいと放電が弱く見える */
+  const R = KING_WR;
   ctx.save();
   ctx.translate(px, py);
-  ctx.strokeStyle = Y;
   ctx.lineCap = 'round';
-  ctx.globalAlpha = k * 0.9;
-  ctx.lineWidth = 1 + k * 1.8;
-  const spread = (1 - k) * 26; // 外へ広がっていく
-  for (let b = 0; b < 6; b++) {
-    const ang = (b / 6) * Math.PI * 2 + rnd() * 0.5;
-    const r0 = 3 + spread, r1 = r0 + 5 + rnd() * 7;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  const spread = (1 - k) * R * 0.85; // 外へ広がっていく
+  for (let b = 0; b < 8; b++) {
+    const ang = (b / 8) * Math.PI * 2 + rnd() * 0.5;
+    const r0 = R * 0.10 + spread, r1 = r0 + R * (0.18 + rnd() * 0.28);
     const mid = ang + (rnd() - 0.5) * 0.5;
-    ctx.beginPath();
     ctx.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0);
     ctx.lineTo(Math.cos(mid) * (r0 + r1) / 2, Math.sin(mid) * (r0 + r1) / 2);
     ctx.lineTo(Math.cos(ang) * r1, Math.sin(ang) * r1);
-    ctx.stroke();
   }
+  /* 帯電と同じ「太く暗いグロー → 細く明るい芯」の2回ストローク */
+  ctx.globalAlpha = k * 0.34;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = Math.max(4, R * 0.17) * (0.6 + k * 0.4);
+  ctx.stroke();
+  ctx.globalAlpha = k * 0.95;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = Math.max(1.6, R * 0.06) * (0.5 + k * 0.5);
+  ctx.stroke();
   ctx.restore();
 }
 
