@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.78';
+const VERSION = 'v6.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -699,6 +699,8 @@ let _lastBestCached  = -1;
 
 /* コイン表示アニメーション用（アニメーション追従値・GC不要な数値のみ） */
 let coinsDisp = 0; // 実値 coins に向けてeaseOut追従する表示用float
+/* 決着後にコイン表示の追従へ与える下限レート（update内のcoinsDisp参照） */
+const COIN_DISP_MIN_RATE = 0.5;
 
 /* BET ラベル幅（'BET' 文字列・フォント固定）を一度だけ計測して保存 */
 function _initBetLabelWidth() {
@@ -5261,7 +5263,19 @@ function _updateAlways() {
      audioCtxなし（MUTE無音起動）は rate=1 でフォールバック。 */
   if (coinsDisp !== coins && phase !== 'startup') {
     const _cd   = coins - coinsDisp;
-    const _rate = audioCtx ? _getBgmRateJS() : 1;
+    /* 決着後（ゲームオーバー／キング戦の敗北）はテープが止まってレートが0.001まで
+       落ちるため、表示が実値へ追いつけずゆっくり減り続ける。実機指摘「こんがり失敗の
+       後、グレースケールになった裏で所持ギヨウザ数がゆっくり減り続ける」の正体。
+       没収の大部分は stopBGMTape の0.7秒のランプ中に消化される（所持15000＝没収7500で
+       5931枚）が、残り（同1569枚）が敗北シーケンスの間ずっと這うことになる。
+       レートに連動させるのはプレイ中のスロー演出（スローハンド等）を世界の時間の
+       流れに合わせるためのものなので、決着後は下限を与えて必ず収束させる
+       （下限0.5なら500枚でも約1.4秒）。プレイ中・tapestartの加速中は従来どおり
+       生のレートを使うので、「tapestart中はコイン表示が0で止まる」等の既存の
+       見え方は変わらない */
+    const _rateRaw = audioCtx ? _getBgmRateJS() : 1;
+    const _rate = (isGameOver || KING_DEFEAT_PHASES.has(phase))
+      ? Math.max(_rateRaw, COIN_DISP_MIN_RATE) : _rateRaw;
     /* 最低ステップ3/フレーム: 指数減衰の尻尾（1コイン刻みの長期化）を打ち切る。
        BET100 の減算が約60→24フレームに短縮され、終盤に毎フレーム続いていた
        カウント文字列生成＋テキストOC再描画の負荷期間が半減する */
@@ -6966,6 +6980,10 @@ const BOSS_BATTLE_PHASES = new Set(
   ['boss', 'bossShatter', 'bossVictory', 'bossVictoryOutro', 'trueEnding',
    'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
 function _isBossBattlePhase() { return BOSS_BATTLE_PHASES.has(phase); }
+/* 敗北が確定してテープが止まっている（stopBGMTapeでレートが0.001まで落ちている）
+   フェーズ。コイン表示の追従に下限レートを与えるために使う（update内のcoinsDisp参照）。
+   bossShatterは含めない: 没収（_startBossDefeat）はその後なので表示は動いていない */
+const KING_DEFEAT_PHASES = new Set(['bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
 
 /* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
    boss/bossShatter/bossDefeat系はstopBGMTapeでソースを極低速のまま生かして
