@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.84';
+const VERSION = 'v6.85';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2714,38 +2714,65 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    リバーブノードはこのプロジェクトに無いため、時間差ノイズの重ね打ちで
    「残響がある感じ」を近似する（_playDoraHitの倍音重ねと同じ加算合成の
    考え方を、時間軸方向のエコーに応用したもの） */
-/* TR-808のカウベル。再生シーケンス5音目（フレーズ末尾）のアクセント音。
-   実機要望「実質的な5射目の音をちょっと特徴的なものに。音色も変えたい。TRシリーズを
-   使ったビートシーケンスとしてかっこよくなるアクセント音を」。
-   スネアを強く鳴らすだけでは4発の連なりと地続きで、終止として立たなかった。
+/* 5音目（フレーズ末尾）の爆発音。実機要望「巨大なエネルギーを持つ何かを撃った衝撃と
+   その余韻が続くような音。バジューンみたいな感じ」→ さらに具体化して
+   「映画スターウォーズで X-Wing が攻撃を4発撃って、1拍おいて爆発音、という感じの5拍目」。
 
-   構造は実機の808と同じで、矩形波2本を完全5度でぶつけ、バンドパスで整えて短く減衰させる。
-   808の実機は540Hz/800Hz（比1.481）だが、SEの音程はCメジャーペンタトニックに揃える規約が
-   あるので C5(523.25) + G5(783.99) を使う。比1.498でほぼ同じ響きになり、かつBGMの調
-   （A＝Aマイナーペンタ＝同じ音集合）と衝突しない。
-   減衰が短いので、アクセントが次のトライの開始と同じ瞬間に来ても次の打ち込みを濁さない
-   （クラッシュシンバルを選ばなかった理由）。 */
-function _playKingCowbell(ctx, t, dest, vol = 1) {
-  const d  = _seDest(ctx, dest);
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 2640; // 808は2.6kHz付近が鳴りの芯
-  bp.Q.value = 1.1;
-  const g = ctx.createGain();
-  bp.connect(g); g.connect(d);
-  const stopAt = t + 0.34;
-  g.gain.setValueAtTime(KING_COWBELL_VOL * vol, t);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
-  const oscs = [];
-  for (const f of [noteHz('C', 5), noteHz('G', 5)]) {
-    const o = ctx.createOscillator();
-    o.type = 'square';
-    o.frequency.setValueAtTime(f, t);
-    o.connect(bp);
-    o.start(t); o.stop(stopAt);
-    oscs.push(o);
+   ここに至るまでに2度外している:
+     1. TR-808のカウベル … 短く硬い終止音で、余韻を持つ発射音ではなかった
+     2. 共鳴掃引（ノコギリ波＋Q=7のローパス掃引）… 音程感が強く、レーザー側の音になった
+   爆発はノイズ主体で、音程を持たず、高域から先に死んでいく。そこを作り分ける。
+
+   構成:
+     1. 割れ      … ごく短い高域ノイズ（着弾の瞬間の破裂）
+     2. 本体      … ノイズをローパスで 9kHz→170Hz へ掃引しながら長く減衰。
+                     高域が先に消えることで「遠くの大きな爆発」に聞こえる。共振(Q)は
+                     効かせない。効かせると音程が付いてレーザー寄りに戻る
+     3. 押し出し  … サイン波を A2→A1 へ落とす低音。腹に来る重さを足す
+   音程を持つのは3だけで、規約どおり noteHz（A＝BGMの調）を使う。
+
+   ノイズ源は _noiseBuffer を loop=true で使い回す（事前生成は約0.45秒ぶんしか無く、
+   爆発の尾はそれより長いため。毎回生成すると1秒ぶんの乱数ループが走る）。 */
+function _playKingBlast(ctx, t, dest, vol = 1) {
+  const d = _seDest(ctx, dest);
+  const v = vol;
+  const dur = 1.15;
+
+  /* 1. 割れ */
+  playNoise(ctx, t, 0.045, 0.25 * v, 4200, d);
+
+  /* 2. 本体: ローパスを落としながら長く引く */
+  let buf;
+  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
+    buf = _noiseBuffer;
+  } else {
+    const len = Math.ceil(ctx.sampleRate * 0.5);
+    buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const a = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) a[i] = Math.random() * 2 - 1;
   }
-  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, ...oscs, bp, g);
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(9000, t);
+  lp.frequency.exponentialRampToValueAtTime(170, t + 0.90);
+  lp.Q.value = 0.6; // 共振させない（付けると音程が出てレーザーになる）
+  const g = ctx.createGain();
+  /* 3段の包絡。単純な指数減衰だと0.4秒で聴感上消えてしまい「1拍おいての爆発」の
+     重みが出なかったため、中間点を置いて尾を持ち上げている */
+  g.gain.setValueAtTime(0.78 * v, t);
+  g.gain.exponentialRampToValueAtTime(0.34 * v, t + 0.14);
+  g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.45);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(lp); lp.connect(g); g.connect(d);
+  const stopAt = t + dur + 0.05;
+  src.start(t); src.stop(stopAt);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, lp, g);
+
+  /* 3. 押し出し */
+  _playSlideOsc(ctx, d, t, 'sine', noteHz('A', 2), noteHz('A', 1), 0.22,
+    [[0, 0.52 * v, 'set'], [0.10, 0.32 * v], [0.95, 0.0001]], 1.05);
 }
 
 /* accent=true は再生シーケンス5音目（フレーズ末尾）用。TRシリーズのACCENTに倣い、
@@ -7836,7 +7863,7 @@ const KING_BEAM_CHOKE_REF  = 0.42;
    ごく小さくスネアを鳴らすとか」）。 */
 /* JUSTの上限は1.15。1.25まで上げるとサンプルピークが1.47となり、5音目のアクセント
    （1.38）を超えて常時リミッターに当たる。アクセントを最大に保つ意味でもここで頭打ち */
-/* 5音目のアクセントの配合。カウベルが音色の主張、スネアは着弾の胴体。
+/* 5音目のアクセントの配合。_playKingBlast が音色の主張、スネアは着弾の打点。
    実測で決めた（通常のJUST着弾を0dB基準、括弧内はカウベル単体の相対量）:
      スネア0.85 + カウベル0.34 → +0.3dB（-11.1）… 終止として弱く、音色も変わって聞こえない
      スネア1.00 + カウベル0.34 → +1.7dB（-11.1）… 音量は足りるがカウベルが埋もれる
@@ -7845,8 +7872,8 @@ const KING_BEAM_CHOKE_REF  = 0.42;
    狙いは「アクセントがフレーズ中で常に一番強い」かつ「カウベルが音色として聴こえる」。
    最初 スネア0.62 で組んだところ合成が通常の着弾より2.4dB小さくなり、終止が一番強いと
    いう関係が壊れていた（スネア側にはaccent=trueの1.35倍が掛かる前提を二重に見ていた） */
-const KING_ACCENT_SNARE_VOL = 1.0;
-const KING_COWBELL_VOL      = 0.6;
+const KING_ACCENT_SNARE_VOL = 0.42;
+const KING_ACCENT_BLAST_VOL = 1.0;
 const KING_BEAM_VOL_JUST   = 1.15;
 const KING_BEAM_VOL_GOOD   = 0.85;
 const KING_BEAM_QUIET_VOL  = 0.3;
@@ -8538,11 +8565,10 @@ function _kingSeqScheduleAudio(events) {
       /* dud=焦げ跡ゼロ（ダメージ無し）／forced=自動発射（叩かれていない）。
          どちらも締めのアクセントは鳴らさず、弱い不発音だけを置く */
       if (e.dud || e.forced) { playSE('kingBeamDud', e.at); continue; }
-      /* 5音目はカウベル（TR-808）を主役にして、スネアを下に薄く敷く。
-         カウベルだけだと打点が軽く、キング本体のフラッシュ・のけぞりと釣り合わないため、
-         着弾の胴体としてスネアを残す。音色の主張はカウベルが担う */
+      /* 5音目は「撃った衝撃＋余韻」（_playKingBlast）を主役にし、スネアを下に敷いて
+         着弾の打点を保つ */
       _playKingBeamHit(audioCtx, e.at, null, true, 1, KING_ACCENT_SNARE_VOL);
-      _playKingCowbell(audioCtx, e.at, null);
+      _playKingBlast(audioCtx, e.at, null, KING_ACCENT_BLAST_VOL);
       continue;
     }
     /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める。
