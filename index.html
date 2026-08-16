@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.65';
+const VERSION = 'v6.66';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2625,6 +2625,26 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    残響エコー2層は単発の奥行きのために入れたものだが、連続で鳴らすと前の音の残響と
    次の音の頭が重なるだけで濁りの主因になるため、余裕があるとき（decay>=1）と
    アクセントだけに残す。 */
+/* キングギヨウザ戦の打ち込み音（ハイハット）。
+   open=false: 的をマークした時（クローズ）。ユーザー要望「マークをセットする時の
+     効果音を、クローズハイハットのようにしたい」。ジングルのカウントインハイハットと
+     同じ高域ノイズバースト方式（_jingleDef参照）でタイトな一撃。
+   open=true: 発射（5打目）。実機評価「発射操作をした時のフィードバックがない」への
+     対応で追加した。従来は4回のマークと同じ音だったため、音では『撃った』のか
+     『5回目のマーク』なのか区別が付かなかった。TRシリーズ定番のクローズ／オープンの
+     対比にすると、別音色を持ち込まずに一聴で区別が付く（「打ち込みはハイハット」と
+     いう方針の枠内に収まる）。フレーズの区切りを開きで示すのはドラムの常套句でもあり、
+     減衰が長いぶん再生までの空白自体も埋まる。
+     立ち上がりはクローズと同じ鋭さにして、尾だけを開かせる2層構成。
+   dest を引数に取るのは OfflineAudioContext でレンダして検証できるようにするため
+   （_playKingBeamHit と同じ方針。playSE 経由では audioCtx 固定になり測れない）。 */
+function _playKingHat(ctx, t, dest, open = false) {
+  const d = _seDest(ctx, dest);
+  if (!open) { playNoise(ctx, t, 0.045, 0.28, 8500, d); return; }
+  playNoise(ctx, t, 0.045, 0.26, 9000, d); // 立ち上がり（クローズと同じ質感）
+  playNoise(ctx, t, 0.28,  0.15, 7000, d); // 開いた尾
+}
+
 function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1) {
   const d = _seDest(ctx, dest);
   const v = accent ? 1.35 : 1;   // ACCENT = レベル
@@ -3533,14 +3553,8 @@ function playSE(name, atTime) {
       playOsc(ctx, 'triangle', _SHOOT_ARPEGIO[Math.min(curIdx, 3)], t, 0.03, 0.15, 0.06);
       break;
     }
-    case 'kingShoot': {
-      /* キングギヨウザ戦、的をマークした時の音（クローズハイハット風）。
-         ユーザー要望: 「マークをセットする時の効果音を、クローズハイハットの
-         ようにしたい」。ジングルのカウントインハイハットと同じ高域ノイズ
-         バースト方式（_jingleDef参照）でタイトな一撃にする */
-      playNoise(ctx, t, 0.045, 0.28, 8500);
-      break;
-    }
+    case 'kingShoot': { _playKingHat(ctx, t, null, false); break; } // 的をマーク（クローズ）
+    case 'kingFire':  { _playKingHat(ctx, t, null, true);  break; } // 発射（オープン）
     case 'kingBeam': {
       /* キングギヨウザ戦、ビーム着弾音（スネアドラム風、_playKingBeamHit参照）。
          リズムシーケンサの再生（_kingSeqStep）では打ち込んだスロットの時刻を
@@ -4823,6 +4837,34 @@ function _drawKingReelCharge(px, py, idx) {
   ctx.restore();
 }
 
+/* 発射の瞬間の放電（KING_FIRE_FLASH_FRAMES 参照）。帯電のジグザグを外向きへ
+   飛ばして消す＝溜めていた電気を撃ち出した、という見え方にする。
+   帯電（_drawKingReelCharge）と同じ疑似乱数の作りで、こちらは経過フレームで
+   長さを伸ばしながら薄くしていく */
+function _drawKingReelDischarge(px, py, idx) {
+  const k = _kingFireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
+  let seed = idx * 13 + 7;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.strokeStyle = Y;
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = k * 0.9;
+  ctx.lineWidth = 1 + k * 1.8;
+  const spread = (1 - k) * 26; // 外へ広がっていく
+  for (let b = 0; b < 6; b++) {
+    const ang = (b / 6) * Math.PI * 2 + rnd() * 0.5;
+    const r0 = 3 + spread, r1 = r0 + 5 + rnd() * 7;
+    const mid = ang + (rnd() - 0.5) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0);
+    ctx.lineTo(Math.cos(mid) * (r0 + r1) / 2, Math.sin(mid) * (r0 + r1) / 2);
+    ctx.lineTo(Math.cos(ang) * r1, Math.sin(ang) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawKingReel(w, active, idx) {
   /* 被弾揺れは的まるごと（絵柄・リング・三角ポインタ・結果文字）に効かせたいので、
      関数全体を包む外側のsave/translateで掛ける（_kingReelShakeOffset参照） */
@@ -4880,6 +4922,8 @@ function drawKingReel(w, active, idx) {
      が必要なことを視覚的に伝える。発射（_kingFireAttack）でattemptFiredが
      立つと消える */
   if (w.locked && _king && !_king.attemptFired) _drawKingReelCharge(px, py, idx);
+  /* 撃った直後は帯電の代わりに放電を出す（消えるだけにしない。_drawKingReelDischarge参照） */
+  else if (w.locked && _kingFireFlash > 0) _drawKingReelDischarge(px, py, idx);
   /* 当たった文字は的の下に表示（ロック前は何も出さない） */
   if (w.result) {
     ctx.save();
@@ -6904,6 +6948,7 @@ function _cleanupKingBattleState() {
   _bossBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
   _kingImpactShake = 0;          // 着弾の画面揺れ残量（同上）
+  _kingFireFlash = 0;            // 発射の放電残量（同上）
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
@@ -7461,7 +7506,8 @@ let _kingCrackKinLastMs = -Infinity;
    小節には固定せず量子化グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
 
-   打ち込み: 5タップ（4マーク＋発射）はすべてハイハット(kingShoot)で生・即時。
+   打ち込み: 5タップは生・即時。マーク4回はクローズハイハット(kingShoot)、発射は
+     オープンハイハット(kingFire)で撃った合図を音でも立てる。
      入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
      ここで守られる。各タップの時刻は _bgmJudgePos → スロットへ量子化して記録。
    再生: 記録した相対オフセットの「長い隙間だけ」を詰めて、スネア(kingBeam)で鳴らす。
@@ -7494,20 +7540,22 @@ const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節
    打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」で
    あってリズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ
    切り詰める。実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分が
-   ある形（例: 隙間 4,56,8,12 → 4,8,8,8）は保たれる。
+   ある形（例: 隙間 2,56,4,6 → 2,4,4,4）は保たれる。
 
-   2拍を選んだ理由:
-   - 1拍だと「1拍待った」と「7拍待った」が両方1拍になり、「速い部分がある」形が消える
-   - 拍の整数倍なので、詰まった隙間は必ず拍の上に乗る。全部詰まったパターンが
-     裏拍へ散らからず素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる
-   - タップ間は最大4つ（4マーク＋発射）なので上限が 2拍×4＝8拍＝2.63秒で
-     割り切れ、比率圧縮を使わずに単一ルールで完結する
+   当初2拍にしていたが、実機評価「入力完了から再生までの間が長く感じる」の分析で
+   1拍へ下げた。序盤は隙間が全部上限に張り付くので、2拍だと1発目と2発目の間が
+   657.9msも空き、1発鳴っただけでは沈黙と区別が付かない＝「再生が始まった」と
+   認識できるまでに 発射→1発目 に加えてもう658msかかっていた（合計で最大1131ms。
+   ユーザーの体感「最大1秒くらい」と一致する）。1拍なら328.9msでパターンが読める。
 
-   これで以前の比率圧縮（打ち込み全体を1小節へ縮める方式）が持っていた
-   「遅く叩くほど密なフィルになる」副作用がルールごと無くなる。 */
-const KING_SEQ_GAP_MAX = 2 * KING_SEQ_DIV;
-/* 再生スパンの上限。5タップ＝隙間4つなので上限は KING_SEQ_GAP_MAX×4＝32スロット
-   ＝8拍＝2.63秒。KING_SEQ_GAP_MAX が効いていれば超えないため通常は発火しない保険
+   終盤の忠実さは損なわれない: 終盤は的が狙いやすく隙間がほぼ1拍未満なのでクランプに
+   掛からず、打ったとおりに鳴る。潰れるのは序盤の「文字が回ってくるのを待っていた
+   時間」だけで、そこは元々リズムの意図ではない。
+   拍の整数倍なので、詰まった隙間は必ず拍の上に乗る（全部詰まったパターンが裏拍へ
+   散らからず素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる）。 */
+const KING_SEQ_GAP_MAX = 1 * KING_SEQ_DIV;
+/* 再生スパンの上限。5タップ＝隙間4つなので上限は KING_SEQ_GAP_MAX×4＝16スロット
+   ＝4拍＝1.32秒。KING_SEQ_GAP_MAX が効いていれば超えないため通常は発火しない保険
    （上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
    超えた場合だけ比率で縮める。 */
 const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
@@ -7532,9 +7580,10 @@ const KING_BEAM_MIN_DECAY  = 0.25;
    上限未満の隙間をそのまま通すので形を壊さないが、全体倍率は打ったものすべてを
    別の音価へ移してしまう。長さの調整は KING_SEQ_GAP_MAX 側で行うこと。 */
 const KING_SEQ_PLAY_SCALE = 1;
-/* 再生開始アンカーの最低リード（秒）。この先の拍境界から再生を始める。
-   ビーム前倒し（KING_SEQ_BEAM_LEAD）ぶんの余裕を必ず含む値にすること */
-const KING_SEQ_MIN_LEAD = 0.15;
+/* 再生開始アンカーの最低リード（秒）。この先の16分スロットから再生を始める。
+   ビーム前倒し（KING_SEQ_BEAM_LEAD＝50ms）に1フレーム（16.7ms）を足した約70msが
+   下限なので、0.09は安全側の値。0.15から短縮した（発射から再生までの空白を詰める）。 */
+const KING_SEQ_MIN_LEAD = 0.09;
 /* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
    スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
    16分=82msに対して約61%＝確実に聴こえるズレになるため、着弾がスロットに
@@ -7546,6 +7595,11 @@ const KING_SEQ_BEAM_LEAD = KING_LASER_TRAVEL_FRAMES / 60;
 const KING_ACCENT_FLASH_FRAMES  = 10;  // 全身フラッシュ＋焦げ跡の発光
 const KING_ACCENT_RECOIL_FRAMES = 14;  // のけぞり
 const KING_ACCENT_RECOIL_PX     = 10;
+/* 発射（5打目）の放電。実機評価「発射操作をした時のフィードバックがない」への対応。
+   従来は attemptFired が立って帯電演出が「消える」だけで、増えるものが何も無かった
+   ため変化として気づきにくかった。撃った瞬間に4つの三角から放電が弾けるようにする */
+const KING_FIRE_FLASH_FRAMES = 12;
+let _kingFireFlash = 0;
 let _kingAccentFlash  = 0;
 let _kingAccentRecoil = 0;
 let _kingAccentMarks  = []; // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
@@ -7960,9 +8014,11 @@ function _kingFireAttack(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || !_king.awaitingFire) return;
   _king.awaitingFire = false;
   _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
-  /* 発射タップも打ち込み中はハイハット。スネアは再生側（_kingBuildSequence）で
-     鳴らす＝「打ち込みはハイハット、再生は特定の音色」という設計 */
-  if (!forced) playSE('kingShoot');
+  /* 発射タップも打ち込み中はハイハット。ただしマーク（クローズ）と区別が付くよう
+     オープンハイハットにする（kingFire。撃った合図が音で分かるようにするため）。
+     スネアは再生側（_kingBuildSequence）で鳴らす＝「打ち込みはハイハット、
+     再生は特定の音色」という設計は維持 */
+  if (!forced) { playSE('kingFire'); _kingFireFlash = KING_FIRE_FLASH_FRAMES; }
   const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
   if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
@@ -8065,9 +8121,15 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   if (nowPos === null || accentSlot === null) return false;
   const rec = _king.rec.filter(r => r.slot !== null);
   if (rec.length === 0) return false;
-  /* 再生開始アンカー: 最低リードを確保した先の拍境界（_kingSeqBeatUp）。
-     拍の途中から始めるとバッテリーの目盛りが裏で刻まれて気持ち悪くなる */
-  const anchor = _kingSeqBeatUp(Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
+  /* 再生開始アンカー: 最低リードを確保した先の「16分」スロット。
+     以前はここからさらに拍へ切り上げていたが、拍は329ms間隔なので最大1拍まるごと
+     待たされ、発射タップの位置が20ms違うだけで待ちが164ms→473msと跳ねていた
+     （実機評価「入力完了から再生までの間が長く感じる」の主因）。
+     切り上げをやめても、アンカーは整数スロット・オフセットも整数なので全打点は
+     絶対16分グリッドの上に残る＝量子化は保たれる。変わるのはパターン先頭が拍の上か
+     裏かだけ。拍へ揃える意味は、発射タップを5打目に戻した時点で
+     （アクセント＝次トライ開始がもともと拍から外れうるため）既に失われていた */
+  const anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
   /* 隙間クランプ（KING_SEQ_GAP_MAX の定義部参照）。5タップ（4マーク＋発射）の
      間の隙間それぞれに上限を掛け、超えたぶんを切り詰めた新しいオフセットを作る。
      短い隙間＝実際に叩いている部分はそのまま残り、長い待ち時間だけが詰まる。
@@ -8390,6 +8452,7 @@ function _updateKingCommonFx() {
   }
   /* 5音目アクセントの全身リアクション残量（KING_ACCENT_*の定義部参照）。
      映像の進行に紐づく演出なのでフレームカウンタでよい */
+  if (_kingFireFlash    > 0) _kingFireFlash--;
   if (_kingAccentFlash  > 0) _kingAccentFlash--;
   if (_kingAccentRecoil > 0) _kingAccentRecoil--;
   _updateKingCharFlights();
