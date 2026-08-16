@@ -372,6 +372,17 @@ function drawPerf() {
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠 */
     `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(1)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
+    /* 割り込み（他アプリが音を鳴らす）からの復帰を切り分けるための行。
+       re   = AudioContextを作り直した回数。0のまま音が出ないなら割り込みを検知できていない
+       sr   = 現在／最初のsampleRate。変わっていれば復帰時にデバイスが切り替わっている
+       bgm  = 鳴らすべきバッファの有無（n=通常, b0..=ボスの段階）。× なら _doResumeBGM が
+              黙って return する条件に当たっており、これが「復帰後に音が鳴らない」の候補
+       src  = bgmSource の有無。isBoss = 最後に作ったソースがボス用だったか */
+    `re ${_audioRecreateCount} sr ${audioCtx ? (audioCtx.sampleRate/1000).toFixed(1) : '-'}k` +
+      `/${_audioSampleRateAtFirst ? (_audioSampleRateAtFirst/1000).toFixed(1) : '-'}k` +
+      ` bgm n${bgmBuffer ? 'o' : 'x'}` +
+      (bossBgmBuffers ? ' b' + bossBgmBuffers.map(b => b ? 'o' : 'x').join('') : ' b-') +
+      ` cur${_currentBgmBuffer() ? 'o' : 'x'} src${bgmSource ? 'o' : 'x'} isBoss${_bgmIsBoss ? 1 : 0}`,
   ];
   /* 出力遅延の内訳。Bluetooth（AirPods等）で音が遅れて感じるときはここを見る。
      hw = 補正に使っている値。base/out はブラウザの申告値、
@@ -532,7 +543,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.79';
+const VERSION = 'v6.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1505,6 +1516,10 @@ let bossBgmBuffer = null;   // レンダリング済みボス戦BGM（暗黒版�
    出ない（詳細は_updateBossBgmTierの定義部コメント参照）。 */
 const BGM_TIER_COUNT = 4;
 let bossBgmBuffers = null;  // [tier0(最も凶暴)..tierN-1(最もマイルド)]
+/* 割り込み復帰の診断用（?perf 表示）。実機でしか再現しない「復帰後に音が鳴らない」を
+   切り分けるため、AudioContextを何回作り直したかと最初のsampleRateを覚えておく */
+let _audioRecreateCount = 0;
+let _audioSampleRateAtFirst = null;
 let _bossBgmTier = 0;        // 現在再生中バッファの段階
 let _bossBgmPendingTier = null; // 次のループ境界間近になったら切り替える予約段階
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
@@ -1996,6 +2011,18 @@ function _recreateAudioGraph() {
   masterGain.gain.value = audioMuted ? 0 : 1;
   masterGain.connect(_createMasterLimiter(audioCtx));
   _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
+  /* sampleRate依存の初期化は getAudioCtx 側にしか無く、再作成では抜けていた。
+     AirPodsの接続変化や他アプリのセッション変更で新しいContextのsampleRateが変わると、
+     ループ長の量子化（拍グリッドの基準）とビート表示の先読みが旧値のまま残る。
+     ノイズバッファは playNoise 側が sampleRate 不一致を検出してフォールバックするので
+     ここでは作り直さない。BGM/ボスのバッファはAudioBufferなのでContextに束縛されず、
+     再作成をまたいでそのまま使える（sampleRateが違えば再生時にリサンプルされる）。
+     _audioRecreateCount / _audioSampleRateAtFirst は ?perf の診断表示用 */
+  if (_audioSampleRateAtFirst === null) _audioSampleRateAtFirst = audioCtx.sampleRate;
+  _audioRecreateCount++;
+  _updateBgmQuantizedLoopDur();
+  _updateBeatDisplayAdvance();
+  setTimeout(_updateBeatDisplayAdvance, 500);
   _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
   /* AVAudioSessionの昇格も作り直しで失われうるので再武装する（_elevateAudioSession参照）。
      消音モードではこの昇格が唯一の発音経路なので、取りこぼすと無音になる。
@@ -3301,12 +3328,30 @@ function applyMuteGain() {
   _rampGain(masterGain.gain, (audioMuted || isPaused) ? 0 : 1);
 }
 
+/* いま鳴らすべきBGMバッファを返す（無ければ null）。_bgmIsBoss（最後に作った
+   ソースがボス用だったか）と地鳴りの段階から選ぶ。startBGM とポーズ解除の両方が
+   これを使い、選び方が二箇所で食い違わないようにする。
+
+   実機報告「他アプリで音を鳴らした後にフォアグラウンドへ戻ると、ボス戦なのに通常
+   ゲームのBGMになる」の原因がこれだった。startBGM は _createBGMSource のデフォルト
+   引数（＝通常バッファ）で起動していたため、ボス戦中に呼ばれると通常BGMが鳴り出す。
+   さらに _createBGMSource は _bgmIsBoss = (buffer !== bgmBuffer) で状態を導出するので、
+   その瞬間に _bgmIsBoss が false へ落ち、以降ポーズ解除しても通常BGMを選び続けて
+   二度とボスBGMへ戻れなくなっていた。 */
+function _currentBgmBuffer() {
+  return _bgmIsBoss ? ((bossBgmBuffers && bossBgmBuffers[_bossBgmTier]) || bossBgmBuffer)
+                    : bgmBuffer;
+}
+
 /* BGMソース起動（ミュート状態を問わず起動。gain が音量を制御する） */
 function startBGM() {
   if (!audioCtx) return;
-  if (!bgmBuffer) {
-    /* バッファがまだレンダリング中 → 完了後に自動起動するフラグを立てる */
-    bgmPendingStart = true;
+  const buf = _currentBgmBuffer();
+  if (!buf) {
+    /* バッファがまだレンダリング中 → 完了後に自動起動するフラグを立てる。
+       立てるのは通常バッファ待ちのときだけ: ボス用が未完のときに立てると、
+       通常バッファのレンダ完了をトリガーに通常BGMが鳴り出してしまう */
+    if (!_bgmIsBoss) bgmPendingStart = true;
     return;
   }
   bgmPendingStart = false;
@@ -3314,7 +3359,7 @@ function startBGM() {
   /* bgmGain は常に1（ミュートは masterGain が担う） */
   bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
   bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
-  const src = _createBGMSource(1.0);
+  const src = _createBGMSource(1.0, buf);
   if (src) { src.start(); bgmPhaseRef = audioCtx.currentTime; _bgmAccumReset(); }
   grayRateTarget = 1.0; grayRateCur = 1.0; // 通常BGM開始時はグレースケール即時解除
 }
@@ -3542,8 +3587,15 @@ function toggleMute() {
      しか除外していなかったため、タイトル画面から真エンディングを再生中に
      MUTE/解除すると「bgmSourceが無い」がそのまま真になり通常BGMが新規に
      鳴り出し、テーマ曲と二重に聞こえていた */
+  /* キング戦系フェーズも除外する。あちらのBGMはテンポ（BOSS_BGM_RATE）・地鳴りの
+     段階差し替え・テープ停止まで戦闘側の経路が一括で持っており、ミュート操作から
+     素の startBGM（レート1.0・bgmPhaseRefリセット・グレースケール即時解除）を
+     割り込ませてよい状態が無い。実機報告「他アプリで音を鳴らした後に戻ると
+     ボス戦なのに通常BGMになる」は、割り込み復帰でbgmSourceがnullの状態でここが
+     通り、通常バッファでソースが作られて _bgmIsBoss まで false へ落ちていたのが原因。
+     復帰の入口はPAUSE解除（_doResumeBGM）に一本化する */
   if (!audioMuted && phase !== 'startup' && phase !== 'bossOmen' && !NO_BGM_SOURCE_PHASES.has(phase) &&
-      audioCtx && !bgmSource && !jingleScheduler) {
+      !_isBossBattlePhase() && audioCtx && !bgmSource && !jingleScheduler) {
     startBGM(); // 予告中は除外（startBGMはグレースケールを即時解除するため）
   }
 }
@@ -12658,9 +12710,7 @@ function togglePause() {
            使われてしまい、ボス戦中にポーズ→再開すると音色が通常BGMに戻ってしまう。
            地鳴りの現在の段階（_bossBgmTier）も維持し、ポーズ→再開で
            マイルド化が振り出しに戻らないようにする（水平展開） */
-        const _resumeBgmBuf = _bgmIsBoss
-          ? ((bossBgmBuffers && bossBgmBuffers[_bossBgmTier]) || bossBgmBuffer)
-          : bgmBuffer;
+        const _resumeBgmBuf = _currentBgmBuffer();
         if (!_resumeBgmBuf) { return; }
         /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
         setTimeout(() => {
