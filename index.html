@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.76';
+const VERSION = 'v6.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4826,9 +4826,9 @@ function _drawKingReelCharge(px, py, idx) {
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
   /* 大きさは的の半径基準にする。実機評価「スパークエフェクトが小さすぎてよく見えない。
      もっと派手に（大きめに）帯電している感じを表現できますか」で、固定6〜12pxから
-     的の半径と同程度（0.55〜1.15倍）へ引き上げた。縦横でKING_WRが変わるので比で持つ。
-     三角ポインタは的の縁から少し外（KING_WR+12）にあるので、この長さだと稲妻が的の
-     上半分を包むように広がって見える */
+     的の半径基準へ引き上げた。縦横でKING_WRが変わるので比で持つ。
+     一度0.55〜1.15倍まで広げたが「長さを7割くらいに」という追加評価で0.39〜0.81倍へ。
+     本数・線幅・グローはそのままなので密度と輝きは保ったまま、広がりだけを抑えている */
   const R = KING_WR;
   const flick = 0.55 + rnd() * 0.45; // 明滅
   ctx.save();
@@ -4843,7 +4843,7 @@ function _drawKingReelCharge(px, py, idx) {
   const N = 7;
   for (let b = 0; b < N; b++) {
     const baseAng = (b / N) * Math.PI * 2 + rnd() * 0.9;
-    const len = R * (0.55 + rnd() * 0.60) * vigor;
+    const len = R * (0.39 + rnd() * 0.42) * vigor;
     ctx.moveTo(0, 0);
     for (let s = 1; s <= 3; s++) {
       const t = s / 3;
