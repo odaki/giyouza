@@ -383,6 +383,12 @@ function drawPerf() {
       ` bgm n${bgmBuffer ? 'o' : 'x'}` +
       (bossBgmBuffers ? ' b' + bossBgmBuffers.map(b => b ? 'o' : 'x').join('') : ' b-') +
       ` cur${_currentBgmBuffer() ? 'o' : 'x'} src${bgmSource ? 'o' : 'x'} isBoss${_bgmIsBoss ? 1 : 0}`,
+    /* stall = ctx時計が止まったまま経過した秒数（現在／セッション最大）。
+       「ctx running なのに stall が伸びる」なら、割り込みがstateに現れておらず
+       再作成の経路（toggleMute / PAUSE解除の state !== 'running' 分岐）が
+       一度も走っていない＝無音のまま戻らない状態 */
+    `stall ${_ctxStallSec.toFixed(1)}s / max ${_ctxStallMaxSec.toFixed(1)}s` +
+      (_ctxStallSec > 0.25 ? '  ← ctx時計が停止中' : ''),
   ];
   /* 出力遅延の内訳。Bluetooth（AirPods等）で音が遅れて感じるときはここを見る。
      hw = 補正に使っている値。base/out はブラウザの申告値、
@@ -543,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.80';
+const VERSION = 'v6.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1520,6 +1526,37 @@ let bossBgmBuffers = null;  // [tier0(最も凶暴)..tierN-1(最もマイルド)
    切り分けるため、AudioContextを何回作り直したかと最初のsampleRateを覚えておく */
 let _audioRecreateCount = 0;
 let _audioSampleRateAtFirst = null;
+/* AudioContext が「実際に動いているか」を state に頼らず実測する（診断専用・挙動は変えない）。
+
+   実機報告（iPhone 16 + AirPods Pro 3）: 他アプリに音を奪われた後、MUTEを何度往復しても
+   無音のままだった。toggleMute も PAUSE解除も Context を作り直すのは
+   `audioCtx.state !== 'running'` のときだけなので、state が running のまま音だけ止まって
+   いると復帰の経路が一度も走らない。つまり README ルール4 の前提（割り込みは
+   interrupted として現れる）が最近のiOSでは成り立っていない可能性がある。
+
+   割り込まれた Context は currentTime が進まなくなるので、壁時計と突き合わせれば
+   state に依存せず検出できる。まずは測って ?perf に出すだけにする（このプロジェクトは
+   音声まわりで推測ベースの修正を入れて撤去した履歴が複数あるため、実機で
+   「ctx running なのに stall」を確認してから直す）。 */
+let _ctxStallSec      = 0;    // ctx時計が止まったまま経過した秒数
+let _ctxStallMaxSec   = 0;    // セッション中の最大値（復帰後に振り返れるよう保持）
+let _ctxStallLastCtx  = null;
+let _ctxStallLastWall = 0;
+function _updateCtxStall() {
+  if (!audioCtx) { _ctxStallSec = 0; _ctxStallLastCtx = null; return; }
+  const wall = performance.now() / 1000;
+  const ct   = audioCtx.currentTime;
+  if (_ctxStallLastCtx === null) { _ctxStallLastCtx = ct; _ctxStallLastWall = wall; return; }
+  const dWall = wall - _ctxStallLastWall;
+  const dCtx  = ct - _ctxStallLastCtx;
+  _ctxStallLastCtx = ct; _ctxStallLastWall = wall;
+  /* JSごと止まっていた区間（バックグラウンド等）は判定しない。壁時計もctx時計も
+     まとめて飛ぶので「ctxだけ止まっている」の証拠にならない */
+  if (dWall <= 0 || dWall > 1) { _ctxStallSec = 0; return; }
+  if (dCtx < dWall * 0.5) _ctxStallSec += dWall;   // 壁時計だけ進んでいる＝止まっている
+  else                    _ctxStallSec = 0;
+  if (_ctxStallSec > _ctxStallMaxSec) _ctxStallMaxSec = _ctxStallSec;
+}
 let _bossBgmTier = 0;        // 現在再生中バッファの段階
 let _bossBgmPendingTier = null; // 次のループ境界間近になったら切り替える予約段階
 let bgmSource = null;       // AudioBufferSourceNode（ループ再生中）
@@ -12593,6 +12630,7 @@ function _gameLoop(t) {
   if (_rafHzT === 0) _rafHzT = t;
   else if (t - _rafHzT >= 1000) { _rafHz = _rafHzCount * 1000 / (t - _rafHzT); _rafHzCount = 0; _rafHzT = t; }
   if (PERF_ON) _perfCountFrame(t);
+  _updateCtxStall(); // AudioContextが実際に動いているかの実測（_updateCtxStall参照）
   /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
      dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
   const dt = _rafLastT > 0 ? Math.min(t - _rafLastT, 50) : 0;
