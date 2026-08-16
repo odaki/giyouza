@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.67';
+const VERSION = 'v6.68';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2640,9 +2640,13 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    （_playKingBeamHit と同じ方針。playSE 経由では audioCtx 固定になり測れない）。 */
 function _playKingHat(ctx, t, dest, open = false) {
   const d = _seDest(ctx, dest);
-  if (!open) { playNoise(ctx, t, 0.045, 0.28, 8500, d); return; }
-  playNoise(ctx, t, 0.045, 0.26, 9000, d); // 立ち上がり（クローズと同じ質感）
-  playNoise(ctx, t, 0.28,  0.15, 7000, d); // 開いた尾
+  if (!open) { playNoise(ctx, t, 0.045, KING_HAT_VOL, 8500, d); return; }
+  /* 発射はTRのACCENTと同じ考え方でレベルだけ上乗せする（音色は変えない）。
+     以前は立ち上がりがクローズ(0.28)より小さい0.26で、開いているぶん総量では
+     勝っていたものの打点としてはむしろ弱かった */
+  const v = KING_HAT_VOL * KING_HAT_ACCENT;
+  playNoise(ctx, t, 0.045, v,        9000, d); // 立ち上がり（クローズと同じ質感）
+  playNoise(ctx, t, 0.28,  v * 0.55, 7000, d); // 開いた尾
 }
 
 function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1) {
@@ -7559,6 +7563,18 @@ const KING_SEQ_GAP_MAX = 1 * KING_SEQ_DIV;
    （上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
    超えた場合だけ比率で縮める。 */
 const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
+/* 打ち込みハイハットの音量（_playKingHat）。実機評価「もっと大きく」で 0.28→0.44。
+   KING_HAT_ACCENT は発射（オープン）への上乗せで、実機評価「発射の時は少し強めて
+   アクセントをつけてほしい」に対応する。TRのACCENTと同じくレベルだけを動かし、
+   音色（フィルタ・長さ）は変えない。 */
+const KING_HAT_VOL    = 0.44;
+const KING_HAT_ACCENT = 1.3;
+/* 発射タップから再生開始までの間（拍数）。実機評価「BGMの1拍分あけてほしい」。
+   アンカーは (発射位置 + この拍数) に最も近い16分スロットへ丸める。ぴったり1拍に
+   固定するとアンカーがグリッドから外れ、再生パターン全体がBGMに対して位相ずれを
+   起こす（打点は必ず16分の整数倍という不変条件が崩れる）ため、グリッドへ乗せる側を
+   優先する。ずれは最大±41ms（16分の半分）。 */
+const KING_SEQ_PLAY_DELAY_BEATS = 1;
 /* スネアのチョーク（_playKingBeamHit の decay 引数）。
    減衰倍率 = 次の音までの間隔 ÷ KING_BEAM_CHOKE_REF（上限1）。
    この値は「鳴っている実長」ではなく効き具合を決める基準値であることに注意。
@@ -7580,12 +7596,8 @@ const KING_BEAM_MIN_DECAY  = 0.25;
    上限未満の隙間をそのまま通すので形を壊さないが、全体倍率は打ったものすべてを
    別の音価へ移してしまう。長さの調整は KING_SEQ_GAP_MAX 側で行うこと。 */
 const KING_SEQ_PLAY_SCALE = 1;
-/* 再生開始アンカーの最低リード（秒）。この先の16分スロットから再生を始める。
-   ビーム前倒し（KING_SEQ_BEAM_LEAD＝50ms）に1フレーム（16.7ms）を足した約70msが
-   下限。0.15→0.09と詰めたところ実機評価「適度な間が足りなくなった」となったため
-   0.18へ。拍への切り上げをやめた（アンカーは16分単位）ので、待ちは
-   0.18〜0.18+16分＝190〜250msに収まり、以前のような1拍ぶんの跳ね（最大473ms）は
-   起きない。 */
+/* 次トライ開始までの最低リード（秒）。ハズレ後など再生シーケンスが無い経路で
+   使う（再生開始のアンカーは KING_SEQ_PLAY_DELAY_BEATS 側で決まる）。 */
 const KING_SEQ_MIN_LEAD = 0.18;
 /* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
    スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
@@ -8116,15 +8128,12 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   if (nowPos === null || accentPosRaw === null) return false;
   const rec = _king.rec.filter(r => r.pos !== null);
   if (rec.length === 0) return false;
-  /* 再生開始アンカー: 最低リードを確保した先の「16分」スロット。
-     以前はここからさらに拍へ切り上げていたが、拍は329ms間隔なので最大1拍まるごと
-     待たされ、発射タップの位置が20ms違うだけで待ちが164ms→473msと跳ねていた
-     （実機評価「入力完了から再生までの間が長く感じる」の主因）。
-     切り上げをやめても、アンカーは整数スロット・オフセットも整数なので全打点は
-     絶対16分グリッドの上に残る＝量子化は保たれる。変わるのはパターン先頭が拍の上か
-     裏かだけ。拍へ揃える意味は、発射タップを5打目に戻した時点で
-     （アクセント＝次トライ開始がもともと拍から外れうるため）既に失われていた */
-  const anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
+  /* 再生開始アンカー: 発射タップのBGM1拍後（KING_SEQ_PLAY_DELAY_BEATS）に最も近い
+     16分スロット。以前は「拍境界へ切り上げ」だったが、拍は329ms間隔なので発射タップの
+     位置が20ms違うだけで待ちが164ms→473msと跳ねていた。次に「最低リードの先の16分」に
+     したところ103〜164msで今度は間が足りなくなった。1拍固定＋グリッド丸めなら、
+     待ちは常にほぼ1拍で安定し、かつ全打点が絶対16分グリッドの上に残る */
+  const anchor = Math.round((nowPos + BGM_BEAT * KING_SEQ_PLAY_DELAY_BEATS) / KING_SEQ_QUANT);
   /* ── 打ち込んだ「相対的な間隔」から意図したビートシーケンスを読み取る ──
      実機評価「打ち込んだリズムと違うリズムが再生される」「複数の音が同じタイミングに
      集約されすぎる」「ンタタンタタンのようなリズムが上手く再生されない」への対応。
