@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.69';
+const VERSION = 'v6.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7575,6 +7575,22 @@ const KING_HAT_ACCENT = 1.3;
    起こす（打点は必ず16分の整数倍という不変条件が崩れる）ため、グリッドへ乗せる側を
    優先する。ずれは最大±41ms（16分の半分）。 */
 const KING_SEQ_PLAY_DELAY_BEATS = 1;
+/* 打ち込みの当てはめ方（_kingBuildSequence 参照）を決める重み。
+   的の正解文字エリアが広がるほど「狙って置ける」ようになるが、これは段階的に進むので
+   閾値で切り替えず、2つの当てはめ方（形だけ残す／テンポを再現する）を混ぜる比率にする。
+   ユーザーの体感:
+     25%（初期）… 正解が回ってくるのを待つだけ。リズムの意図は乗らない
+     33%        … だんだん意図通りに打ち込めることが増えていく
+     66%        … まずまず意図通り
+     97%        … ほぼ意図通り
+     99%超      … 意図通り
+   これを LO=0.33 → 0、HI=0.97 → 1 の線形で近似する（66%で0.52＝「まずまず」に相当）。
+   KING_SEQ_SPREAD_LIMIT: 配分が育っていなくても、最長／最短の比がこれ以下ならその
+     トライは実際にリズムとして叩けていたということなので、重みを1（テンポ再現）にする。
+     意図して刻む範囲は16分〜4分＝4倍程度なので、少し余裕を見た値。 */
+const KING_SEQ_AIM_LO       = 0.33;
+const KING_SEQ_AIM_HI       = 0.97;
+const KING_SEQ_SPREAD_LIMIT = 5;
 /* スネアのチョーク（_playKingBeamHit の decay 引数）。
    減衰倍率 = 次の音までの間隔 ÷ KING_BEAM_CHOKE_REF（上限1）。
    この値は「鳴っている実長」ではなく効き具合を決める基準値であることに注意。
@@ -8166,39 +8182,28 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      報酬構造には影響しない。 */
   const taps = rec.map(r => r.pos); taps.push(accentPosRaw);
   const gapMaxPos = KING_SEQ_GAP_MAX * KING_SEQ_QUANT;
-  const d = [];
-  for (let i = 1; i < taps.length; i++) {
-    d.push(Math.min(Math.max(0, taps[i] - taps[i - 1]), gapMaxPos));
-  }
+  const raw = [];
+  for (let i = 1; i < taps.length; i++) raw.push(Math.max(0, taps[i] - taps[i - 1]));
   const off = [0];
-  if (d.length > 0) {
-    /* 単位の決め方は「最小間隔を基準にする」方式から「候補単位の総当り」へ変えた。
-       最小間隔基準は基準そのものが1回のブレや偶然の短い間隔に引きずられるため、
-       他の間隔がまとめて狂う。候補単位（16分の1〜KING_SEQ_GAP_MAX倍）を全部試して
-       全間隔の量子化誤差の合計が最小になるものを選べば、どれか1つに依存しない。
-       意図した比を復元できた割合（6000試行×4条件のシミュレーション）:
-         人的ジッタ10ms  最小間隔基準 81.8% → 総当り 100%
-                   20ms              58.7% →      100%
-                   30ms              41.1% →       94.3%
-                   45ms              21.9% →       63.8%
-       人の打鍵ジッタは20〜30ms程度が現実的な範囲。
-
-       序盤（的が狙いにくく「正解文字が回ってくるのを待つ」状態）と終盤（狙って
-       押せる状態）の差は、この手前の上限クランプが自動的に吸収している。序盤は
-       ほとんどの間隔が上限に張り付いて全部同じ値になる＝均等なパルスになり、
-       終盤は上限に触れないのでそのまま通る。
-       当初は「フィット誤差で意図の有無を推定して、意図が薄いときは均等側へ寄せる」
-       案を検討したが、シミュレーションで否定した: 上限クランプされた間隔はちょうど
-       格子上の値になるため、序盤（意図なし）のほうが誤差が小さく出てしまい
-       （中央値0.000 対 意図ありの0.034〜0.082）、指標として逆に働く。 */
-    let best = null;
-    for (let u = 1; u <= KING_SEQ_GAP_MAX; u++) {
-      const ud = u * KING_SEQ_QUANT, cap = Math.floor(KING_SEQ_GAP_MAX / u);
-      const q = d.map(x => Math.max(1, Math.min(cap, Math.round(x / ud))));
-      const err = d.reduce((a, x, i) => a + Math.abs(x - q[i] * ud), 0);
-      if (best === null || err < best.err) best = { err, slots: q.map(v => v * u) };
+  if (raw.length > 0) {
+    /* 「どこまで狙って置けていたか」を重み t（0〜1）にして、2つの当てはめを混ぜる。
+       ・的の配分（原因側の指標）: 正解文字のエリアが広いほど待たされずに押せる。
+         段階的に効くので閾値ではなく線形の重みにする（KING_SEQ_AIM_LO/HI 参照）
+       ・間隔のばらつき（症状側の指標）: 配分が育っていなくても、そのトライで実際に
+         リズムとして叩けていたなら t=1 にして尊重する
+       t=0 なら長短の段だけ（序盤）、t=1 ならテンポ再現（終盤）、間はその中間。 */
+    const aim = _king.charWeights.reduce((a, w, i) => a + w[KING_TARGET[i]], 0) / 4 / 100;
+    const rmin = Math.max(Math.min(...raw), 1e-6);
+    const spread = Math.max(...raw) / rmin;
+    const t = spread <= KING_SEQ_SPREAD_LIMIT ? 1 : Math.max(0, Math.min(1,
+      (aim - KING_SEQ_AIM_LO) / (KING_SEQ_AIM_HI - KING_SEQ_AIM_LO)));
+    const fit   = _kingSeqFitGaps(raw.map(x => Math.min(x, gapMaxPos)));
+    const shape = _kingSeqShapeGaps(raw, rmin);
+    for (let i = 0; i < fit.length; i++) {
+      const g = Math.max(1, Math.min(KING_SEQ_GAP_MAX,
+        Math.round(fit[i] * t + shape[i] * (1 - t))));
+      off.push(off[off.length - 1] + g);
     }
-    for (const g of best.slots) off.push(off[off.length - 1] + g);
   }
   const accentOff = off[off.length - 1]; // 5打目＝読み取った比のまま
   /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
@@ -8262,6 +8267,50 @@ function _kingSeqScheduleAudio(events) {
     const gap = i + 1 < hits.length ? hits[i + 1].at - e.at : Infinity;
     _playKingBeamHit(audioCtx, e.at, null, false, gap / KING_BEAM_CHOKE_REF);
   }
+}
+
+/* 通常モード（リズムとして叩けている）の当てはめ。dは上限クランプ済みの間隔（秒）で、
+   16分スロット数の配列を返す。
+
+   単位の決め方は「最小間隔を基準にする」方式から「候補単位の総当り」へ変えた。
+   最小間隔基準は基準そのものが1回のブレや偶然の短い間隔に引きずられるため、
+   他の間隔がまとめて狂う。候補単位（16分の1〜KING_SEQ_GAP_MAX倍）を全部試して
+   全間隔の量子化誤差の合計が最小になるものを選べば、どれか1つに依存しない。
+   意図した比を復元できた割合（6000試行×4条件のシミュレーション）:
+     人的ジッタ10ms  最小間隔基準 81.8% → 総当り 100%
+               20ms              58.7% →      100%
+               30ms              41.1% →       94.3%
+               45ms              21.9% →       63.8%
+   人の打鍵ジッタは20〜30ms程度が現実的な範囲。 */
+function _kingSeqFitGaps(d) {
+  let best = null;
+  for (let u = 1; u <= KING_SEQ_GAP_MAX; u++) {
+    const ud = u * KING_SEQ_QUANT, cap = Math.floor(KING_SEQ_GAP_MAX / u);
+    const q = d.map(x => Math.max(1, Math.min(cap, Math.round(x / ud))));
+    const err = d.reduce((a, x, i) => a + Math.abs(x - q[i] * ud), 0);
+    if (best === null || err < best.err) best = { err, slots: q.map(v => v * u) };
+  }
+  return best.slots;
+}
+
+/* 序盤モード: 長短の「段」だけ残す。rawは上限クランプ前の間隔（秒）。
+
+   的が狙いにくいうちは「正解文字が回ってくるのを待つ」ことが主眼になるので、間隔の差は
+   ジッタと呼べる範囲を超えて桁で違う（実機評価「数十倍もの誤差がある前提をおく必要が
+   ある」）。長さを再現しても意味が無いうえ、上限クランプに掛けると長い隙間が全部同じ値へ
+   潰れて長短の区別＝雰囲気まで消える。
+   そこで最短の隙間を基準に「何倍か」を対数で段階化し、16分・8分・4分の3段だけへ割り当てる。
+   テンポの再現は捨て、どれが長くてどれが短かったかの順序と段差だけを残す
+   （ユーザーの狙い:「あれ、打ち込んだタイミングと再生パターンは相関があるのかな？と
+   なんとなく気づければよい」）。
+   1段の幅が2倍なので数十倍の差も3段に収まり、最長でも4スロット＝1拍なので再生の長さは
+   通常モードと同じ上限（16スロット＝1.32秒）に収まる。
+
+   なお「フィット誤差から意図の有無を推定する」案はシミュレーションで否定済み:
+   上限クランプされた間隔はちょうど格子上の値になるため、序盤（意図なし）のほうが誤差が
+   小さく出てしまい（中央値0.000 対 意図ありの0.034〜0.082）、指標として逆に働く。 */
+function _kingSeqShapeGaps(raw, rmin) {
+  return raw.map(x => 1 << Math.max(0, Math.min(2, Math.round(Math.log2(x / rmin)))));
 }
 
 /* 予約済み再生イベントのうち、時刻が来たものを発火する（音は予約済みなので
