@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.77';
+const VERSION = 'v6.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4852,13 +4852,15 @@ function _drawKingReelCharge(px, py, idx) {
       ctx.lineTo(Math.cos(a) * len * t, Math.sin(a) * len * t);
     }
   }
+  /* 線幅は実機評価で一度細くしている（グロー 0.22R → 0.15R、芯 0.075R → 0.045R）。
+     長さ・本数は変えていないので、density はそのままで線だけが締まる */
   ctx.globalAlpha = 0.40 * flick * vigor;
   ctx.strokeStyle = '#ffd34d';
-  ctx.lineWidth = Math.max(5, R * 0.22);
+  ctx.lineWidth = Math.max(3.5, R * 0.15);
   ctx.stroke();
   ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
   ctx.strokeStyle = '#fffde7';
-  ctx.lineWidth = Math.max(2, R * 0.075);
+  ctx.lineWidth = Math.max(1.2, R * 0.045);
   ctx.stroke();
   /* 根元の輝き。稲妻だけだと中心が空くので、帯びている芯を1枚置く */
   ctx.globalAlpha = 0.30 * flick * vigor;
