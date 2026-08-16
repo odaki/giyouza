@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.88';
+const VERSION = 'v6.89';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1996,7 +1996,7 @@ function _scheduleBossBgmRenders(immediate = false) {
       /* こんがり度が上がるほど合いの手の食い込みを増やす（BGM_TAIKO_PICKUP_TIERS参照） */
       taikoPickupSet: _taikoPickupSetForTier(tier),
       bassDurMul: 0.85, bassDecay: 0.05,
-      useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.28, // ユーザー要望で倍量（0.64→1.28）
+      useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.10, // 倍量指定(0.64→1.28)から少しだけ戻す（実機評価）
       useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
       rumbleMellow: tier / (BGM_TIER_COUNT - 1),
     }).then(buf => {
@@ -2482,16 +2482,31 @@ const BGM_MEL_BOSS_BRIGHT = BGM_MEL_BOSS.map(
    _bgmTierForCookPct の境界に乗るので、表情・地鳴り・和声の3つが
    同じこんがり度で同時に切り替わる */
 const BGM_BRIGHT_TIER = BGM_TIER_COUNT - 1;
+/* ベースオスティナート。**メロディ層と同時に鳴らさない**のが設計の要:
+   メロディ層は melBossBass=true で低音ベースシンセとして鳴る（_playBossBassMel）
+   ため、同じ低音域にベースを重ねると2本が団子になる。特に小節頭は和太鼓・キック・
+   地鳴りも同時に来るので、リミッター前のピークが跳ね上がり、**アクセントを付ける
+   ために足した和太鼓自身がゲインリダクションを引き起こして自分を潰す**（実測:
+   小節頭のコントラストがリミッター無しで+2.4dB、有りで-3.1dB＝反転していた）。
+
+   そこで表拍（偶数ステップ）はメロディ層に明け渡し、ベースは裏拍だけを打つ
+   インターロックにする。ルート(A2)と完全5度(E2)の交互は維持したまま、低音の
+   発音数が半分になり、小節頭は「和太鼓＋キック＋メロディのA2」だけになる。
+   1音あたりの音量は上げて（0.24〜0.28 → 0.30〜0.34）、薄くなりすぎないようにする。
+
+   衝突しないことは配置（表拍/裏拍）で保証されているが、将来メロディを編集した
+   ときに崩れないよう、メロディに音があるステップは機械的に落とす（BGM_MEL_BOSS_BRIGHT
+   と同じ、2本の配列が食い違わないようにする作り） */
 const BGM_BASS_BOSS = [
-  // 小節1: ルート(A2)と完全5度(E2)のパワーコード連打
-  ['A',2,0.36], ['E',2,0.26], ['A',2,0.28], ['E',2,0.24], ['A',2,0.30], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24],
+  // 小節1（裏拍のみ。ルートと5度を交互に）
+  null, ['E',2,0.32], null, ['A',2,0.30], null, ['E',2,0.32], null, ['A',2,0.30],
   // 小節2
-  ['A',2,0.34], ['E',2,0.26], ['A',2,0.28], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24], ['A',2,0.28], ['E',2,0.24],
+  null, ['E',2,0.32], null, ['A',2,0.30], null, ['E',2,0.32], null, ['A',2,0.30],
   // 小節3（少し強める）
-  ['A',2,0.38], ['E',2,0.28], ['A',2,0.30], ['E',2,0.26], ['A',2,0.32], ['E',2,0.26], ['A',2,0.30], ['E',2,0.26],
+  null, ['E',2,0.34], null, ['A',2,0.32], null, ['E',2,0.34], null, ['A',2,0.32],
   // 小節4
-  ['A',2,0.36], ['E',2,0.28], ['A',2,0.30], ['E',2,0.26], ['A',2,0.30], ['E',2,0.26], ['A',2,0.30], ['E',2,0.26],
-];
+  null, ['E',2,0.34], null, ['A',2,0.32], null, ['E',2,0.34], null, ['A',2,0.32],
+].map((b, i) => BGM_MEL_BOSS[i] ? null : b);
 /* ハイハット: 「狩りの踊り」のシェイカー/ラトルのような細かい刻みを狙い、
    裏拍もやや大きめ（0.06→0.08）にして通常より隙間を埋める */
 const BGM_HAT_BOSS = [
@@ -2580,11 +2595,37 @@ function _playKick(ctx, t, dest, vol) {
    'pickup'=アクセント直前の裏拍に置く食い込み（BGM_TAIKO_PICKUP_TIERS参照）。
    食い込みはflourishよりさらに小さく短くする: 直後の本命アクセントより
    目立つと「つまずき」に聞こえてしまうため、あくまで前触れの音量に留める。
-   音量はユーザー要望で倍量済み（強打0.5→1.0・弱打0.32→0.64） */
-function _playTaikoHit(ctx, t, dest, kind) {
+   音量はユーザー要望で倍量済み（強打0.5→1.0・弱打0.32→0.64）。
+
+   body=true で胴の鳴りとバチの当たりを足す（ボス戦BGM専用）。実機評価
+   「和太鼓が小さい」の原因を測ったところ、**キックと同じ音だった**のが正体:
+   キックが sine 110→40Hz、和太鼓が sine 130→50Hz で、単独スペクトルの差は
+   70/110/140Hz の +4dB 程度しかない。全拍で鳴るキック（倍量指定でピーク1.14）
+   に対して和太鼓（0.94）は「少し太いキック」にしかならず、さらにリミッターが
+   最大ピークである小節頭をいちばん強く潰すため、アクセントが反転していた
+   （小節頭のコントラスト実測 -3.1dB）。
+   低域で音量を足しても解決しない（太鼓×3でも -2.1dB 止まり、リミッターを
+   緩めると全体が4.6dB小さくなる）ので、**キックが持っていない帯域**に成分を
+   足して聞き分けられるようにする。この編成は 250Hz〜3kHz がほぼ空いている
+   （ベース/メロディ層は200Hz以下、ハイハットは8kHz以上のノイズ）ので、
+   そこに皮のモードとバチの当たりを置く。低域を増やさないのでリミッターを
+   刺激せず、全体の音量を下げずに済む。
+   音程成分はBGMの調（Aマイナー: A/C/E/G）に合わせて noteHz で取る
+   （生周波数の直書き禁止というSE音程の規約。既存の胴の 130→50Hz は
+   音程として聴こえない打撃なのでそのまま）。
+   body=false（既定）はキング登場の銅鑼SE（_playDoraHit直前の一撃）用で、
+   実機評価で確定済みの音なので変えない */
+function _playTaikoHit(ctx, t, dest, kind, body = false) {
   if (kind === 'strong')        _playSlideOsc(ctx, dest, t, 'sine', 130, 50, 0.14, [[0, 1.0,  'set'], [0.30, 0.0001]], 0.34);
   else if (kind === 'flourish') _playSlideOsc(ctx, dest, t, 'sine', 170, 70, 0.07, [[0, 0.64, 'set'], [0.16, 0.0001]], 0.20);
   else                          _playSlideOsc(ctx, dest, t, 'sine', 200, 90, 0.05, [[0, 0.30, 'set'], [0.10, 0.0001]], 0.13);
+  if (!body) return;
+  const s = kind === 'strong' ? 1 : kind === 'flourish' ? 0.6 : 0.28;
+  /* 皮のモード2本。実際の太鼓と同じく打った直後にわずかにピッチが下がる */
+  _playSlideOsc(ctx, dest, t, 'sine', noteHz('E',4), noteHz('C',4), 0.09, [[0, 0.42 * s, 'set'], [0.16, 0.0001]], 0.20);
+  _playSlideOsc(ctx, dest, t, 'sine', noteHz('A',4), noteHz('E',4), 0.06, [[0, 0.22 * s, 'set'], [0.10, 0.0001]], 0.14);
+  /* バチの当たり。ハイハット（8kHz以上）より下、胴より上の短い一撃 */
+  playNoise(ctx, t, 0.02, 0.14 * s, 1600, dest);
 }
 
 /* ソフトクリップ歪みカーブ（TB-303風アシッドベースの「凶悪」な唸りに使う） */
@@ -3282,9 +3323,11 @@ async function renderBGMBuffer(sampleRate, {
     playNoise(offCtx, t, 0.04, hatArr[s], 8000, dest);
     if (kickSet.has(s)) _playKick(offCtx, t, dest, kickVol);
     if (useTaiko) {
-      if (taikoStrongSet?.has(s))        _playTaikoHit(offCtx, t, dest, 'strong');
-      else if (taikoFlourishSet?.has(s)) _playTaikoHit(offCtx, t, dest, 'flourish');
-      else if (taikoPickupSet?.has(s))   _playTaikoHit(offCtx, t, dest, 'pickup');
+      /* body=true: BGMではキックと同じ帯域だけでは聞き分けられないため、
+         胴の鳴りとバチの当たりを足す（_playTaikoHit の定義部参照） */
+      if (taikoStrongSet?.has(s))        _playTaikoHit(offCtx, t, dest, 'strong', true);
+      else if (taikoFlourishSet?.has(s)) _playTaikoHit(offCtx, t, dest, 'flourish', true);
+      else if (taikoPickupSet?.has(s))   _playTaikoHit(offCtx, t, dest, 'pickup', true);
     }
   }
   return offCtx.startRendering();
