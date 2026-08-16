@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.91';
+const VERSION = 'v6.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2875,6 +2875,16 @@ function _playKingHat(ctx, t, dest, open = false) {
   const v = KING_HAT_VOL * KING_HAT_ACCENT;
   playNoise(ctx, t, 0.045, v,        9000, d); // 立ち上がり（クローズと同じ質感）
   playNoise(ctx, t, 0.28,  v * 0.55, 7000, d); // 開いた尾
+}
+
+/* コール→レスポンスの切り替えの合図（KING_CUE_VOL の定義部参照）。
+   ハイハットと同じ帯域ノイズを重ねるが、尾を桁違いに長く取って金物にする */
+function _playKingCue(ctx, t, dest) {
+  const d = _seDest(ctx, dest);
+  const v = KING_CUE_VOL;
+  playNoise(ctx, t, 0.06, v,        6500, d); // 立ち上がり
+  playNoise(ctx, t, 0.95, v * 0.42, 3200, d); // 長いウォッシュ（ハットとの差はここ）
+  playNoise(ctx, t, 0.45, v * 0.26, 9500, d); // 上の煌めき
 }
 
 function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1, vol = 1) {
@@ -8017,6 +8027,18 @@ const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 2;
    音色（フィルタ・長さ）は変えない。 */
 const KING_HAT_VOL    = 0.44;
 const KING_HAT_ACCENT = 1.3;
+/* コール→レスポンスの切り替えを知らせるシンバル（実機要望「打ち込み→再生の
+   切り替えの合図のような音がほしい。打ち込み側の音の最後に、再生側の爆発音と
+   同じタイミングで」）。
+   鳴る位置はコールを閉じる小節境界＝レスポンス開始の瞬間で、爆発（レスポンスを
+   閉じる小節境界）とはちょうど1フレーム（枠1つ）離れる。つまり
+     タタタタ [シャーン] タンタンタンタン [ドン] タタタタ …
+   と、枠の切れ目が必ず金物で示される。
+   音色はハイハットと同じノイズ系＝**打ち込み側の音色**に留める（打ち込みは
+   ハイハット、レスポンスはスネアという役割分担を崩さない）。ハットとの差は
+   長さで付ける: クローズ45ms・オープン280msに対してこれは950msのウォッシュ。
+   TRのパターンでクラッシュがフレーズの頭を示すのと同じ役回り。 */
+const KING_CUE_VOL = 0.58;
 /* 再生開始までの最低リード（秒）。コールを閉じた瞬間が小節境界の直前だった場合、
    そのまま次の小節境界をレスポンス開始にすると予約が間に合わない。足りなければ
    1小節ずつ後ろへ送る（_kingBuildSequence参照）。
@@ -8710,10 +8732,16 @@ function _kingBuildSequence(forced, gain, flights) {
   /* レスポンス開始＝コールが占めた小節数ぶん後ろの小節境界。予約が間に合わない
      （コールを閉じた瞬間が境界の直前だった）場合は1小節ずつ後ろへ送る */
   let respStartSlot = Math.round(callStart / KING_SEQ_QUANT) + callBars * barSlots;
+  /* 判定は leadIn を足さない位置＝小節境界そのもので取る。切り替えの合図
+     （_playKingCue）がこの境界に鳴るので、ここが過去だと合図だけ落ちてしまう */
   const minSlot = (nowPos + KING_SEQ_RESPONSE_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT;
-  while (respStartSlot + leadIn < minSlot) respStartSlot += barSlots;
+  while (respStartSlot < minSlot) respStartSlot += barSlots;
   const slotAt = o => (respStartSlot + leadIn + mapOff(o)) * KING_SEQ_QUANT;
   const events = [];
+  /* コールを閉じる合図。レスポンス開始の小節境界に置く（爆発と対になる） */
+  const cueAt = _bgmBufPosToCtxTime(respStartSlot * KING_SEQ_QUANT);
+  if (cueAt === null) return false;
+  events.push({ at: cueAt, kind: 'cue' });
   for (let i = 0; i < rec.length; i++) {
     const at = _bgmBufPosToCtxTime(slotAt(off[i]));
     if (at === null) return false;
@@ -8786,6 +8814,9 @@ function _kingBuildSequence(forced, gain, flights) {
    同じ条件を使う（ミュート中は音だけ出ず、視覚イベントは通常どおり進む）。 */
 function _kingSeqScheduleAudio(events) {
   if (audioMuted || !audioCtx || audioCtx.state !== 'running') return;
+  /* 切り替えの合図は打点ではないので、チョーク量の計算（次の音までの間隔）には
+     混ぜない。混ぜると直後のスネアの減衰が合図との距離で決まってしまう */
+  for (const e of events) if (e.kind === 'cue') _playKingCue(audioCtx, e.at, null);
   const hits = events.filter(e => e.kind === 'impact' || e.kind === 'accent');
   for (let i = 0; i < hits.length; i++) {
     const e = hits[i];
@@ -8876,7 +8907,8 @@ function _kingSeqStep() {
 function _kingSeqFire(e, flush) {
   /* その的のビームが飛んだ（or 音だけのタップが鳴った）時点で帯電スパークを止める */
   if (e.f && _king.reelBeamed) _king.reelBeamed[e.f.reelIdx] = true;
-  if      (e.kind === 'shot')   _kingFireBeam(e.f);
+  if      (e.kind === 'cue')    return; // 切り替えの合図は音のみ（音は予約済み）
+  else if (e.kind === 'shot')   _kingFireBeam(e.f);
   /* resolve を立てるだけにして実際の着地は _updateKingCharFlights に委ねる。
      直接 _stickKingChar を呼ぶと、まだ飛翔中（'fly'）の文字が瞬間移動する */
   else if (e.kind === 'impact') e.f.resolve = 'stick';
