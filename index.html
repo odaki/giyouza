@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.85';
+const VERSION = 'v6.86';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5093,6 +5093,151 @@ function _drawKingReelDischarge(px, py, idx) {
   ctx.restore();
 }
 
+/* 発射直後、まだ撃ち込まれていない的の三角マークと、その結果文字を稲妻で繋ぐ
+   （KING_TETHER_* の定義部参照）。両端は必ずマーク／文字にピタリと付け、振れ幅を
+   中央で最大にすることで「張られた線」に見せる。
+   _drawKingReelCharge と同じく、時間バケツを疑似乱数シードにして数十msごとに
+   形を切り替え、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
+   ストロークで光らせる（描画規約） */
+function _drawKingChargeTether(x0, y0, x1, y1, idx) {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 2) return;
+  const nx = -dy / len, ny = dx / len; // 法線＝横揺れの方向
+  let seed = Math.floor(performance.now() / 45) * 31 + idx * 7 + 1;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  const flick = 0.55 + rnd() * 0.45;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  for (let s = 1; s < KING_TETHER_SEG; s++) {
+    const t = s / KING_TETHER_SEG;
+    const amp = Math.sin(t * Math.PI) * len * KING_TETHER_AMP;
+    const o = (rnd() - 0.5) * 2 * amp;
+    ctx.lineTo(x0 + dx * t + nx * o, y0 + dy * t + ny * o);
+  }
+  ctx.lineTo(x1, y1);
+  ctx.globalAlpha = 0.26 * flick;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  ctx.globalAlpha = 0.5 + 0.4 * flick;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* プラズマボール（市販のオブジェ）のフィラメント1本を現在のパスへ足す
+   （実機評価: 帯電スパークは「走り方と細さ」をプラズマボールに寄せたい）。
+   的の帯電（_drawKingReelCharge）が擬似乱数で数十msごとに形をパッと切り替える
+   「静電気」なのに対し、こちらは時間の連続関数で角度を蛇行させる＝形が瞬間で
+   飛ばず、うねりながら動く。これがプラズマボールらしさの正体で、線を細くする
+   のと合わせて別種の帯電として区別が付く。
+   r0（発生点＝文字の縁）から r1（外殻）へ向かって伸ばし、根元ほど大きく振れて
+   先端へ収束させる。fork=true の本は途中で枝分かれする */
+/* 点列の作業用（毎フレーム・フィラメントごとに配列を作らないための固定バッファ） */
+const _kingPlasmaX = new Float64Array(16);
+const _kingPlasmaY = new Float64Array(16);
+
+/* 作業用バッファの先頭n点を、隣接点の中点を通る二次ベジェで繋いで現在のパスへ
+   足す（角を立てないための定石。_buildScorchBlotSprite と同じ手法の開曲線版）。
+   これを通さないとフィラメントが折れ線＝ジグザグの「静電気」に見えてしまい、
+   プラズマボールのうねる曲線にならない */
+function _pathKingPlasma(n) {
+  if (n < 2) return;
+  ctx.moveTo(_kingPlasmaX[0], _kingPlasmaY[0]);
+  for (let i = 1; i < n - 1; i++) {
+    ctx.quadraticCurveTo(_kingPlasmaX[i], _kingPlasmaY[i],
+                         (_kingPlasmaX[i] + _kingPlasmaX[i + 1]) / 2,
+                         (_kingPlasmaY[i] + _kingPlasmaY[i + 1]) / 2);
+  }
+  ctx.lineTo(_kingPlasmaX[n - 1], _kingPlasmaY[n - 1]);
+}
+
+function _kingPlasmaFilament(mx, my, a0, r0, r1, t, ph, segs, fork) {
+  let a = a0, ba = 0, br = 0;
+  _kingPlasmaX[0] = mx + Math.cos(a) * r0; _kingPlasmaY[0] = my + Math.sin(a) * r0;
+  const forkAt = Math.floor(segs * 0.55);
+  for (let s = 1; s <= segs; s++) {
+    const u = s / segs;
+    a += Math.sin(t * 2.1 + ph + s * 1.7) * 0.30 * (1.1 - u * 0.6);
+    const r = r0 + (r1 - r0) * u;
+    _kingPlasmaX[s] = mx + Math.cos(a) * r; _kingPlasmaY[s] = my + Math.sin(a) * r;
+    if (fork && s === forkAt) { ba = a; br = r; }
+  }
+  _pathKingPlasma(segs + 1);
+  if (!fork || br <= 0) return;
+  let a2 = ba + (Math.sin(t * 1.6 + ph) > 0 ? 0.55 : -0.55);
+  _kingPlasmaX[0] = mx + Math.cos(ba) * br; _kingPlasmaY[0] = my + Math.sin(ba) * br;
+  for (let s = 1; s <= 3; s++) {
+    a2 += Math.sin(t * 2.4 + ph + s) * 0.22;
+    const r = br + (r1 - br) * (s / 3) * 0.95;
+    _kingPlasmaX[s] = mx + Math.cos(a2) * r; _kingPlasmaY[s] = my + Math.sin(a2) * r;
+  }
+  _pathKingPlasma(4);
+}
+
+/* 撃ち込み済み・焼き込み待ちの焦げ跡の位置で、文字の「外」を走るプラズマ
+   （KING_TETHER_* の定義部参照）。三角との接続が切れた分のエネルギーがそこに
+   溜まっている、という見え方にする。座標変換は _kingFlightTargetPos および
+   アクセントの発光と同じ（ボスの表示位置・呼吸・のけぞりに追従）。
+   充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
+   焼き込み直前にフィラメントがいちばん外まで伸びて明るくなる */
+function _drawKingMarkCharges(breath, accentDy) {
+  if (_kingChargedMarks.length === 0) return;
+  const ct = audioCtx ? audioCtx.currentTime : null;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'lighter'; // 電気は加算光（ボス本体の色を潰さない）
+  for (const m of _kingChargedMarks) {
+    let p = 1; // 時計が引けない場合は満充電で描く
+    if (ct !== null && m.chargedAt !== null && _king.seqAccentAt !== null) {
+      const span = _king.seqAccentAt - m.chargedAt;
+      p = span > 0.05 ? Math.max(0, Math.min(1, (ct - m.chargedAt) / span)) : 1;
+    }
+    const mx = _king.dbx + m.lx * breath, my = _king.dby + accentDy + m.ly * breath;
+    /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
+       面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
+    const R = m.chargeR;
+    const t = performance.now() / 1000;
+    const ph0 = m.rot; // マークごとにうねりの位相をずらす（同じ動きが4つ並ばない）
+    /* 明滅もパッと切り替えず連続に呼吸させる（プラズマは点滅しない） */
+    const flick = 0.78 + 0.22 * Math.sin(t * 4.7 + ph0);
+    const vigor = 0.55 + 0.45 * p;
+    const rIn  = R * 0.45;              // 発生点＝グリフの縁
+    const rOut = R * (0.8 + 0.4 * p);   // 外殻。充電が進むほど遠くまで届く
+    ctx.beginPath();
+    for (let b = 0; b < KING_CHARGE_BOLTS; b++) {
+      const ph = ph0 + b * 2.39996; // 黄金角でずらして本ごとに違う動きにする
+      const a0 = (b / KING_CHARGE_BOLTS) * Math.PI * 2 + ph0 + Math.sin(t * 0.6 + ph) * 0.4;
+      /* 長さも本ごとに時間で伸び縮みさせる。全部同じ長さで等間隔に並ぶと
+         「放射状の飾り」に見え、プラズマボールの不揃いさが出ない */
+      const rEnd = rOut * (0.72 + 0.28 * (0.5 + 0.5 * Math.sin(t * 0.9 + ph * 1.3)));
+      _kingPlasmaFilament(mx, my, a0, rIn, rEnd, t, ph, 7, b % 2 === 0);
+    }
+    /* グローは広く薄く、芯はプラズマボールらしくどこまでも細く
+       （実機評価「スパークの走り方や細さをプラズマボールに」） */
+    ctx.globalAlpha = 0.13 * flick * vigor;
+    ctx.strokeStyle = '#ffd34d';
+    ctx.lineWidth = Math.max(2, R * 0.12);
+    ctx.stroke();
+    ctx.globalAlpha = (0.5 + 0.35 * flick) * vigor;
+    ctx.strokeStyle = '#fffde7';
+    ctx.lineWidth = Math.max(0.8, R * 0.04);
+    ctx.stroke();
+    /* 文字の裏に溜まっていく芯（プラズマボールの中心電極にあたる）。充電が進む
+       ほど明るくなるが、グリフが読めなくなるほど乗せない＝あくまで背後の輝き */
+    ctx.globalAlpha = (0.05 + 0.13 * p) * flick;
+    ctx.fillStyle = Y;
+    ctx.beginPath(); ctx.arc(mx, my, R * (0.5 + 0.3 * p), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawKingReel(w, active, idx) {
   /* 被弾揺れは的まるごと（絵柄・リング・三角ポインタ・結果文字）に効かせたいので、
      関数全体を包む外側のsave/translateで掛ける（_kingReelShakeOffset参照） */
@@ -7218,6 +7363,7 @@ function _cleanupKingBattleState() {
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
+  _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
   if (_omen) { for (const g of _omen.items) g._dead = true; }
   _omen = null;
   if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
@@ -7645,6 +7791,11 @@ const KING_MAX_FAILS = 6;
    変えてほしいと言っている、の2点は別々の要素）。焦げ跡側のサイズは常に
    一定（_createKingMark参照） */
 const KING_CHAR_JUST_FONT_SCALE = 2;
+/* 飛翔文字のグリフサイズ。描画（drawKingCharFlights）と帯電スパークの大きさ
+   （_stickKingChar が m.chargeR として保存）の両方で使うので関数にしてある。
+   スパーク側が焦げ跡の半径基準だと文字よりはるかに大きくなり「文字の外で
+   帯電している」に見えなかった（焦げ跡は文字の数倍の面積で描かれる） */
+const _kingCharFontSize = f => f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_JUST_FONT_SCALE : KING_RESULT_FONT;
 /* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
    残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
    以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
@@ -7912,10 +8063,24 @@ const KING_ACCENT_RECOIL_PX     = 10;
    従来は attemptFired が立って帯電演出が「消える」だけで、増えるものが何も無かった
    ため変化として気づきにくかった。撃った瞬間に4つの三角から放電が弾けるようにする */
 const KING_FIRE_FLASH_FRAMES = 12;
+/* 発射から5音目までを「充電 → 焼き込み」として繋ぐ演出（ユーザー要望）。
+   ・発射直後: 4つの三角マークとそれぞれの結果文字が稲妻で接続される
+   ・各文字が撃ち込まれた瞬間（従来ここで焦げが付いていた）: その接続が切れ、
+     スパークが文字側へ移る＝その位置が帯電したまま待つ
+   ・5音目の爆発: 帯電していた4箇所が一斉に焦げへ変わる
+   焦げの出現タイミングを着弾からアクセントへ遅らせるのがこの演出の本体で、
+   ダメージ確定（こんがり%・全身の焼き色）が既に5音目へ集約されているのと
+   辻褄が合う＝「4回撃ち込んで溜め、5発目で焼く」が画面上で一本に繋がる。
+   接続の有無は的の帯電と同じ _king.reelBeamed で判定するので、三角の帯電が
+   消える瞬間と線が切れる瞬間は構造的に一致する */
+const KING_TETHER_SEG   = 7;    // 稲妻の折れ数
+const KING_TETHER_AMP   = 0.13; // 横揺れ幅（両端間の距離に対する比・中央で最大）
+const KING_CHARGE_BOLTS = 5;    // 文字側の帯電（プラズマ）のフィラメント本数
 let _kingFireFlash = 0;
 let _kingAccentFlash  = 0;
 let _kingAccentRecoil = 0;
 let _kingAccentMarks  = []; // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
+let _kingChargedMarks = []; // 撃ち込み済みだがまだ焼き込まれていない焦げ跡（帯電中）
 let _kingFlashSprite  = null; // 焦げ跡の発光用スプライト（初回使用時に生成）
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
 let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
@@ -8099,8 +8264,10 @@ function _initBossBattle() {
        recStartPos : 打ち込み開始のバッファ位置（拍境界）。バッテリー残量の起点。
                      nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
-       nextTrialPos: 次トライを開始するバッファ位置（拍境界）。nullなら未予約 */
-    rec: [], recStartPos: null, seqEvents: [], nextTrialPos: null,
+       nextTrialPos: 次トライを開始するバッファ位置（拍境界）。nullなら未予約
+       seqAccentAt : 5音目（焼き込み）のctx時刻。帯電の充電進捗を出すのに使う
+                     （KING_TETHER_*の定義部・_drawKingMarkCharges参照）*/
+    rec: [], recStartPos: null, seqEvents: [], nextTrialPos: null, seqAccentAt: null,
     /* 的スロット単位「その的のビームがもう飛んだか」。帯電スパークをいつ消すかに使う
        （drawKingReel参照）。再生では的ごとに時刻がずれて撃たれるので、発射タップで
        一斉に消すのではなく、実際にビームが出た的から順に消す */
@@ -8230,6 +8397,7 @@ function _spawnKingCharFlight(w, reelIdx) {
     reelIdx, // 衝突の瞬間（_startKingCharBounce）にどの的のスロットへひびを追加するか
     tier, markRef: tier ? _createKingMark() : null,
     state: 'fly', frames: 0, resolve: null, attemptToken: null,
+    deferBurn: false, // 焦げを5音目まで遅らせるか（_kingBuildSequenceが立てる）
     rot: 0, rotSpd: 0, // 弾き飛ばし後の回転演出（衝突時に設定、drawKingCharFlights参照）
   };
   _kingCharFlights.push(f);
@@ -8250,6 +8418,9 @@ function _createKingMark() {
     r:   _BOSS_S * 0.085 + Math.random() * _BOSS_S * 0.045,
     rot: Math.random() * Math.PI * 2,
     revealedAt: null,
+    /* 撃ち込み済み・焼き込み待ち（帯電中）かどうかと、その開始ctx時刻
+       （KING_TETHER_*の定義部・_stickKingChar参照） */
+    charging: false, chargedAt: null, chargeR: 0,
   };
 }
 
@@ -8529,8 +8700,12 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      ように勘違いされる」への対応。従来は待っていても叩いた場合と完全に同じ音・同じ%が
      得られており、タップする理由が音でも数字でも示されていなかった。
      こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」で出す */
+  /* dud=この試技のダメージがゼロ（＝焦げ跡を1つも作れなかった＝4タップ全てOK止まり）。
+     以前は events.length === 0 で見ていたが、OK以下のタップにも小音量の着弾イベントを
+     置くようにした時点で常に false になっていた（穴だったのを修正）。焦げ跡の有無は
+     gain と同値（gain は markRef を持つタップだけで積算される、_kingFireAttack参照） */
   events.push({ at: accentAt, kind: 'accent', gain, flights,
-                dud: events.length === 0, forced, nextPos: accentPos });
+                dud: gain <= 0, forced, nextPos: accentPos });
   /* 同一スロットの重なりは間引かずそのまま重ねる（プレイヤーの入力を補正しない
      という原則を全イベントに一様に適用する）。同時発音は振幅が重なるが、
      masterGain出力のセーフティリミッターが歪みを防ぐ */
@@ -8545,6 +8720,11 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
                 '/ 音数', events.filter(e => e.kind === 'impact').length + 1,
                 '/ うち小音量', events.filter(e => e.quiet).length);
   }
+  /* 焼き込みを5音目まで遅らせる印（_stickKingChar参照）。シーケンスを組めた場合に
+     だけ立てる＝音声の時計が無くて即時適用へ退避する経路（_kingFireAttack）は
+     アクセント自体が発火しないので、従来どおり着弾と同時に焦げが付く */
+  for (const f of flights) f.deferBurn = true;
+  _king.seqAccentAt = accentAt; // 帯電の充電進捗の分母（_drawKingMarkCharges）
   _king.seqEvents = events;
   _kingSeqScheduleAudio(events);
   return true;
@@ -8664,13 +8844,33 @@ function _kingSeqFlush() {
   while (_king.seqEvents.length > 0) _kingSeqFire(_king.seqEvents.shift(), true);
 }
 
-/* 5音目のアクセント。4つの焦げ跡が一斉に発光し、キング全体が光ってのけぞり、
-   全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約しているため、
-   ゲージと焼き色が同じ瞬間に動く）。従来キングは被弾しても無反応だった */
+/* 5音目のアクセント。帯電していた4箇所が一斉に焦げへ変わって発光し、キング全体が
+   光ってのけぞり、全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約している
+   ため、ゲージと焼き色と焦げが全て同じ瞬間に動く）。従来キングは被弾しても無反応だった */
 function _kingSeqAccent(e, flush) {
   /* 鳴らす対象が無かった飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
-     画面に残し続ける理由が無いため */
-  for (const f of e.flights) if (f.resolve === null) f.resolve = 'stick';
+     画面に残し続ける理由が無いため。deferBurn も同時に降ろす: これ以降に着地する
+     文字（このフレームより後に _stickKingChar が呼ばれる分）は焼き込みの瞬間を
+     過ぎているので、帯電させずその場で焦げにしないと永久に焦げが出ない */
+  for (const f of e.flights) {
+    f.deferBurn = false;
+    /* 帯電中は消えずに待っていた文字（_predKingCharAlive）のフェードをここから
+       始めるため、経過フレームを0へ戻す。待っている間も f.frames は進んでいるので、
+       戻さないと焦げが出た瞬間に文字がフェードなしで消える。
+       resolve の確定とは独立した条件なので分けて書く（else if で繋ぐと、着弾済み＝
+       resolve が入っている通常経路でしか効かない書き方に見えて誤りやすい） */
+    if (f.state === 'stick' && f.markRef && f.markRef.charging) f.frames = 0;
+    if (f.resolve === null) f.resolve = 'stick';
+  }
+  /* 焼き込み: 帯電したまま待っていた焦げ跡を一斉に出現させる（ユーザー要望の
+     「5拍目で焼き込み」）。ここで初めて revealedAt が入り、_renderKingBody の
+     フェード表示が4つ同時に始まる */
+  const burnAt = performance.now();
+  for (const m of _kingChargedMarks) {
+    if (m.revealedAt == null) m.revealedAt = burnAt;
+    m.charging = false;
+  }
+  _kingChargedMarks = [];
   /* 記録が無く再生イベントを持たない的（強制発射の自動確定分）の帯電もここで止める */
   if (_king.reelBeamed) _king.reelBeamed = [true, true, true, true];
   if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら加点しない
@@ -8762,6 +8962,7 @@ function _kingStartTrial(startPos) {
   _king.resultTimer = null;
   _king.missAttemptToken = null;
   _king.nextTrialPos = null;
+  _king.seqAccentAt = null;
   _king.reelBeamed = [false, false, false, false];
   _king.recStartPos = startPos; // バッテリーの起点（nullなら_kingBatteryCheckが後から打つ）
 }
@@ -8865,6 +9066,11 @@ function _easeKingXform() {
    その場のアロー関数ではなくモジュールスコープに置く（クロージャ生成ゼロ。
    通常モードの_pred*と同じ方針で、キング戦側にも水平展開する） */
 const _predKingCharAlive = f => {
+  /* 焼き込み待ち（帯電中）の文字は5音目まで消さない。焦げになるのはその瞬間なので、
+     ここでフェードさせてしまうと「文字が消えて何も無い時間」が挟まる
+     （KING_TETHER_*の定義部参照）。焼き込みでcharging=falseになり、同時に
+     f.framesも0へ戻されるのでそこから通常のフェードが始まる */
+  if (f.state === 'stick' && f.markRef && f.markRef.charging) return true;
   if (f.state === 'stick') return f.frames < KING_CHAR_STICK_FADE_FRAMES;
   if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
   return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
@@ -9067,14 +9273,25 @@ function _isKingCharOffscreen(f) {
          f.by < -KING_CHAR_OFFSCREEN_MARGIN || f.by > H + KING_CHAR_OFFSCREEN_MARGIN;
 }
 
-/* こんがり確定の文字がボスへ実際に到達した瞬間。ここで初めて対応する焦げ跡の
-   revealedAt を打つ（_king.marks の該当要素、_kingReelShoot で markRef として
-   紐付け済み）＝焦げのフェード表示が文字の到着と同時に始まる。予約だけされて
-   revealedAt 未設定の焦げ跡は _renderKingBody 側では「まだ見えない」ため、
-   これより前のフレームで焦げが先に見えてしまうことはない */
+/* こんがり確定の文字がボスへ実際に到達した瞬間。予約だけされて revealedAt 未設定の
+   焦げ跡は _renderKingBody 側では「まだ見えない」ため、これより前のフレームで焦げが
+   先に見えてしまうことはない。
+   リズム再生を伴う通常経路（f.deferBurn）では、ここでは焦げにせず「帯電」させて
+   5音目の焼き込みまで待たせる（KING_TETHER_* の定義部参照）。再生シーケンスを
+   組めなかった退避経路（音声の時計が無い場合）だけが従来どおり即座に焦げになる */
 function _stickKingChar(f) {
   f.state = 'stick'; f.frames = 0;
-  if (f.markRef && f.markRef.revealedAt == null) f.markRef.revealedAt = performance.now();
+  if (!f.markRef || f.markRef.revealedAt != null) return;
+  if (!f.deferBurn) { f.markRef.revealedAt = performance.now(); return; }
+  if (!f.markRef.charging) {
+    f.markRef.charging = true;
+    f.markRef.chargeR = _kingCharFontSize(f) * 0.85; // スパークの基準半径＝文字の大きさ
+    /* 充電開始の時刻は ctx 時刻で持つ（充電の進み具合を 5音目の予約時刻
+       _king.seqAccentAt との比で出すため。どちらも audioCtx の時計。
+       時計が引けなければ null＝満充電表示で描く） */
+    f.markRef.chargedAt = audioCtx ? audioCtx.currentTime : null;
+    _kingChargedMarks.push(f.markRef);
+  }
 }
 
 /* 決定文字の飛翔演出を1フレーム進める。的のロック（_kingReelShoot）や
@@ -9221,10 +9438,13 @@ function drawKingCharFlights() {
   ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)';
   for (const f of _kingCharFlights) {
     const { x, y } = _kingCurrentFlightPos(f);
-    const alpha = f.state === 'stick' ? 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES : 1;
+    /* 帯電中（焼き込み待ち）は薄めずそのまま出す。フェードが始まるのは5音目で
+       焦げに変わる瞬間から（_predKingCharAlive参照） */
+    const charging = f.markRef && f.markRef.charging;
+    const alpha = (f.state === 'stick' && !charging) ? 1 - f.frames / KING_CHAR_STICK_FADE_FRAMES : 1;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = _syncBarColor(f.score)[0];
-    const fontSize = f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_JUST_FONT_SCALE : KING_RESULT_FONT;
+    const fontSize = _kingCharFontSize(f);
     ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
     /* fall中（弾き飛ばされた後）はrotで回転させ、勢いよく弾かれた様子を強調する
        （KING_CHAR_KNOCK_ROT_SPD、_updateKingCharFlights参照） */
@@ -9304,6 +9524,22 @@ function drawBossBattle() {
       ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
     }
     ctx.restore();
+  }
+  /* 撃ち込み済み・焼き込み待ちの帯電（文字より先に描く＝文字が消えていく間も
+     その外側でスパークが回り続けて見える） */
+  if (phase === 'boss') _drawKingMarkCharges(breath, accentDy);
+  /* 発射直後の稲妻: まだ撃ち込まれていない的の三角マークと、その結果文字を繋ぐ。
+     接続の有無は的の帯電と同じ _king.reelBeamed を見るので、三角の帯電が消える
+     瞬間＝線が切れる瞬間になる（KING_TETHER_*の定義部参照）。
+     ハズレ経路と再生シーケンスを組めなかった経路では発射時に reelBeamed が
+     一斉に true になるため、この線は1フレームも出ない */
+  if (phase === 'boss' && _king.attemptFired) {
+    for (const f of _kingCharFlights) {
+      if (_king.reelBeamed[f.reelIdx] || f.resolve !== null) continue;
+      const p0 = _kingReelPointerPos(_king.reels[f.reelIdx]);
+      const p1 = _kingCurrentFlightPos(f);
+      _drawKingChargeTether(p0.x, p0.y, p1.x, p1.y, f.reelIdx);
+    }
   }
   /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
   drawKingCharFlights();
