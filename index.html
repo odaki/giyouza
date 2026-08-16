@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.81';
+const VERSION = 'v6.82';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1542,6 +1542,36 @@ let _ctxStallSec      = 0;    // ctx時計が止まったまま経過した秒�
 let _ctxStallMaxSec   = 0;    // セッション中の最大値（復帰後に振り返れるよう保持）
 let _ctxStallLastCtx  = null;
 let _ctxStallLastWall = 0;
+/* ctx時計が止まっているか（＝stateがrunningでも実体は死んでいるか）。
+   実機で確定した症状: iPad + Bluetoothイヤホンで、別タブを見た後に戻して
+   MUTE→解除→PAUSE解除すると無音のまま。そのとき ?perf は
+   `ctx running` / `stall 7.7s` / `re 0` / `srco` を示していた。
+   stateが 'running' を返すので _resumeAudioCtx の再作成分岐（interrupted/closed）も、
+   toggleMute の `state !== 'running'` 分岐も一度も通らず、復帰の手段が無かった。 */
+const CTX_STALL_MIN = 0.5;   // これ以上ctx時計が止まっていたら死んだとみなす
+function _ctxLooksStalled() { return !!audioCtx && _ctxStallSec > CTX_STALL_MIN; }
+
+/* ポーズ中はrAFを止めるので _updateCtxStall が動かない。バックグラウンド→他アプリ→
+   復帰はまさにこの区間で起きるため、ポーズ突入時の(壁時計, ctx時計)を控えておき、
+   解除時に突き合わせて停止を判定する。
+   通常のポーズではAudioContextを止めない設計（suspend禁止）なのでctx時計は進み続ける＝
+   誤検出しない。割り込まれた場合だけ ctx 側が進まない */
+let _pauseCtxTime = null, _pauseCtxWall = 0;
+function _markPauseCtxClock() {
+  _pauseCtxTime = audioCtx ? audioCtx.currentTime : null;
+  _pauseCtxWall = performance.now() / 1000;
+}
+function _foldPauseCtxStall() {
+  if (!audioCtx || _pauseCtxTime === null) return;
+  const dWall = performance.now() / 1000 - _pauseCtxWall;
+  const dCtx  = audioCtx.currentTime - _pauseCtxTime;
+  _pauseCtxTime = null;
+  if (dWall > CTX_STALL_MIN && dCtx < dWall * 0.5) {
+    _ctxStallSec = Math.max(_ctxStallSec, dWall - Math.max(0, dCtx));
+    if (_ctxStallSec > _ctxStallMaxSec) _ctxStallMaxSec = _ctxStallSec;
+  }
+}
+
 function _updateCtxStall() {
   if (!audioCtx) { _ctxStallSec = 0; _ctxStallLastCtx = null; return; }
   const wall = performance.now() / 1000;
@@ -1994,6 +2024,7 @@ function getAudioCtx() {
        audioMutedより先に完了している（ユーザー操作でしかgetAudioCtx()は
        呼ばれない）ため、ここで直接audioMutedを反映すれば安全かつ確実 */
     masterGain.gain.value = audioMuted ? 0 : 1;
+    _audioSampleRateAtFirst = audioCtx.sampleRate; // ?perf の sr 表示（再作成での変化を見る基準）
     masterGain.connect(_createMasterLimiter(audioCtx));
     /* BGM: bgmGain → bgmToneShelf → masterGain → destination（_buildBgmGainChain参照） */
     _buildBgmGainChain(audioCtx, masterGain);
@@ -2057,6 +2088,8 @@ function _recreateAudioGraph() {
      _audioRecreateCount / _audioSampleRateAtFirst は ?perf の診断表示用 */
   if (_audioSampleRateAtFirst === null) _audioSampleRateAtFirst = audioCtx.sampleRate;
   _audioRecreateCount++;
+  /* 新しいContextでは測り直す。残すと直後の判定が「まだ止まっている」と誤認する */
+  _ctxStallSec = 0; _ctxStallLastCtx = null; _pauseCtxTime = null;
   _updateBgmQuantizedLoopDur();
   _updateBeatDisplayAdvance();
   setTimeout(_updateBeatDisplayAdvance, 500);
@@ -2075,7 +2108,9 @@ function _recreateAudioGraph() {
 function _resumeAudioCtx(callback) {
   /* closed も interrupted と同じく resume() では戻らないので作り直す
      （こちらから閉じることは無いが、システム側で閉じられた場合の保険） */
-  if (audioCtx.state === 'interrupted' || audioCtx.state === 'closed') {
+  /* state を信用しない: 実機では他アプリに音を奪われても 'running' のままになり、
+     ここが素通りして無音から戻れなくなる（_ctxLooksStalled 参照） */
+  if (audioCtx.state === 'interrupted' || audioCtx.state === 'closed' || _ctxLooksStalled()) {
     _recreateAudioGraph();
     setTimeout(callback, 0);
   } else {
@@ -3613,7 +3648,7 @@ function toggleMute() {
   applyMuteGain();
   /* ミュート解除時: interrupted/suspended 状態を _resumeAudioCtx で確実に解消する。
      interrupted は再作成、suspended は resume() で対応。 */
-  if (!audioMuted && audioCtx && audioCtx.state !== 'running') {
+  if (!audioMuted && audioCtx && (audioCtx.state !== 'running' || _ctxLooksStalled())) {
     _resumeAudioCtx(applyMuteGain);
   }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
@@ -12704,6 +12739,10 @@ function togglePause() {
        逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
     _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
     _kingSeqFlush(); // キング戦の再生予約を畳む（_kingSeqFlush の定義部参照）
+    /* ポーズ中はrAFを止めるので stall の計測が止まる。バックグラウンド→他アプリ→
+       復帰はこの区間で起きるため、突入時の時計を控えて解除時に突き合わせる
+       （_markPauseCtxClock / _foldPauseCtxStall 参照） */
+    _markPauseCtxClock();
     /* BGM・ジングル・restartタイマーを一括停止し再生位置を記録する。
        AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
        ジングル中(bgmSource=null)でもここで止めることで、サスペンド状態のコンテキストで
@@ -12723,6 +12762,9 @@ function togglePause() {
       _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
       _arrowProgressAtPause = -1;
     }
+    /* ポーズ中にAudioContextが死んでいないかを、突入時の時計と突き合わせて判定する。
+       _resumeAudioCtx がこの結果を見て再作成するかを決める */
+    _foldPauseCtxStall();
     _rafId = requestAnimationFrame(_gameLoop);
     if (audioCtx) {
       const _doResumeBGM = () => {
