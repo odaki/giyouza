@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.83';
+const VERSION = 'v6.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2714,6 +2714,40 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    リバーブノードはこのプロジェクトに無いため、時間差ノイズの重ね打ちで
    「残響がある感じ」を近似する（_playDoraHitの倍音重ねと同じ加算合成の
    考え方を、時間軸方向のエコーに応用したもの） */
+/* TR-808のカウベル。再生シーケンス5音目（フレーズ末尾）のアクセント音。
+   実機要望「実質的な5射目の音をちょっと特徴的なものに。音色も変えたい。TRシリーズを
+   使ったビートシーケンスとしてかっこよくなるアクセント音を」。
+   スネアを強く鳴らすだけでは4発の連なりと地続きで、終止として立たなかった。
+
+   構造は実機の808と同じで、矩形波2本を完全5度でぶつけ、バンドパスで整えて短く減衰させる。
+   808の実機は540Hz/800Hz（比1.481）だが、SEの音程はCメジャーペンタトニックに揃える規約が
+   あるので C5(523.25) + G5(783.99) を使う。比1.498でほぼ同じ響きになり、かつBGMの調
+   （A＝Aマイナーペンタ＝同じ音集合）と衝突しない。
+   減衰が短いので、アクセントが次のトライの開始と同じ瞬間に来ても次の打ち込みを濁さない
+   （クラッシュシンバルを選ばなかった理由）。 */
+function _playKingCowbell(ctx, t, dest, vol = 1) {
+  const d  = _seDest(ctx, dest);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 2640; // 808は2.6kHz付近が鳴りの芯
+  bp.Q.value = 1.1;
+  const g = ctx.createGain();
+  bp.connect(g); g.connect(d);
+  const stopAt = t + 0.34;
+  g.gain.setValueAtTime(KING_COWBELL_VOL * vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
+  const oscs = [];
+  for (const f of [noteHz('C', 5), noteHz('G', 5)]) {
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.setValueAtTime(f, t);
+    o.connect(bp);
+    o.start(t); o.stop(stopAt);
+    oscs.push(o);
+  }
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, ...oscs, bp, g);
+}
+
 /* accent=true は再生シーケンス5音目（フレーズ末尾）用。TRシリーズのACCENTに倣い、
    音程（ボディのスライド周波数）は一切変えず、レベルとスナッピー量だけを上げる。
    実機のTR-808/909のACCENTはステップごとのベロシティであって音源の再チューニングは
@@ -7802,6 +7836,17 @@ const KING_BEAM_CHOKE_REF  = 0.42;
    ごく小さくスネアを鳴らすとか」）。 */
 /* JUSTの上限は1.15。1.25まで上げるとサンプルピークが1.47となり、5音目のアクセント
    （1.38）を超えて常時リミッターに当たる。アクセントを最大に保つ意味でもここで頭打ち */
+/* 5音目のアクセントの配合。カウベルが音色の主張、スネアは着弾の胴体。
+   実測で決めた（通常のJUST着弾を0dB基準、括弧内はカウベル単体の相対量）:
+     スネア0.85 + カウベル0.34 → +0.3dB（-11.1）… 終止として弱く、音色も変わって聞こえない
+     スネア1.00 + カウベル0.34 → +1.7dB（-11.1）… 音量は足りるがカウベルが埋もれる
+     スネア1.00 + カウベル0.60 → +1.9dB（ -6.2）… 採用
+     スネア1.00 + カウベル0.85 → +2.7dB（ -3.2）… ピークが2.04まで上がる
+   狙いは「アクセントがフレーズ中で常に一番強い」かつ「カウベルが音色として聴こえる」。
+   最初 スネア0.62 で組んだところ合成が通常の着弾より2.4dB小さくなり、終止が一番強いと
+   いう関係が壊れていた（スネア側にはaccent=trueの1.35倍が掛かる前提を二重に見ていた） */
+const KING_ACCENT_SNARE_VOL = 1.0;
+const KING_COWBELL_VOL      = 0.6;
 const KING_BEAM_VOL_JUST   = 1.15;
 const KING_BEAM_VOL_GOOD   = 0.85;
 const KING_BEAM_QUIET_VOL  = 0.3;
@@ -8492,8 +8537,12 @@ function _kingSeqScheduleAudio(events) {
       /* アクセントは後ろが空いているので常にフル。焦げ跡ゼロなら不発音に差し替える */
       /* dud=焦げ跡ゼロ（ダメージ無し）／forced=自動発射（叩かれていない）。
          どちらも締めのアクセントは鳴らさず、弱い不発音だけを置く */
-      if (e.dud || e.forced) playSE('kingBeamDud', e.at);
-      else                   _playKingBeamHit(audioCtx, e.at, null, true, 1);
+      if (e.dud || e.forced) { playSE('kingBeamDud', e.at); continue; }
+      /* 5音目はカウベル（TR-808）を主役にして、スネアを下に薄く敷く。
+         カウベルだけだと打点が軽く、キング本体のフラッシュ・のけぞりと釣り合わないため、
+         着弾の胴体としてスネアを残す。音色の主張はカウベルが担う */
+      _playKingBeamHit(audioCtx, e.at, null, true, 1, KING_ACCENT_SNARE_VOL);
+      _playKingCowbell(audioCtx, e.at, null);
       continue;
     }
     /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める。
