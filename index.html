@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.90';
+const VERSION = 'v6.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7969,6 +7969,12 @@ const KING_SEQ_DIV = 4;
 const KING_SEQ_QUANT = BGM_BEAT / KING_SEQ_DIV; // 量子化の刻み（16分音符 ≈ 82ms）
 /* スロット s を「次の拍境界」へ切り上げる（再生開始アンカー・次トライ開始の位置決め用） */
 const _kingSeqBeatUp = s => Math.ceil(s / KING_SEQ_DIV) * KING_SEQ_DIV;
+/* 1小節のスロット数（BGMは4/4。BGM_MEL_BOSSの定義部参照）と、小節境界への切り上げ。
+   コール＆レスポンスの枠はすべてこの単位で決まる（_kingBuildSequence参照） */
+const KING_BAR_BEATS = 4;
+const KING_SEQ_BAR_SLOTS = KING_BAR_BEATS * KING_SEQ_DIV;
+const _kingSeqBarUp = s => Math.ceil(s / KING_SEQ_BAR_SLOTS) * KING_SEQ_BAR_SLOTS;
+const KING_BAR_DUR = () => BGM_BEAT * KING_BAR_BEATS;
 /* 打ち込みの持ち時間（拍）＝バッテリーのセル数。実機評価「全然間に合わない」で
    7拍（2.30秒）から4倍にした（当時は7拍子で28拍＝4小節）。4拍子化に伴い32拍へ。
    32拍＝10.53秒＝8小節＝BGMループちょうど2周（1ループ16拍）という関係は
@@ -7993,7 +7999,9 @@ const KING_BATTERY_GROUP = 4;          // 表示の区切り（1小節）
    これが「打った通りに再生されない」「勝手なリズムパターンに置き換えられる」の正体。
 
    4拍あれば、キックを1つ〜3つ見送ったパターンまでそのまま表現できる。長い待ちを
-   詰める役目は残り、4拍を超える放置だけが頭打ちになる。 */
+   詰める役目は残り、4拍を超える放置だけが頭打ちになる。
+   4拍子化により、この4拍はちょうど1小節と一致するようになった（KING_SEQ_BAR_SLOTS）。
+   同様に KING_SEQ_SPAN_SLOTS（8拍）はレスポンスの上限2小節にあたる。 */
 const KING_SEQ_GAP_MAX = 4 * KING_SEQ_DIV;
 /* 再生スパン（全長）の上限＝32スロット＝8拍＝2.63秒。
    隙間の上限を4拍へ広げた結果、序盤（正解文字を待つので隙間が長い）の再生が最長
@@ -8009,12 +8017,12 @@ const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 2;
    音色（フィルタ・長さ）は変えない。 */
 const KING_HAT_VOL    = 0.44;
 const KING_HAT_ACCENT = 1.3;
-/* 発射タップから再生開始までの間（拍数）。実機評価「BGMの1拍分あけてほしい」。
-   アンカーは (発射位置 + この拍数) に最も近い16分スロットへ丸める。ぴったり1拍に
-   固定するとアンカーがグリッドから外れ、再生パターン全体がBGMに対して位相ずれを
-   起こす（打点は必ず16分の整数倍という不変条件が崩れる）ため、グリッドへ乗せる側を
-   優先する。ずれは最大±41ms（16分の半分）。 */
-const KING_SEQ_PLAY_DELAY_BEATS = 1;
+/* 再生開始までの最低リード（秒）。コールを閉じた瞬間が小節境界の直前だった場合、
+   そのまま次の小節境界をレスポンス開始にすると予約が間に合わない。足りなければ
+   1小節ずつ後ろへ送る（_kingBuildSequence参照）。
+   かつては「発射タップの1拍後の16分スロット」を固定アンカーにしていたが、
+   コール＆レスポンス化で「コールが占めた小節数のぶん後ろの小節境界」へ変わった。 */
+const KING_SEQ_RESPONSE_MIN_LEAD = 0.12;
 /* スネアのチョーク（_playKingBeamHit の decay 引数）。
    減衰倍率 = 次の音までの間隔 ÷ KING_BEAM_CHOKE_REF（上限1）。
    この値は「鳴っている実長」ではなく効き具合を決める基準値であることに注意。
@@ -8069,7 +8077,7 @@ const KING_BEAM_MIN_DECAY  = 0.25;
    別の音価へ移してしまう。長さの調整は KING_SEQ_GAP_MAX 側で行うこと。 */
 const KING_SEQ_PLAY_SCALE = 1;
 /* 次トライ開始までの最低リード（秒）。ハズレ後など再生シーケンスが無い経路で
-   使う（再生開始のアンカーは KING_SEQ_PLAY_DELAY_BEATS 側で決まる）。 */
+   使う（当たりのレスポンス開始は _kingBuildSequence が小節境界から決める）。 */
 const KING_SEQ_MIN_LEAD = 0.18;
 /* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
    スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
@@ -8275,7 +8283,7 @@ function _initBossBattle() {
     liveOC, half, marks, cookPct: 0, scale,
     bx: W / 2, by,
     dbx: W / 2, dby: omenBy, dscale: 1,
-    reels, reelIdx: 0, awaitingFire: false, attemptFired: false, resultTimer: null, resultMatched: false, charWeights,
+    reels, reelIdx: 0, attemptFired: false, resultTimer: null, resultMatched: false, charWeights,
     failCount: 0, pendingDefeat: false, pendingVictory: false, missAttemptToken: null,
     /* 篩い落とし演出（KING_SIFT_*参照）。siftPending=文字の到着待ち、
        siftTimer=null で非発動・0以上で経過フレーム */
@@ -8284,10 +8292,11 @@ function _initBossBattle() {
     reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
     /* リズムシーケンサ（KING_SEQ_*の定義部参照）。
        rec         : 打ち込み記録 [{pos, flight}]（pos=生のバッファ位置。強制発射分はnull）
-       recStartPos : 打ち込み開始のバッファ位置（拍境界）。バッテリー残量の起点。
+       recStartPos : コール開始のバッファ位置（必ず小節境界）。バッテリー残量の起点であり、
+                     コール＆レスポンスの枠の原点でもある（_kingBuildSequence参照）。
                      nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
-       nextTrialPos: 次トライを開始するバッファ位置（拍境界）。nullなら未予約
+       nextTrialPos: 次トライを開始するバッファ位置（小節境界）。nullなら未予約
        seqAccentAt : 5音目（焼き込み）のctx時刻。帯電の充電進捗を出すのに使う
                      （KING_TETHER_*の定義部・_drawKingMarkCharges参照）*/
     rec: [], recStartPos: null, seqEvents: [], nextTrialPos: null, seqAccentAt: null,
@@ -8472,20 +8481,22 @@ function _kingCurrentFlightPos(f) {
   return { x: f.bx, y: f.by };
 }
 
-/* こんがりリールへのタップ入力。1本ずつ hitResult() で位置判定して確定する
-   （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
-   4本目は的をマークするだけで発射しない（ユーザー要望: 「4つの的を射ると
-   マークされるだけにして、その後、一回タップ/クリック/キー押下したタイミングで
-   マークした場所にビームを発射するようにしたい」）。実際の判定・発射は
-   awaitingFire を立てて _kingFireAttack に委ね、次の入力（handleGameClick の
-   phase==='boss'分岐参照）で実行する。
+/* こんがりリールへのタップ入力＝コールの1打。1本ずつ hitResult() で位置判定して
+   確定する（通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
+   **4本目でコールが閉じ、そのまま _kingFireAttack へ進む**（発射トリガーは廃止）。
+   かつては4本マーク後にもう一度タップして発射する方式だったが、
+   ・コール＆レスポンスとして見ると、コールは4打ちょうどであるべき
+   ・5打目の位置がプレイヤー任せだと「4連射→間→爆発」の形が打ち方次第で崩れる
+   ・「もう一手必要」が伝わらず、バッテリー切れの自動発射が標準トリガーだと
+     誤解される（実機評価。発射バッジで補っていたがトリガーごと無くせば解決する）
+   の3点から廃止した。締めのアクセントは小節境界に置かれる（_kingBuildSequence参照）。
    決定した文字はここで即バックグラウンドの飛翔演出（_spawnKingCharFlight）に渡す。
    演出自体は _updateKingCharFlights が矢を射る操作（リールのロック）とは無関係に
    毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える。
-   'wait'状態（着地して結果待ち）にはタイムアウトが無いため、発射までの
+   'wait'状態（着地して結果待ち）にはタイムアウトが無いため、レスポンスまでの
    待機がどれだけ延びても安全（_updateKingCharFlights参照） */
 function _kingReelShoot(inputPerfMs, forced = false) {
-  if (phase !== 'boss' || !_king || _king.reelIdx >= 4 || _king.awaitingFire) return;
+  if (phase !== 'boss' || !_king || _king.reelIdx >= 4 || _king.attemptFired) return;
   const w = _king.reels[_king.reelIdx];
   w.result = hitResult(w, -Math.PI/2); // 的の三角ポインタは常に真上（drawKingReel参照）
   w.locked = true;
@@ -8495,8 +8506,12 @@ function _kingReelShoot(inputPerfMs, forced = false) {
      文字」だけを基準にする仕組みなので、自動確定を混ぜると意味が壊れる。
      打ち込み記録にも積まない（鳴らす対象が無いスロットになるため） */
   w.syncScore = forced ? 0 : ((audioCtx && bgmPhaseRef !== null) ? calcSyncScore(inputPerfMs) : 0.5);
+  const last = _king.reelIdx === 3; // この打でコールが閉じる
   if (!forced) {
-    playSE('kingShoot');
+    /* 4打目だけオープンハット（kingFire）にして「コールを閉じた」ことを音で示す。
+       発射トリガーがあった頃の5打目と同じ音・同じ役割で、位置が1つ前に移った */
+    playSE(last ? 'kingFire' : 'kingShoot');
+    if (last) _kingFireFlash = KING_FIRE_FLASH_FRAMES;
     _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   }
   const f = _spawnKingCharFlight(w, _king.reelIdx);
@@ -8504,24 +8519,20 @@ function _kingReelShoot(inputPerfMs, forced = false) {
      グリッドへ丸めると、タップ同士の相対間隔が壊れる（_kingBuildSequence参照） */
   _king.rec.push({ pos: forced ? null : _bgmJudgePos(inputPerfMs), flight: f });
   _king.reelIdx++;
-  if (_king.reelIdx >= 4) _king.awaitingFire = true; // 4本マーク完了。発射は次の入力で_kingFireAttackが行う
+  if (last) _kingFireAttack(inputPerfMs, forced); // コールが閉じた＝そのままレスポンスを組む
 }
 
-/* 4本マーク後の発射入力（handleGameClickのphase==='boss'分岐、_king.awaitingFire
-   がtrueの間はこちらに委譲される）。こ・ん・が・り全一致なら打ち込んだリズムを
-   再生シーケンスへ組んで（_kingBuildSequence）攻撃を鳴らし、不一致なら従来どおり
+/* コールが閉じた瞬間の処理（4打目の _kingReelShoot から直接呼ばれる。
+   独立した発射入力は廃止済み）。こ・ん・が・り全一致なら打ち込んだリズムを
+   再生シーケンスへ組んで（_kingBuildSequence）レスポンスを鳴らし、不一致なら従来どおり
    篩い落とし→衝突→ひびへ進む。いずれの場合も4本の結果文字を表示したまま静止させ、
-   次のトライは _kingTrialGate が拍境界で解放する。
-   forced=true はバッテリー切れによる強制発射（_kingBatteryCheck から呼ばれる）。 */
+   次のトライは _kingTrialGate が小節境界で解放する。
+   forced=true はバッテリー切れで最後の的が自動確定した場合（_kingBatteryCheck 経由）。 */
 function _kingFireAttack(inputPerfMs, forced = false) {
-  if (phase !== 'boss' || !_king || !_king.awaitingFire) return;
-  _king.awaitingFire = false;
+  if (phase !== 'boss' || !_king || _king.reelIdx < 4 || _king.attemptFired) return;
   _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
-  /* 発射タップも打ち込み中はハイハット。ただしマーク（クローズ）と区別が付くよう
-     オープンハイハットにする（kingFire。撃った合図が音で分かるようにするため）。
-     スネアは再生側（_kingBuildSequence）で鳴らす＝「打ち込みはハイハット、
-     再生は特定の音色」という設計は維持 */
-  if (!forced) { playSE('kingFire'); _kingFireFlash = KING_FIRE_FLASH_FRAMES; }
+  /* コールを閉じる音（オープンハット）と放電は4打目の _kingReelShoot 側で鳴らす。
+     打ち込みはハイハット・レスポンスはスネアという音色の役割分担は不変 */
   const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
   if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
@@ -8547,7 +8558,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
       _king.resultMatched = true;
       _king.resultTimer = 0;
       _king.missAttemptToken = null;
-      if (_kingBuildSequence(inputPerfMs, forced, gain, thisAttempt)) return; // 以降は_kingSeqStepが進める
+      if (_kingBuildSequence(forced, gain, thisAttempt)) return; // 以降は_kingSeqStepが進める
       /* 音声の時計が引けない場合（BGM未開始・テープ演出のレートランプ中など）は
          従来どおり即時に適用する。シーケンサは音楽が鳴っていて初めて意味を持つので、
          鳴っていない状況では旧来の「4本同時着弾」に退避するのが正しい */
@@ -8612,26 +8623,36 @@ function _kingFireAttack(inputPerfMs, forced = false) {
    スロットは絶対インデックスで記録されているので、最初のマークからの
    相対オフセットを取ればアンカーを好きな位置に置ける＝小節に固定せず、
    発射の直後の拍境界から鳴らし始められる（速く打ち終われば速く再生も終わる）。 */
-function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
+function _kingBuildSequence(forced, gain, flights) {
   if (!audioCtx || _bgmRateRamping()) return false; // レートランプ中は将来位置を外挿できない
   /* 打ち込みの起点が定まらないまま進んだトライ（戦闘開始直後のテープ演出中に
      叩き切った場合）は、記録した位置がレート変動下の値で相対間隔が歪んでいる。
      そのまま再生すると打ったリズムと違うものが鳴るので組まない */
   if (_king.recStartPos === null) return false;
   const nowPos = _bgmJudgePos();
-  /* 発射タップ（5打目）も他の4打と同じ扱いでリズムに参加させる。
-     一度「4射目までで決めてアクセントは次の拍境界へ置く」方式にしたが、ユーザー判断で
-     元へ戻した。強制発射にはタップが無いので、その瞬間を5打目の位置として使う */
-  const accentPosRaw = forced ? _bgmJudgePos() : _bgmJudgePos(inputPerfMs);
-  if (nowPos === null || accentPosRaw === null) return false;
+  if (nowPos === null) return false;
   const rec = _king.rec.filter(r => r.pos !== null);
   if (rec.length === 0) return false;
-  /* 再生開始アンカー: 発射タップのBGM1拍後（KING_SEQ_PLAY_DELAY_BEATS）に最も近い
-     16分スロット。以前は「拍境界へ切り上げ」だったが、拍は329ms間隔なので発射タップの
-     位置が20ms違うだけで待ちが164ms→473msと跳ねていた。次に「最低リードの先の16分」に
-     したところ103〜164msで今度は間が足りなくなった。1拍固定＋グリッド丸めなら、
-     待ちは常にほぼ1拍で安定し、かつ全打点が絶対16分グリッドの上に残る */
-  const anchor = Math.round((nowPos + BGM_BEAT * KING_SEQ_PLAY_DELAY_BEATS) / KING_SEQ_QUANT);
+  /* ── コール＆レスポンス: 打ち込みが占めた小節の、次の同じ枠へ返す ──
+     ユーザー要望「コール＆レスポンスみたいにしたい。撃ったタイミングが
+     レスポンスとして再現されて返ってくる」。
+
+     間隔が合っているだけでは「返ってきた」と感じられない。耳が2つを照合できるのは
+     **キック/和太鼓に対して同じ場所に鳴った**ときなので、レスポンスの各音がコールの
+     対応する音と小節内で同じ位置に落ちる必要がある。そこで:
+       コール開始（recStartPos、必ず小節境界）
+         → コールが占めた小節数 callBars ぶん後ろの小節境界がレスポンス開始
+         → 各音は「コール1打目の小節内位置(leadIn) + 打ち込みの相対オフセット」
+         → レスポンスが終わった次の小節境界がアクセント（＝次のコールの1拍目）
+     leadIn は1打目の絶対位置ではなく**小節内の位置**だけを引き継ぐ。序盤は正解文字を
+     待って何小節も空けるので、絶対位置ごと持ってくると先頭に死んだ間が入る。
+     小節内位置さえ揃えば照合には十分。 */
+  const callStart = _king.recStartPos;
+  const barSlots = KING_SEQ_BAR_SLOTS;
+  const firstSlot = Math.round((rec[0].pos - callStart) / KING_SEQ_QUANT);
+  const leadIn = ((firstSlot % barSlots) + barSlots) % barSlots;
+  const callSlots = Math.max(0, Math.round((rec[rec.length - 1].pos - callStart) / KING_SEQ_QUANT));
+  const callBars = Math.max(1, Math.ceil(callSlots / barSlots));
   /* ── 打ち込んだ「相対的な間隔」から意図したビートシーケンスを読み取る ──
      実機評価「打ち込んだリズムと違うリズムが再生される」「複数の音が同じタイミングに
      集約されすぎる」「ンタタンタタンのようなリズムが上手く再生されない」への対応。
@@ -8654,7 +8675,8 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
 
      各間隔は最低1スロット空ける（Math.max(1, ...)）。これで異なるタップが同じ時刻へ
      集約されることが構造的に起きなくなる。
-     発射タップも他の4打と区別せず並べる（「4射目までで決める」方式は撤回済み）。
+     並べるのは4打のみ。5打目（発射）は廃止され、締めのアクセントはプレイヤーの
+     タップではなく小節境界に置かれるようになった。
      OK以下のタップ（ビームも焦げ跡も出ない）も時間としては間隔を持つので、
      markRef の有無に関わらず全タップを並べる。
 
@@ -8662,8 +8684,7 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      性質は無くなる。再生はプレイヤーの絶対位置ではなくパターンの内部構造の再構成に
      なったため。採点（こんがり%）とベロシティは従来どおり生のタイミングで決まるので、
      報酬構造には影響しない。 */
-  const taps = rec.map(r => r.pos); taps.push(accentPosRaw);
-  const gapMaxPos = KING_SEQ_GAP_MAX * KING_SEQ_QUANT;
+  const taps = rec.map(r => r.pos);
   const raw = [];
   for (let i = 1; i < taps.length; i++) raw.push(Math.max(0, taps[i] - taps[i - 1]));
   const off = [0];
@@ -8679,17 +8700,22 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
        打ったものをそのまま量子化する一本道に戻す。 */
     for (const g of _kingSeqFitGaps(raw)) off.push(off[off.length - 1] + g);
   }
-  const accentOff = off[off.length - 1]; // 5打目＝読み取った比のまま
-  /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
-  const scale = accentOff > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / accentOff : 1;
-  /* 再生位置（スロット単位・小数可）。KING_SEQ_PLAY_SCALE は現在1＝等速なので、
-     通常ここは隙間クランプ後のオフセットをそのまま返す。整数へ丸め直さないのは、
-     保険クランプ（scale<1）が効いたときに16分で捉えた分解能を潰さないため
-     （秒へ変換して予約するので小数のままでよい） */
+  /* レスポンスの長さは上限（KING_SEQ_SPAN_SLOTS＝2小節）で頭打ちにする。
+     序盤は正解文字を探して何小節もかかるので、そのまま同じ長さで返すとトライが
+     倍の長さになる。上限内なら scale=1＝等倍でそのまま返る（＝終盤ほど
+     「打ったものがそのまま返ってくる」が強くなる） */
+  const noteSpan = off[off.length - 1];
+  const scale = noteSpan > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / noteSpan : 1;
   const mapOff = o => o * scale * KING_SEQ_PLAY_SCALE;
+  /* レスポンス開始＝コールが占めた小節数ぶん後ろの小節境界。予約が間に合わない
+     （コールを閉じた瞬間が境界の直前だった）場合は1小節ずつ後ろへ送る */
+  let respStartSlot = Math.round(callStart / KING_SEQ_QUANT) + callBars * barSlots;
+  const minSlot = (nowPos + KING_SEQ_RESPONSE_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT;
+  while (respStartSlot + leadIn < minSlot) respStartSlot += barSlots;
+  const slotAt = o => (respStartSlot + leadIn + mapOff(o)) * KING_SEQ_QUANT;
   const events = [];
   for (let i = 0; i < rec.length; i++) {
-    const at = _bgmBufPosToCtxTime((anchor + mapOff(off[i])) * KING_SEQ_QUANT);
+    const at = _bgmBufPosToCtxTime(slotAt(off[i]));
     if (at === null) return false;
     /* OK以下（グレー）のタップは焦げ跡もビームも出ない（加点しないというバランス仕様）。
        以前はそのスロットを完全に無音にしていたが、叩いた拍にそのまま穴が空くため
@@ -8705,24 +8731,22 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
     }
     events.push({ at, kind: 'impact', f: rec[i].flight, quiet, vol });
   }
-  /* 5音目（アクセント）。ここが次のトライの開始と同じ瞬間になる（ユーザー選択:
-     死に時間をゼロにして、アクセントがそのまま次の「1」になる）。そのため次トライの
-     バッテリー起点として位置も持たせる。
-     隙間が詰まった打ち込みは KING_SEQ_GAP_MAX の倍数＝拍の整数倍になるので次トライの
-     目盛りも拍から刻まれるが、詰まっていない（速い）打ち込みではプレイヤー自身の
-     置き方がそのまま残るため拍から外れうる。ずれるのはバッテリー表示の刻みの位相
-     だけで、打ち込みの記録は生の位置（_bgmJudgePos）なので影響しない。
+  /* アクセント（爆発）＝レスポンスが終わった次の小節境界。ここが次のコールの
+     1拍目にもなるので、コールとレスポンスが途切れずに回り続ける。
+     以前は5打目（発射タップ）の位置だったため、詰めて押すと爆発が4打目に張り付き、
+     「4連射 → 間 → 爆発」の形が打ち方次第で崩れていた。小節境界に置けば毎回同じ形になる。
+     次トライのバッテリー起点（recStartPos）もこの位置＝必ず小節境界になる。
      焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
      不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
-  const accentPos = (anchor + mapOff(accentOff)) * KING_SEQ_QUANT;
+  const respSlots = leadIn + mapOff(noteSpan);
+  const respBars = Math.max(1, Math.ceil(respSlots / barSlots));
+  const accentPos = (respStartSlot + respBars * barSlots) * KING_SEQ_QUANT;
   const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
-  /* forced（バッテリー切れの自動発射）は「5音目を叩かなかった」ということなので
-     アクセントを鳴らさない。実機評価「こんがりの後にもう一回アクションが必要なことが
-     伝わりにくい。バッテリーが0になって自動発射されるので、それが標準の発射トリガーかの
-     ように勘違いされる」への対応。従来は待っていても叩いた場合と完全に同じ音・同じ%が
-     得られており、タップする理由が音でも数字でも示されていなかった。
-     こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」で出す */
+  /* forced（バッテリー切れで最後の的が自動確定した試技）はアクセントを鳴らさない。
+     こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」で出す。
+     発射トリガーがあった頃は「5音目を叩かなかったから」が理由だったが、廃止後も
+     「自分でコールを閉じたか、時間切れで閉じられたか」の差として意味が残る */
   /* dud=この試技のダメージがゼロ（＝焦げ跡を1つも作れなかった＝4タップ全てOK止まり）。
      以前は events.length === 0 で見ていたが、OK以下のタップにも小音量の着弾イベントを
      置くようにした時点で常に false になっていた（穴だったのを修正）。焦げ跡の有無は
@@ -8734,13 +8758,15 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      masterGain出力のセーフティリミッターが歪みを防ぐ */
   events.sort((a, b) => a.at - b.at);
   if (_SEQ_DEBUG) {
-    const beat = BGM_BEAT / _bgmRateTo * 1000, ms = KING_SEQ_QUANT / _bgmRateTo * 1000;
+    const beat = BGM_BEAT / _bgmRateTo * 1000;
     const outSlots = []; for (let i = 1; i < off.length; i++) outSlots.push(off[i] - off[i - 1]);
     console.log('[seq] 打ち込み(ms)', raw.map(x => Math.round(x / _bgmRateTo * 1000)).join(','),
                 '= 拍', raw.map(x => (x / _bgmRateTo * 1000 / beat).toFixed(2)).join(','),
                 '→ 再生(スロット)', outSlots.join(','),
                 '= 拍', outSlots.map(v => (v / KING_SEQ_DIV).toFixed(2)).join(','),
-                '/ 音数', events.filter(e => e.kind === 'impact').length + 1,
+                '| コール', callBars + '小節(先頭' + leadIn + 'スロット目)',
+                '→ レスポンス', respBars + '小節', scale < 1 ? '(×' + scale.toFixed(2) + '圧縮)' : '(等倍)',
+                '/ 音数', events.filter(e => e.kind === 'impact').length,
                 '/ うち小音量', events.filter(e => e.quiet).length);
   }
   /* 焼き込みを5音目まで遅らせる印（_stickKingChar参照）。シーケンスを組めた場合に
@@ -8945,18 +8971,26 @@ function _kingBatteryCheck() {
   if (_king.attemptFired) return; // 打ち込みが終わっていれば無関係
   if (_king.recStartPos === null) {
     /* 戦闘開始直後はテープ演出のレートランプ中で位置が引けない。使えるようになった
-       最初のフレームで、直近の拍境界を起点として打つ */
+       最初のフレームで、直近の**小節境界**を起点として打つ。コール＆レスポンスの枠は
+       すべて recStartPos からの小節数で決まるので、ここが拍境界だと枠が小節から外れる */
     const pos = _bgmJudgePos();
-    if (pos !== null && !_bgmRateRamping()) _king.recStartPos = Math.floor(pos / BGM_BEAT) * BGM_BEAT;
+    if (pos !== null && !_bgmRateRamping()) {
+      const bar = KING_BAR_DUR();
+      _king.recStartPos = Math.floor(pos / bar) * bar;
+    }
     return;
   }
   if (_kingBatteryLeft() > 0) return;
+  /* 残りの的を自動確定する。4本目の _kingReelShoot がそのままコールを閉じる
+     （_kingFireAttack を別途呼ぶ必要はない） */
   while (_king.reelIdx < 4) _kingReelShoot(null, true);
-  _kingFireAttack(null, true);
 }
 
-/* 次トライの解放。再生が終わり（ハズレなら4体が画面外へ消え切り）、その後の
-   最初の拍境界で的を回し直す。速く打ち終われば速く再生が終わり、速く次へ進む */
+/* 次トライの解放。レスポンスが終わり（ハズレなら4体が画面外へ消え切り）、その後の
+   最初の**小節境界**で的を回し直す。速く打ち終われば速くレスポンスが終わり、速く次へ進む。
+   当たりの場合はアクセント（爆発）が次のコールの1拍目を兼ねるのでここは通らず、
+   _kingSeqAccent から直接 _kingStartTrial が呼ばれる。ここを通るのはハズレ経路と、
+   音声の時計が使えずシーケンスを組めなかった場合 */
 function _kingTrialGate() {
   if (!_king.attemptFired || _king.pendingDefeat || _king.pendingVictory) return;
   if (_king.seqEvents.length > 0) return; // 再生中
@@ -8972,8 +9006,10 @@ function _kingTrialGate() {
     return;
   }
   if (_king.nextTrialPos === null) {
-    const s = _kingSeqBeatUp(Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
-    _king.nextTrialPos = s * KING_SEQ_QUANT; // 拍境界へ揃える（バッテリーの目盛りが裏拍で刻まれないように）
+    /* 小節境界へ揃える。コール＆レスポンスの枠は recStartPos からの小節数で決まるので、
+       ここが拍境界だと以降の枠がすべて小節から外れる（バッテリーの目盛りも同様） */
+    const sl = _kingSeqBarUp(Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
+    _king.nextTrialPos = sl * KING_SEQ_QUANT;
   }
   if (pos >= _king.nextTrialPos) _kingStartTrial(_king.nextTrialPos);
 }
@@ -9574,22 +9610,8 @@ function drawBossBattle() {
     drawKingReelShatter();
   }
   drawKingCookGauge();
-  /* 4本マーク済み＝あと1回タップすれば発射、という入力要求を明示する。
-     帯電スパークは環境演出であって「入力を求めている」表示ではなく、しかも時間切れの
-     自動発射で結果が出てしまうため「待てば進む」と学習されやすかった（実機評価）。
-     CONTINUE等で使っている既存の下部ピルを流用する（プレイヤーが既に「次のアクションを
-     求める表示」として知っている形）。位置はこんがりゲージの上、拍で脈打たせて
-     5打目のタイミングの手掛かりも兼ねる */
-  if (phase === 'boss' && _king.awaitingFire) {
-    /* 置き場所は「的の結果文字の下端」と「こんがりゲージの上端」の間の空き帯。
-       画面下端そのままだとゲージに、既定の余白だと結果文字に重なる（縦画面で実測6px）。
-       帯の中央へ置き、狭い場合でも結果文字だけは隠さないよう下側へ寄せる */
-    const gaugeTop = IS_PORTRAIT ? P_BAR_Y : KING_GAUGE_Y;
-    const resultBottom = _king.reels[0].y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT;
-    const bh = (IS_PORTRAIT ? 13 : 14) + 14; // _drawBottomPillBadge の fs + padY*2
-    const by = Math.max(resultBottom + 2, (resultBottom + gaugeTop) / 2 - bh / 2);
-    _drawBottomPillBadge('発射', H - by - bh, getBeatPulse());
-  }
+  /* 発射バッジは廃止。4本マーク後にもう一度タップさせる方式そのものを無くしたので、
+     「あと1回必要」を伝える表示自体が不要になった（_kingReelShoot参照） */
 }
 
 /* こんがりゲージ: BETバーと同じ位置・寸法（戦闘中はBETバーを非表示にして差し替える） */
@@ -13319,7 +13341,7 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'boss') {
-    if (_king && _king.awaitingFire) _kingFireAttack(inputPerfMs); else _kingReelShoot(inputPerfMs);
+    _kingReelShoot(inputPerfMs); // 4打目で自動的にコールが閉じる（発射入力は廃止）
     return;
   }
   if (phase === 'bossShatter') {
