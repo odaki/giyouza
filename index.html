@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.71';
+const VERSION = 'v6.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -914,6 +914,9 @@ const KING_GAIN_SMALL          = 0;   // 小当たり（ギヨウザが出ない
 const MEDIUM_EFFECT_GYOZA_N    = 20;
 /* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
 const _KING_DEBUG = _dbgNum('king');
+/* ?seqdbg … 打ち込み→再生の変換を1トライごとにコンソールへ出す（実機で「打った通りに
+   ならない」を追うため。パラメータ無しでは一切動かない） */
+const _SEQ_DEBUG = _DBG_QUERY.has('seqdbg');
 /* 虹色インデックス: performance.now()ベース、約6秒で一周（GCゼロ） */
 function _rainbowIdx() { return ((performance.now() / 50) | 0) % 120; }
 /* _syncBarColor 用カラーテーブル: 64段階 × 各レンジの rgb 文字列をキャッシュ */
@@ -2649,9 +2652,9 @@ function _playKingHat(ctx, t, dest, open = false) {
   playNoise(ctx, t, 0.28,  v * 0.55, 7000, d); // 開いた尾
 }
 
-function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1) {
+function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1, vol = 1) {
   const d = _seDest(ctx, dest);
-  const v = accent ? 1.35 : 1;   // ACCENT = レベル
+  const v = (accent ? 1.35 : 1) * vol;   // ACCENT = レベル
   const k = Math.max(KING_BEAM_MIN_DECAY, Math.min(1, decay));
   /* ピッチスイープはスネアの胴の性格そのものなので、詰めるときも潰しすぎない
      （下限を設けて「カッ」という芯を残す） */
@@ -7546,18 +7549,19 @@ const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節
    切り詰める。実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分が
    ある形（例: 隙間 2,56,4,6 → 2,4,4,4）は保たれる。
 
-   当初2拍にしていたが、実機評価「入力完了から再生までの間が長く感じる」の分析で
-   1拍へ下げた。序盤は隙間が全部上限に張り付くので、2拍だと1発目と2発目の間が
-   657.9msも空き、1発鳴っただけでは沈黙と区別が付かない＝「再生が始まった」と
-   認識できるまでに 発射→1発目 に加えてもう658msかかっていた（合計で最大1131ms。
-   ユーザーの体感「最大1秒くらい」と一致する）。1拍なら328.9msでパターンが読める。
+   2拍→1拍→4拍と動かした。1拍まで下げていたのは「再生が始まったと分かるまでが長い」
+   という評価への対応だったが、それが致命的だった。
 
-   終盤の忠実さは損なわれない: 終盤は的が狙いやすく隙間がほぼ1拍未満なのでクランプに
-   掛からず、打ったとおりに鳴る。潰れるのは序盤の「文字が回ってくるのを待っていた
-   時間」だけで、そこは元々リズムの意図ではない。
-   拍の整数倍なので、詰まった隙間は必ず拍の上に乗る（全部詰まったパターンが裏拍へ
-   散らからず素直な均等パルスになる＝「ただ待っていた」ことが平板な音で伝わる）。 */
-const KING_SEQ_GAP_MAX = 1 * KING_SEQ_DIV;
+   実機評価「バスドラムのビートにだけのって打ち込んでいるのに、そのビートが後半
+   再現されずストレス」で判明: ボス戦のキック（BGM_KICK_BOSS）は全拍に入っているので、
+   キックに乗せて叩くと間隔は必ず拍の整数倍（1拍・2拍・3拍…）になる。ところが
+   正解文字が来るまで見送るぶん、実際の間隔は2拍・3拍が普通に出る。上限が1拍だと
+   それが全部1拍へ潰れ、叩いたキックのパターンが均等な4分打ちに化けていた。
+   これが「打った通りに再生されない」「勝手なリズムパターンに置き換えられる」の正体。
+
+   4拍あれば、キックを1つ〜3つ見送ったパターンまでそのまま表現できる。長い待ちを
+   詰める役目は残り、4拍を超える放置だけが頭打ちになる。 */
+const KING_SEQ_GAP_MAX = 4 * KING_SEQ_DIV;
 /* 再生スパンの上限。5タップ＝隙間4つなので上限は KING_SEQ_GAP_MAX×4＝16スロット
    ＝4拍＝1.32秒。KING_SEQ_GAP_MAX が効いていれば超えないため通常は発火しない保険
    （上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
@@ -7575,22 +7579,6 @@ const KING_HAT_ACCENT = 1.3;
    起こす（打点は必ず16分の整数倍という不変条件が崩れる）ため、グリッドへ乗せる側を
    優先する。ずれは最大±41ms（16分の半分）。 */
 const KING_SEQ_PLAY_DELAY_BEATS = 1;
-/* 打ち込みの当てはめ方（_kingBuildSequence 参照）を決める重み。
-   的の正解文字エリアが広がるほど「狙って置ける」ようになるが、これは段階的に進むので
-   閾値で切り替えず、2つの当てはめ方（形だけ残す／テンポを再現する）を混ぜる比率にする。
-   ユーザーの体感:
-     25%（初期）… 正解が回ってくるのを待つだけ。リズムの意図は乗らない
-     33%        … だんだん意図通りに打ち込めることが増えていく
-     66%        … まずまず意図通り
-     97%        … ほぼ意図通り
-     99%超      … 意図通り
-   これを LO=0.33 → 0、HI=0.97 → 1 の線形で近似する（66%で0.52＝「まずまず」に相当）。
-   KING_SEQ_SPREAD_LIMIT: 配分が育っていなくても、最長／最短の比がこれ以下ならその
-     トライは実際にリズムとして叩けていたということなので、重みを1（テンポ再現）にする。
-     意図して刻む範囲は16分〜4分＝4倍程度なので、少し余裕を見た値。 */
-const KING_SEQ_AIM_LO       = 0.33;
-const KING_SEQ_AIM_HI       = 0.97;
-const KING_SEQ_SPREAD_LIMIT = 5;
 /* スネアのチョーク（_playKingBeamHit の decay 引数）。
    減衰倍率 = 次の音までの間隔 ÷ KING_BEAM_CHOKE_REF（上限1）。
    この値は「鳴っている実長」ではなく効き具合を決める基準値であることに注意。
@@ -7601,6 +7589,11 @@ const KING_SEQ_SPREAD_LIMIT = 5;
    ピークは decay を詰めても 0.44→0.38 とほぼ保たれるので、打撃の芯は残る。
    KING_BEAM_MIN_DECAY は詰まりすぎたときの下限。 */
 const KING_BEAM_CHOKE_REF  = 0.42;
+/* OK以下（グレー）のタップを再生で鳴らすときの音量倍率。加点も焦げ跡も無い扱いは
+   変えないまま、叩いた拍が無音で抜けないようにするためだけの音（実機評価
+   「グレーOKのはずれでも何か音は鳴らしてフィードバックしたい。ごく小さくスネアを
+   鳴らすとか」）。命中との差が一聴で分かる程度に小さくする */
+const KING_BEAM_QUIET_VOL  = 0.3;
 const KING_BEAM_MIN_DECAY  = 0.25;
 /* 再生タイミングの倍率＝1（打ち込んだ間隔をそのまま鳴らす）。
 
@@ -8186,27 +8179,16 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   for (let i = 1; i < taps.length; i++) raw.push(Math.max(0, taps[i] - taps[i - 1]));
   const off = [0];
   if (raw.length > 0) {
-    /* 「どこまで狙って置けていたか」を重み t（0〜1）にして、2つの当てはめを混ぜる。
-       ・的の配分（原因側の指標）: 正解文字のエリアが広いほど待たされずに押せる。
-         段階的に効くので閾値ではなく線形の重みにする（KING_SEQ_AIM_LO/HI 参照）
-       ・間隔のばらつき（症状側の指標）: 配分が育っていなくても、そのトライで実際に
-         リズムとして叩けていたなら t=1 にして尊重する
-       t=0 なら長短の段だけ（序盤）、t=1 ならテンポ再現（終盤）、間はその中間。 */
-    const aim = _king.charWeights.reduce((a, w, i) => a + w[KING_TARGET[i]], 0) / 4 / 100;
-    const rmin = Math.max(Math.min(...raw), 1e-6);
-    const spread = Math.max(...raw) / rmin;
-    const t = spread <= KING_SEQ_SPREAD_LIMIT ? 1 : Math.max(0, Math.min(1,
-      (aim - KING_SEQ_AIM_LO) / (KING_SEQ_AIM_HI - KING_SEQ_AIM_LO)));
     /* 上限クランプは _kingSeqFitGaps の中で「倍率を下げる」形で掛かるので、ここでは
        生の間隔を渡す。先にクランプすると比を読む前に長い音が潰れる（例: タ=200msで
-       1:2 を叩くと 400ms が上限329msへ落ちて 1:1.64 に見え、2:3 と誤読されていた） */
-    const fit   = _kingSeqFitGaps(raw);
-    const shape = _kingSeqShapeGaps(raw, rmin);
-    for (let i = 0; i < fit.length; i++) {
-      const g = Math.max(1, Math.min(KING_SEQ_GAP_MAX,
-        Math.round(fit[i] * t + shape[i] * (1 - t))));
-      off.push(off[off.length - 1] + g);
-    }
+       1:2 を叩くと 400ms が上限329msへ落ちて 1:1.64 に見え、2:3 と誤読されていた）。
+
+       一時期ここに「序盤は長短の段だけ残す」対数モードと、的の配分に応じた混合を
+       入れていたが撤去した。上限を4拍へ広げたことで長い待ちもそのまま表現できるように
+       なり、段階化しなくても長短は残る。それ以上に、推定で作った別パターンへ置き換わる
+       ことが「打った通りに再生されない」という評価の主因になっていたため、
+       打ったものをそのまま量子化する一本道に戻す。 */
+    for (const g of _kingSeqFitGaps(raw)) off.push(off[off.length - 1] + g);
   }
   const accentOff = off[off.length - 1]; // 5打目＝読み取った比のまま
   /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
@@ -8218,15 +8200,20 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   const mapOff = o => o * scale * KING_SEQ_PLAY_SCALE;
   const events = [];
   for (let i = 0; i < rec.length; i++) {
-    /* OK以下のタップは焦げ跡もビームも無い（既存仕様）＝そのスロットは無音になり、
-       打ち込んだパターンに穴が開く。雑に叩くとリズムが歯抜けになるという形で
-       精度が音に出る */
-    if (!rec[i].flight.markRef) continue;
     const at = _bgmBufPosToCtxTime((anchor + mapOff(off[i])) * KING_SEQ_QUANT);
     if (at === null) return false;
-    /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
-    events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: rec[i].flight });
-    events.push({ at, kind: 'impact', f: rec[i].flight });
+    /* OK以下（グレー）のタップは焦げ跡もビームも出ない（加点しないというバランス仕様）。
+       以前はそのスロットを完全に無音にしていたが、叩いた拍にそのまま穴が空くため
+       「打ち込んだビート通りにならない」原因になっていた。実機評価「グレーOKのはずれ
+       でも何か音は鳴らしてフィードバックしたい。ごく小さくスネアを鳴らすとか」に沿って、
+       音だけ小さく鳴らす。加点しない・焦げ跡も付かないという扱いは変えないので、
+       バランスはそのままにリズムの形だけが完全になる */
+    const quiet = !rec[i].flight.markRef;
+    if (!quiet) {
+      /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
+      events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: rec[i].flight });
+    }
+    events.push({ at, kind: 'impact', f: rec[i].flight, quiet });
   }
   /* 5音目（アクセント）。ここが次のトライの開始と同じ瞬間になる（ユーザー選択:
      死に時間をゼロにして、アクセントがそのまま次の「1」になる）。そのため次トライの
@@ -8245,6 +8232,16 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      という原則を全イベントに一様に適用する）。同時発音は振幅が重なるが、
      masterGain出力のセーフティリミッターが歪みを防ぐ */
   events.sort((a, b) => a.at - b.at);
+  if (_SEQ_DEBUG) {
+    const beat = BGM_BEAT / _bgmRateTo * 1000, ms = KING_SEQ_QUANT / _bgmRateTo * 1000;
+    const outSlots = []; for (let i = 1; i < off.length; i++) outSlots.push(off[i] - off[i - 1]);
+    console.log('[seq] 打ち込み(ms)', raw.map(x => Math.round(x / _bgmRateTo * 1000)).join(','),
+                '= 拍', raw.map(x => (x / _bgmRateTo * 1000 / beat).toFixed(2)).join(','),
+                '→ 再生(スロット)', outSlots.join(','),
+                '= 拍', outSlots.map(v => (v / KING_SEQ_DIV).toFixed(2)).join(','),
+                '/ 音数', events.filter(e => e.kind === 'impact').length + 1,
+                '/ うち小音量', events.filter(e => e.quiet).length);
+  }
   _king.seqEvents = events;
   _kingSeqScheduleAudio(events);
   return true;
@@ -8266,9 +8263,12 @@ function _kingSeqScheduleAudio(events) {
       else       _playKingBeamHit(audioCtx, e.at, null, true, 1);
       continue;
     }
-    /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める */
+    /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める。
+       quiet（OK以下のタップ）はビームも焦げ跡も無いので、リズムを欠けさせないための
+       ごく小さいスネアだけを鳴らす（KING_BEAM_QUIET_VOL 参照） */
     const gap = i + 1 < hits.length ? hits[i + 1].at - e.at : Infinity;
-    _playKingBeamHit(audioCtx, e.at, null, false, gap / KING_BEAM_CHOKE_REF);
+    _playKingBeamHit(audioCtx, e.at, null, false, gap / KING_BEAM_CHOKE_REF,
+                     e.quiet ? KING_BEAM_QUIET_VOL : 1);
   }
 }
 
@@ -8290,9 +8290,15 @@ function _kingSeqFitGaps(d) {
   for (const x of d) {
     for (let k = 1; k <= KING_SEQ_GAP_MAX; k++) {
       const b = x / k;
-      if (b <= 1e-6) continue;
+      /* 単位を細かく取るほど誤差は下がる（極端には b→0 で誤差0）ので、そのまま
+         最小化すると必ず最も細かい解が勝ち、比が無意味に大きくなる。実測でも
+         1拍×4を30msのブレ込みで叩くと b≈27ms・11スロット刻みが選ばれ、再生が
+         2.75拍×4へ膨張していた。2つで抑える:
+         ・16分より細かい単位は候補にしない（人がそれ以下を刻み分けることはない）
+         ・誤差は b で正規化する＝「推定した拍に対して何割ずれているか」で比べる */
+      if (b < KING_SEQ_QUANT * 0.9) continue;
       const r = d.map(v => Math.max(1, Math.min(KING_SEQ_GAP_MAX, Math.round(v / b))));
-      const err = d.reduce((a, v, i) => a + Math.abs(v - r[i] * b), 0);
+      const err = d.reduce((a, v, i) => a + Math.abs(v - r[i] * b), 0) / b;
       if (best === null || err < best.err - 1e-9) best = { err, b, r };
     }
   }
@@ -8317,25 +8323,6 @@ function _kingSeqFitGaps(d) {
   return best.r.map(v => v * u);
 }
 
-/* 序盤モード: 長短の「段」だけ残す。rawは上限クランプ前の間隔（秒）。
-
-   的が狙いにくいうちは「正解文字が回ってくるのを待つ」ことが主眼になるので、間隔の差は
-   ジッタと呼べる範囲を超えて桁で違う（実機評価「数十倍もの誤差がある前提をおく必要が
-   ある」）。長さを再現しても意味が無いうえ、上限クランプに掛けると長い隙間が全部同じ値へ
-   潰れて長短の区別＝雰囲気まで消える。
-   そこで最短の隙間を基準に「何倍か」を対数で段階化し、16分・8分・4分の3段だけへ割り当てる。
-   テンポの再現は捨て、どれが長くてどれが短かったかの順序と段差だけを残す
-   （ユーザーの狙い:「あれ、打ち込んだタイミングと再生パターンは相関があるのかな？と
-   なんとなく気づければよい」）。
-   1段の幅が2倍なので数十倍の差も3段に収まり、最長でも4スロット＝1拍なので再生の長さは
-   通常モードと同じ上限（16スロット＝1.32秒）に収まる。
-
-   なお「フィット誤差から意図の有無を推定する」案はシミュレーションで否定済み:
-   上限クランプされた間隔はちょうど格子上の値になるため、序盤（意図なし）のほうが誤差が
-   小さく出てしまい（中央値0.000 対 意図ありの0.034〜0.082）、指標として逆に働く。 */
-function _kingSeqShapeGaps(raw, rmin) {
-  return raw.map(x => 1 << Math.max(0, Math.min(2, Math.round(Math.log2(x / rmin)))));
-}
 
 /* 予約済み再生イベントのうち、時刻が来たものを発火する（音は予約済みなので
    ここで進めるのは視覚と状態のみ）。_updateBossBattle から毎フレーム呼ぶ */
