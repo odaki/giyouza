@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.93';
+const VERSION = 'v6.94';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2878,16 +2878,25 @@ function _playKingHat(ctx, t, dest, open = false) {
 }
 
 /* コール→レスポンスの切り替えの合図（KING_CUE_VOL の定義部参照）。
-   TR-808 のハンドクラップの作り: 帯域を絞ったノイズに「複数人の手が僅かにずれて
-   叩く」3連のバーストを与え、そのあとに部屋鳴りの尾を引く。
-   バンドパスの中心はSE音程の規約どおり noteHz で取る（C6≒1047Hz。808の
-   クラップのおよそ1kHzという定番の位置がそのまま調（Aマイナー）の構成音に乗る）。
+   ハンドクラップの作り: 帯域を絞ったノイズに「複数人の手が僅かにずれて叩く」
+   3連のバーストを与え、そのあとに部屋鳴りの短い尾を引く。
+   フィルタは **ハイパス900Hz → バンドパス A6(1760Hz) Q0.9** の順。
+   実機評価「クラップの音が曇っている。リズムマシンのクラップはもっとカラッとして
+   カッとなるもの」への対応で、以前の bp(C6,Q2.2) → lp3200 から入れ替えた。
+   低中域(300〜700Hz)と抜け(2.5〜7kHz)のエネルギー比で測ると:
+     旧 bp+lp3200      : 3.08（＝低中域が抜けの3倍＝曇り）
+     ローパスを外すだけ: 1.89
+     hp900+bp(A6,0.9)  : 0.43
+   **曇りの主犯はローパスだった**。中域に寄せようとして足したものが、クラップの
+   「カッ」を作っている高域ごと削っていた。代わりに下を切ると箱鳴りが取れて抜けが
+   出る。帯域重心は1191Hz→2510Hzへ。尾も300ms→220msと詰めてカラッとさせた。
+   バンドパスの中心はSE音程の規約どおり noteHz で取る（A6＝調のルート）。
    playNoise はハイパス専用でバンドパスにできないため、ここだけ自前でグラフを組む
    （_playKingBlast と同じ作り。ライブのctxでは _disconnectAfter で後始末する） */
 function _playKingCue(ctx, t, dest) {
   const d = _seDest(ctx, dest);
   const v = KING_CUE_VOL;
-  const dur = 0.30;
+  const dur = 0.22;
   let buf;
   if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
     buf = _noiseBuffer;
@@ -2899,18 +2908,16 @@ function _playKingCue(ctx, t, dest) {
   }
   const src = ctx.createBufferSource();
   src.buffer = buf; src.loop = true;
+  /* 下を切って箱鳴り（曇りの正体）を落とす */
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 900;
+  hp.Q.value = 0.7;
+  /* 緩いバンドパスで中高域に山を作る。Qを立てると鳴きが出て手拍子に聴こえない */
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
-  bp.frequency.value = noteHz('C', 6);
-  bp.Q.value = 2.2;
-  /* バンドパスだけだと上側のスカートが広く、白色ノイズは高い方ほど帯域が広い分
-     エネルギーが乗るため重心が2kHz超まで持ち上がって「明るいノイズ」に聴こえる
-     （実測 Q1.5 単独で1486Hz）。ローパスで上を切ると1294Hzに落ち着き、
-     紙を叩くようなクラップの質感になる */
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 3200;
-  lp.Q.value = 0.7;
+  bp.frequency.value = noteHz('A', 6);
+  bp.Q.value = 0.9;
   const g = ctx.createGain();
   /* 3連のバースト（10msずつずらす）→ 部屋鳴りの尾。808の包絡そのもの。
      尾は必ずバーストより低い位置から始める: ここを高くすると打点が尾に飲まれ、
@@ -2922,12 +2929,12 @@ function _playKingCue(ctx, t, dest) {
     g.gain.setValueAtTime(v, bt);
     g.gain.exponentialRampToValueAtTime(v * 0.20, bt + 0.006);
   }
-  g.gain.setValueAtTime(v * 0.50, t + 0.030);
+  g.gain.setValueAtTime(v * 0.38, t + 0.030);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  src.connect(bp); bp.connect(lp); lp.connect(g); g.connect(d);
+  src.connect(hp); hp.connect(bp); bp.connect(g); g.connect(d);
   const stopAt = t + dur + 0.03;
   src.start(t); src.stop(stopAt);
-  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, bp, lp, g);
+  if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, bp, g);
 }
 
 function _playKingBeamHit(ctx, t, dest, accent = false, decay = 1, vol = 1) {
@@ -8078,18 +8085,13 @@ const KING_HAT_ACCENT = 1.3;
      タタタタ [パン] タンタンタンタン [ドン] タタタタ …
    と、枠の切れ目が必ず手拍子で示される。切り上げの待ち（最大1小節）が無音の
    まま放置されるのを埋める役目も兼ねる。
-   音色はTR-808のハンドクラップ（CP）に倣う。ノイズ系である点は打ち込み側の
-   ハイハットと同じ族だが、ハットが素のハイパスで上へ抜けるのに対しクラップは
-   バンドパスで中域に固まるため、聴き分けは容易。
-   帯域が1.3kHz付近に集中するので、同じ小節頭で鳴る和太鼓（コンガ440Hz＋
-   リムショット1760Hz）の隙間にちょうど入る。
-   値が他の *_VOL より1桁大きいのはバンドパスの損失を補うため。白色ノイズを
-   Q2.2で絞ると通過するのは帯域のごく一部なので、フィルタ後段でこれだけ持ち上げても
-   実測ピークは約1.2（着弾スネア1.23・爆発1.58と同水準）に収まる。
-   他の音量定数と直接比較できる数値ではない点に注意。
-   エネルギーは4打目のオープンハットの約3.3倍・着弾スネアの約0.4倍。単独で鳴る
-   位置なので他と competing しないが、爆発（レスポンス側の締め）は超えさせない。 */
-const KING_CUE_VOL = 5.5;
+   音色はリズムマシンのハンドクラップに倣う。ノイズ系である点は打ち込み側の
+   ハイハットと同じ族だが、ハットが素のハイパスで最上域まで抜けるのに対し、
+   クラップは下を切って中高域の塊にするので聴き分けられる。
+   値が他の *_VOL と桁が違うのはフィルタの損失を補う後段ゲインだから。
+   他の音量定数と直接比較できる数値ではない点に注意（実測ピークは約1.2〜1.5で
+   着弾スネア1.38・爆発1.43と同水準。ノイズが乱数なので焼くたびに振れる） */
+const KING_CUE_VOL = 2.8;
 /* 再生開始までの最低リード（秒）。コールを閉じた瞬間が小節境界の直前だった場合、
    そのまま次の小節境界をレスポンス開始にすると予約が間に合わない。足りなければ
    1小節ずつ後ろへ送る（_kingBuildSequence参照）。
