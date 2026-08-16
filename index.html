@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.74';
+const VERSION = 'v6.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4925,12 +4925,13 @@ function drawKingReel(w, active, idx) {
   ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
   ctx.fillStyle = Y; ctx.fill();
   ctx.restore();
-  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）
-     が必要なことを視覚的に伝える。発射（_kingFireAttack）でattemptFiredが
-     立つと消える */
-  if (w.locked && _king && !_king.attemptFired) _drawKingReelCharge(px, py, idx);
-  /* 撃った直後は帯電の代わりに放電を出す（消えるだけにしない。_drawKingReelDischarge参照） */
-  else if (w.locked && _kingFireFlash > 0) _drawKingReelDischarge(px, py, idx);
+  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）が必要な
+     ことを視覚的に伝える。消えるのは「その的のビームが実際にマークへ飛んだ瞬間」
+     （実機要望: 発射タイミングで一斉に消えていたが、本当にビームが飛ぶまで維持したい）。
+     再生では的ごとに撃つ時刻がずれるので、順に消えていく */
+  if (w.locked && _king && !_king.reelBeamed[idx]) _drawKingReelCharge(px, py, idx);
+  /* 発射タップの瞬間の放電はそのまま重ねて出す（帯電の有無とは独立） */
+  if (w.locked && _kingFireFlash > 0) _drawKingReelDischarge(px, py, idx);
   /* 当たった文字は的の下に表示（ロック前は何も出さない） */
   if (w.result) {
     ctx.save();
@@ -7831,6 +7832,10 @@ function _initBossBattle() {
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
        nextTrialPos: 次トライを開始するバッファ位置（拍境界）。nullなら未予約 */
     rec: [], recStartPos: null, seqEvents: [], nextTrialPos: null,
+    /* 的スロット単位「その的のビームがもう飛んだか」。帯電スパークをいつ消すかに使う
+       （drawKingReel参照）。再生では的ごとに時刻がずれて撃たれるので、発射タップで
+       一斉に消すのではなく、実際にビームが出た的から順に消す */
+    reelBeamed: [false, false, false, false],
   };
   _kingLasers = [];
   _kingCharFlights = [];
@@ -8086,6 +8091,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
       _kingApplyGain(gain);
       _kingApplyBeams(thisAttempt);
       for (const f of thisAttempt) f.resolve = 'stick';
+      _king.reelBeamed = [true, true, true, true]; // 再生が無いので帯電はここで止める
       return;
     } else {
       /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
@@ -8115,6 +8121,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
        ハズレは再生シーケンスを作らず、従来どおり即座に4体へ結果を伝える */
     _king.resultMatched = false;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（音声が無い場合のフォールバック用）
+    _king.reelBeamed = [true, true, true, true]; // ハズレはビームが飛ばないので帯電はここで止める
     /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先は
        スポーン時から確定済みのためここでの位置変更は不要（そこから跳ね返る）。
        ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が
@@ -8357,6 +8364,8 @@ function _kingSeqStep() {
 }
 
 function _kingSeqFire(e, flush) {
+  /* その的のビームが飛んだ（or 音だけのタップが鳴った）時点で帯電スパークを止める */
+  if (e.f && _king.reelBeamed) _king.reelBeamed[e.f.reelIdx] = true;
   if      (e.kind === 'shot')   _kingFireBeam(e.f);
   /* resolve を立てるだけにして実際の着地は _updateKingCharFlights に委ねる。
      直接 _stickKingChar を呼ぶと、まだ飛翔中（'fly'）の文字が瞬間移動する */
@@ -8381,6 +8390,8 @@ function _kingSeqAccent(e, flush) {
   /* 鳴らす対象が無かった飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
      画面に残し続ける理由が無いため */
   for (const f of e.flights) if (f.resolve === null) f.resolve = 'stick';
+  /* 記録が無く再生イベントを持たない的（強制発射の自動確定分）の帯電もここで止める */
+  if (_king.reelBeamed) _king.reelBeamed = [true, true, true, true];
   if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら全身リアクションもしない
     _kingApplyGain(e.gain);
     _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
@@ -8466,6 +8477,7 @@ function _kingStartTrial(startPos) {
   _king.resultTimer = null;
   _king.missAttemptToken = null;
   _king.nextTrialPos = null;
+  _king.reelBeamed = [false, false, false, false];
   _king.recStartPos = startPos; // バッテリーの起点（nullなら_kingBatteryCheckが後から打つ）
 }
 
