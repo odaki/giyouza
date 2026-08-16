@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.94';
+const VERSION = 'v6.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1251,6 +1251,10 @@ let syncRateAboveCount = 0; // syncRate≥0.5が連続した射撃数（表示ON
 let syncRateBelowCount = 0; // syncRate<0.5が連続した射撃数（表示OFF判定用）
 const SYNC_VISIBLE_THRESHOLD = 4; // この射数以上連続でsyncRate≥0.5ならUI表示ON/OFF
 let bestCoins; // ハイスコア
+/* MUSICボーナス（syncChain＝連続GOOD以上の連鎖）の自己ベスト。エンドロールの
+   「そうけっさん」に出す。syncChain 自体はトライやゲームオーバーでリセットされるが、
+   こちらは永続（game_stats）で一度も下がらない */
+let bestSyncChain = 0;
 
 /* ════════════════ 実績システム ════════════════ */
 /* 注意: id は SCHEMA_HASH に含まれるため、リネームすると全セーブデータが消去される。
@@ -1293,7 +1297,7 @@ const LS_SCHEMA = 'game_schema';
    - フォーマットバージョン（保存構造を変えたら手動インクリメント）
    - 実績IDリスト（実績追加/削除/ID変更で自動変化）
    どちらか変わると旧データを全消去して初期状態に戻す */
-const SCHEMA_VER  = 1; // 保存フォーマット変更時にインクリメント
+const SCHEMA_VER  = 2; // 保存フォーマット変更時にインクリメント（v2: 実績の値を解除時刻に変更・統計にbestSyncChain追加）
 const SCHEMA_HASH = `v${SCHEMA_VER}|${ACHIEVEMENTS.map(a => a.id).join(',')}`;
 
 function lsClearAll() {
@@ -4076,7 +4080,13 @@ function lsLoadAch() {
     const knownIds = new Set(ACHIEVEMENTS.map(a => a.id));
     unlockedAch = {};
     for (const [k, v] of Object.entries(raw)) {
-      if (knownIds.has(k) && v === true) unlockedAch[k] = true;
+      /* v2以降は解除時刻（正の数値）。true は日時を記録していなかった頃の値で、
+         「解除済みだが日時不明」として受け入れる（SCHEMA_VERを上げたので通常は
+         現れないが、判定を数値だけに絞ると1つの取りこぼしで実績が全消えして
+         見えるため許容側に倒す） */
+      if (!knownIds.has(k)) continue;
+      if (v === true) unlockedAch[k] = true;
+      else if (typeof v === 'number' && v > 0) unlockedAch[k] = v;
     }
     medAchieved = m ? JSON.parse(m) : {};
   } catch(e) { unlockedAch = {}; medAchieved = {}; }
@@ -4161,6 +4171,7 @@ function lsLoadStats() {
       if (typeof o.kingGyozaMeter === 'number') kingGyozaMeter = o.kingGyozaMeter;
       if (typeof o.kingLostPool   === 'number') kingLostPool   = o.kingLostPool;
       if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
+      if (typeof o.bestSyncChain  === 'number') bestSyncChain  = o.bestSyncChain;
     }
   } catch(e) {}
   /* デバッグ上書きは保存データ有無に関わらず最後に適用（早期リターン経路を作らない） */
@@ -4169,7 +4180,7 @@ function lsLoadStats() {
 function lsSaveStats() {
   /* 1射ごとに呼ばれる（1的目は2回）。_lsQueueが同一キーへの連続書き込みを
      1回に畳むので、ここでの呼び出し頻度がそのまま書き込み回数にはならない */
-  _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen }));
+  _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
 }
 /* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数
    （既定0=従来通り即時）。cheatpanelのACH一括解除（最大18件）で同じ
@@ -4178,11 +4189,32 @@ function lsSaveStats() {
    参照）だけでなく、発音そのものも少しずつずらして重なりを減らす */
 function unlockAch(id, seDelay = 0) {
   if (unlockedAch[id]) return;
-  unlockedAch[id] = true;
+  /* 値は true ではなく解除時刻（epoch ms）。エンドロールの実績ロールに達成日を
+     出すため（_achDateText参照）。読み出し側は全て真偽値としてしか見ていないので
+     数値を入れても判定は変わらない（Date.now()は0にならない） */
+  unlockedAch[id] = Date.now();
   achBannerQueue.push(id);
   lsSaveAch();
   playSE('ach', audioCtx ? audioCtx.currentTime + 0.01 + seDelay : undefined); // 実績解除音
 }
+/* MUSICボーナスの自己ベスト更新。syncChain を増やした直後に呼ぶ。
+   保存は lsSaveStats（_lsQueue が同一キーへの連続書き込みを畳むので、
+   射撃のたびに呼んでも書き込み回数は増えない） */
+function _updateBestSyncChain() {
+  if (syncChain <= bestSyncChain) return;
+  bestSyncChain = syncChain;
+  lsSaveStats();
+}
+
+/* 実績の達成日（'2026/8/16'）。未解除、または日時を記録していなかった頃の
+   データ（値が true）なら空文字を返す＝その行には何も出さない */
+function _achDateText(id) {
+  const v = unlockedAch[id];
+  if (typeof v !== 'number' || !(v > 0)) return '';
+  const d = new Date(v);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 function checkCoinsAch() {
   if (coins >= 1000)  unlockAch('coins_500');
   if (coins >= 5000)  unlockAch('coins_1000');
@@ -10175,6 +10207,14 @@ const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 92; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
 const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 44; // 文字列の開始位置（アイコンの実測幅とは無関係）
 const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
+/* 実績の達成日（右寄せ・小さめ・薄め）。右端は実績名と衝突しない位置に置く:
+   最長の実績名「ベテランプレイヤー」は _TRUE_ENDING_ROLL_TEXT_FONT で実測135px、
+   開始が W/2-44 なので右端は W/2+91 に来る。そこから14px空けて日時列を始め、
+   日時は11pxで約60px幅（'2026/12/31'）なので右端は W/2+165 になる。
+   まとめ（そうけっさん）の行は最長でも W/2+126 までで、そちらには日時が付かない */
+const _TRUE_ENDING_ROLL_DATE_R    = W / 2 + 165; // 右端（textAlign='right'の基準X）
+const _TRUE_ENDING_ROLL_DATE_FONT = `11px 'Hiragino Mincho ProN',serif`;
+const _TRUE_ENDING_ROLL_DATE_FILL = 'rgba(245,208,32,0.55)';
 /* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
    （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
 const _TRUE_ENDING_BEAT = 0.6;
@@ -10296,7 +10336,8 @@ function _buildTrueEndingContent() {
 
   const rollStartIdx = rows.length;
   for (const a of ACHIEVEMENTS) {
-    rows.push({ type: 'roll', icon: a.icon, text: a.name, y, h: _TRUE_ENDING_ROLL_ROW_H });
+    rows.push({ type: 'roll', icon: a.icon, text: a.name, date: _achDateText(a.id),
+                y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
   /* 実績本編とまとめ（累計データ）の間は数行分あけ、まとめとして独立して
@@ -10312,6 +10353,8 @@ function _buildTrueEndingContent() {
     { icon: '🏹', text: `総矢数 ${fmt(shotCount)}` },
     { icon: '🎊', text: `大当たり回数 ${fmt(jackpotCount)}` },
     { icon: '👑', text: `ベストギヨウザ ${fmt(bestCoins)}` },
+    /* MUSICボーナスの自己ベスト。画面上の表記（♪×N）に合わせる */
+    { icon: '🎵', text: `最高連鎖 ♪×${fmt(bestSyncChain)}` },
   ];
   for (const item of summaryStats) {
     rows.push({ type: 'roll', icon: item.icon, text: item.text, y, h: _TRUE_ENDING_ROLL_ROW_H });
@@ -10511,6 +10554,15 @@ function _drawTrueEndingRows(o) {
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
       ctx.fillText(row.text, _TRUE_ENDING_ROLL_TEXT_X, screenY);
+      /* 達成日（あれば）。名前より小さく薄く、右寄せで列を揃える
+         （_TRUE_ENDING_ROLL_DATE_R 参照）。まとめの行は date を持たないので出ない */
+      if (row.date) {
+        ctx.font = _TRUE_ENDING_ROLL_DATE_FONT;
+        ctx.fillStyle = _TRUE_ENDING_ROLL_DATE_FILL;
+        ctx.textAlign = 'right';
+        ctx.fillText(row.date, _TRUE_ENDING_ROLL_DATE_R, screenY);
+        ctx.textAlign = 'left';
+      }
     } else if (row.type === 'header') {
       /* 実績一覧の見出し: 文字の上下に細い罫線を1本ずつ引くだけの最小構成
          （締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は
@@ -13383,9 +13435,9 @@ function onShoot(_inputPerfMs){
     /* JUST/GOOD/OK 演出: 16回分のバッファが埋まり連続してsyncRate≥0.5になってから表示 */
     if (_syncHistCount >= SYNC_HIST_LEN && syncRateAboveCount >= SYNC_VISIBLE_THRESHOLD) {
       if (score >= 0.667) {        // ±33ms以内 → JUST
-        syncJustLabel = 'JUST!'; syncChain++;
+        syncJustLabel = 'JUST!'; syncChain++; _updateBestSyncChain();
       } else if (score >= 0.333) { // ±67ms以内 → GOOD
-        syncJustLabel = 'GOOD';  syncChain++;
+        syncJustLabel = 'GOOD';  syncChain++; _updateBestSyncChain();
       } else if (score > 0) {      // ±100ms以内 → OK
         syncJustLabel = 'OK';    syncChain = 0;
       } else {                     // ±150ms超 → NG
