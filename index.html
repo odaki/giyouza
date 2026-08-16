@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.82';
+const VERSION = 'v6.83';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5071,6 +5071,27 @@ function drawKingReel(w, active, idx) {
     }
   }
   ctx.restore();
+  /* ビートリング: これから射つ的の外側に、拍ごとに広がって消える輪を出す。
+     実機評価「こんがり的にも通常ゲームモードの的と同じビートリング（に似た物）が欲しい。
+     バッテリーの減り方だけではタイミングがとりにくい」への対応。
+     ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、拍の手掛かりが
+     一つも無かった（全タップが calcSyncScore で採点されているにも関わらず）。
+     通常モードはプリレンダのグロースプライト（WR基準）を使うが、KING_WRは縦画面で
+     動的に変わるので流用できない。shadowBlurも規約で使えないため、広がる輪＋減衰する
+     線幅で表現する（ミュート時の画面枠と同じ考え方）。 */
+  if (active && !w.locked) {
+    const bp = getBeatPulse(); // 0-1、ビート直後=1
+    if (bp > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = bp * 0.8;
+      ctx.strokeStyle = Y;
+      ctx.lineWidth = 1 + bp * 3.5;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, KING_WR + 5 + (1 - bp) * KING_WR * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
   ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
   ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
   ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
@@ -8430,7 +8451,14 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   const accentPos = (anchor + mapOff(accentOff)) * KING_SEQ_QUANT;
   const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
-  events.push({ at: accentAt, kind: 'accent', gain, flights, dud: events.length === 0, nextPos: accentPos });
+  /* forced（バッテリー切れの自動発射）は「5音目を叩かなかった」ということなので
+     アクセントを鳴らさない。実機評価「こんがりの後にもう一回アクションが必要なことが
+     伝わりにくい。バッテリーが0になって自動発射されるので、それが標準の発射トリガーかの
+     ように勘違いされる」への対応。従来は待っていても叩いた場合と完全に同じ音・同じ%が
+     得られており、タップする理由が音でも数字でも示されていなかった。
+     こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」で出す */
+  events.push({ at: accentAt, kind: 'accent', gain, flights,
+                dud: events.length === 0, forced, nextPos: accentPos });
   /* 同一スロットの重なりは間引かずそのまま重ねる（プレイヤーの入力を補正しない
      という原則を全イベントに一様に適用する）。同時発音は振幅が重なるが、
      masterGain出力のセーフティリミッターが歪みを防ぐ */
@@ -8462,8 +8490,10 @@ function _kingSeqScheduleAudio(events) {
     const e = hits[i];
     if (e.kind === 'accent') {
       /* アクセントは後ろが空いているので常にフル。焦げ跡ゼロなら不発音に差し替える */
-      if (e.dud) playSE('kingBeamDud', e.at);
-      else       _playKingBeamHit(audioCtx, e.at, null, true, 1);
+      /* dud=焦げ跡ゼロ（ダメージ無し）／forced=自動発射（叩かれていない）。
+         どちらも締めのアクセントは鳴らさず、弱い不発音だけを置く */
+      if (e.dud || e.forced) playSE('kingBeamDud', e.at);
+      else                   _playKingBeamHit(audioCtx, e.at, null, true, 1);
       continue;
     }
     /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める。
@@ -8568,12 +8598,16 @@ function _kingSeqAccent(e, flush) {
   for (const f of e.flights) if (f.resolve === null) f.resolve = 'stick';
   /* 記録が無く再生イベントを持たない的（強制発射の自動確定分）の帯電もここで止める */
   if (_king.reelBeamed) _king.reelBeamed = [true, true, true, true];
-  if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら全身リアクションもしない
+  if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら加点しない
     _kingApplyGain(e.gain);
-    _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
-    _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
-    _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
-    _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+    /* 全身リアクション（フラッシュ・のけぞり・焦げ跡の発光）は「叩いた」ご褒美なので、
+       時間切れの自動発射では出さない。ゲージは伸びるが締めの一撃は起きない */
+    if (!e.forced) {
+      _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
+      _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
+      _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
+      _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+    }
   }
   /* ユーザー選択: アクセントのダウンビートを次のトライの開始と同じ瞬間にする
      （死に時間がゼロになり、アクセントがそのまま次の小節の「1」になる）。
@@ -9206,6 +9240,22 @@ function drawBossBattle() {
     drawKingReelShatter();
   }
   drawKingCookGauge();
+  /* 4本マーク済み＝あと1回タップすれば発射、という入力要求を明示する。
+     帯電スパークは環境演出であって「入力を求めている」表示ではなく、しかも時間切れの
+     自動発射で結果が出てしまうため「待てば進む」と学習されやすかった（実機評価）。
+     CONTINUE等で使っている既存の下部ピルを流用する（プレイヤーが既に「次のアクションを
+     求める表示」として知っている形）。位置はこんがりゲージの上、拍で脈打たせて
+     5打目のタイミングの手掛かりも兼ねる */
+  if (phase === 'boss' && _king.awaitingFire) {
+    /* 置き場所は「的の結果文字の下端」と「こんがりゲージの上端」の間の空き帯。
+       画面下端そのままだとゲージに、既定の余白だと結果文字に重なる（縦画面で実測6px）。
+       帯の中央へ置き、狭い場合でも結果文字だけは隠さないよう下側へ寄せる */
+    const gaugeTop = IS_PORTRAIT ? P_BAR_Y : KING_GAUGE_Y;
+    const resultBottom = _king.reels[0].y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT;
+    const bh = (IS_PORTRAIT ? 13 : 14) + 14; // _drawBottomPillBadge の fs + padY*2
+    const by = Math.max(resultBottom + 2, (resultBottom + gaugeTop) / 2 - bh / 2);
+    _drawBottomPillBadge('発射', H - by - bh, getBeatPulse());
+  }
 }
 
 /* こんがりゲージ: BETバーと同じ位置・寸法（戦闘中はBETバーを非表示にして差し替える） */
@@ -12328,9 +12378,11 @@ function drawFeverBadge() {
    同様の指摘あり）ため、通常モードのCONTINUEバッジと同じ見た目・同じ「クリック/
    タップ/キーボードいずれでも反応する」操作系（handleGameClick）に統一する。
    表示条件・位置（下端からのオフセット）は呼び出し側が制御する */
-function _drawBottomPillBadge(text, bottomOffset = IS_PORTRAIT ? 12 : 10) {
-  /* 呼吸アニメーション（点滅ではなくゆっくり拡縮） */
-  const breath = 1 + 0.04 * Math.sin(performance.now() / 500);
+/* pulse: 0〜1を渡すとゆっくりした呼吸の代わりにビートで脈打つ（キング戦の「発射」用）。
+   省略時は従来どおりの呼吸アニメーション */
+function _drawBottomPillBadge(text, bottomOffset = IS_PORTRAIT ? 12 : 10, pulse = null) {
+  const breath = pulse !== null ? 1 + 0.13 * pulse
+                                : 1 + 0.04 * Math.sin(performance.now() / 500);
 
   const fs   = IS_PORTRAIT ? 13 : 14;
   ctx.font   = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
