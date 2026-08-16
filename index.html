@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.73';
+const VERSION = 'v6.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7562,11 +7562,14 @@ const KING_BATTERY_GROUP = 7;          // 表示の区切り（7拍子の1小節
    4拍あれば、キックを1つ〜3つ見送ったパターンまでそのまま表現できる。長い待ちを
    詰める役目は残り、4拍を超える放置だけが頭打ちになる。 */
 const KING_SEQ_GAP_MAX = 4 * KING_SEQ_DIV;
-/* 再生スパンの上限。5タップ＝隙間4つなので上限は KING_SEQ_GAP_MAX×4＝16スロット
-   ＝4拍＝1.32秒。KING_SEQ_GAP_MAX が効いていれば超えないため通常は発火しない保険
-   （上限やタップ数を変えたときに再生が伸び切らないための最終クランプ）。
-   超えた場合だけ比率で縮める。 */
-const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 4;
+/* 再生スパン（全長）の上限＝32スロット＝8拍＝2.63秒。
+   隙間の上限を4拍へ広げた結果、序盤（正解文字を待つので隙間が長い）の再生が最長
+   16拍＝5.3秒まで伸び、実機評価「序盤が間延びしている」となった。全長にも上限を置く。
+   実際の当てはめは _kingSeqFitGaps が「倍率を1段下げる」形でこれを満たすので、比は
+   整数のまま完全に保たれる（例: 3:2:4:2拍 → 1.5:1:2:1拍。長さは半分、形はそのまま）。
+   終盤のキックに乗せた打ち込み（1〜3拍の間隔）はこの範囲に収まるので影響しない。
+   下の scale による比率圧縮は、倍率を1まで下げても収まらない病的なケースだけの保険。 */
+const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 2;
 /* 打ち込みハイハットの音量（_playKingHat）。実機評価「もっと大きく」で 0.28→0.44。
    KING_HAT_ACCENT は発射（オープン）への上乗せで、実機評価「発射の時は少し強めて
    アクセントをつけてほしい」に対応する。TRのACCENTと同じくレベルだけを動かし、
@@ -8333,8 +8336,14 @@ function _kingSeqFitGaps(d) {
      最小の解が 1,3,1,3 になっていた。先に比(1:2:1:2)を読んでからグリッドへ載せれば
      1,2,1,2 が保たれる（テンポは120ms→82msへ詰まるが、リズムは意図どおり）。 */
   const rmax = Math.max(...best.r);
+  const rsum = best.r.reduce((a, v) => a + v, 0);
+  /* 倍率は3つの上限の最小を取る。いずれも倍率を下げるだけなので比は整数のまま保たれる:
+     ・推定した拍 b をグリッドへ載せた値（テンポの再現）
+     ・1つの隙間が KING_SEQ_GAP_MAX を超えない
+     ・全長が KING_SEQ_SPAN_SLOTS を超えない（序盤の間延び対策） */
   const u = Math.max(1, Math.min(Math.round(best.b / KING_SEQ_QUANT),
-                                 Math.floor(KING_SEQ_GAP_MAX / rmax)));
+                                 Math.floor(KING_SEQ_GAP_MAX / rmax),
+                                 Math.floor(KING_SEQ_SPAN_SLOTS / rsum)));
   return best.r.map(v => v * u);
 }
 
