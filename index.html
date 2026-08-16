@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.97';
+const VERSION = 'v6.98';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10346,6 +10346,7 @@ function _buildTrueEndingContent() {
        名前だけ。区切りはまとめの行と同じ半角スペース1つ */
     const _achDate = _achDateText(a.id);
     rows.push({ type: 'roll', icon: a.icon, text: _achDate ? `${a.name} ${_achDate}` : a.name,
+                ix: _TRUE_ENDING_ROLL_ICON_X, tx: _TRUE_ENDING_ROLL_TEXT_X,
                 y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
@@ -10365,8 +10366,24 @@ function _buildTrueEndingContent() {
     /* MUSICボーナスの自己ベスト。画面上の表記（♪×N）に合わせる */
     { icon: '🎵', text: `最高連鎖 ♪×${fmt(bestSyncChain)}` },
   ];
+  /* まとめは実績とは独立した開始位置にする。小見出し「そうけっさん」は中央揃えなのに、
+     まとめ行を実績と同じ左端に置くとブロックの中心が32px左へずれ、タイトルに対して
+     左に寄って見えた（実機評価）。実績側を最長行基準で40px左へ寄せたぶんがそのまま
+     効いている＝実績とまとめでは行の長さが違うので、同じ左端では揃わない。
+     実績名は固定文字列なので定数で持てるが、**まとめの行は数字で幅が変わる**ため、
+     ここだけは実測してブロックが中央へ来る左端を毎回求める（同じ理由で定数化しない） */
+  const _sumGap = _TRUE_ENDING_ROLL_TEXT_X - _TRUE_ENDING_ROLL_ICON_X;
+  ctx.save();
+  ctx.font = _TRUE_ENDING_ROLL_TEXT_FONT;
+  let _sumMaxW = 0;
+  for (const item of summaryStats) _sumMaxW = Math.max(_sumMaxW, ctx.measureText(item.text).width);
+  ctx.restore();
+  const _sumIconX = Math.round(W / 2 - (_sumGap + _sumMaxW) / 2);
+  const _sumTextX = _sumIconX + _sumGap;
   for (const item of summaryStats) {
-    rows.push({ type: 'roll', icon: item.icon, text: item.text, y, h: _TRUE_ENDING_ROLL_ROW_H });
+    rows.push({ type: 'roll', icon: item.icon, text: item.text,
+                ix: _sumIconX, tx: _sumTextX,
+                y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
   y += spacerBeforeClose;
@@ -10558,11 +10575,13 @@ function _drawTrueEndingRows(o) {
       ctx.font = _TRUE_ENDING_ROLL_ICON_FONT;
       ctx.textAlign = 'left';
       ctx.fillStyle = '#fff';
-      ctx.fillText(row.icon, _TRUE_ENDING_ROLL_ICON_X, screenY);
+      /* Xは行ごとに持つ（実績は固定の定数、まとめは実測で中央へ寄せた値。
+         まとめ行の組み立て箇所のコメント参照） */
+      ctx.fillText(row.icon, row.ix, screenY);
       ctx.font = _TRUE_ENDING_ROLL_TEXT_FONT;
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
-      ctx.fillText(row.text, _TRUE_ENDING_ROLL_TEXT_X, screenY);
+      ctx.fillText(row.text, row.tx, screenY);
     } else if (row.type === 'header') {
       /* 実績一覧の見出し: 文字の上下に細い罫線を1本ずつ引くだけの最小構成
          （締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は
