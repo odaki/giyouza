@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.86';
+const VERSION = 'v6.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5130,69 +5130,27 @@ function _drawKingChargeTether(x0, y0, x1, y1, idx) {
   ctx.restore();
 }
 
-/* プラズマボール（市販のオブジェ）のフィラメント1本を現在のパスへ足す
-   （実機評価: 帯電スパークは「走り方と細さ」をプラズマボールに寄せたい）。
-   的の帯電（_drawKingReelCharge）が擬似乱数で数十msごとに形をパッと切り替える
-   「静電気」なのに対し、こちらは時間の連続関数で角度を蛇行させる＝形が瞬間で
-   飛ばず、うねりながら動く。これがプラズマボールらしさの正体で、線を細くする
-   のと合わせて別種の帯電として区別が付く。
-   r0（発生点＝文字の縁）から r1（外殻）へ向かって伸ばし、根元ほど大きく振れて
-   先端へ収束させる。fork=true の本は途中で枝分かれする */
-/* 点列の作業用（毎フレーム・フィラメントごとに配列を作らないための固定バッファ） */
-const _kingPlasmaX = new Float64Array(16);
-const _kingPlasmaY = new Float64Array(16);
-
-/* 作業用バッファの先頭n点を、隣接点の中点を通る二次ベジェで繋いで現在のパスへ
-   足す（角を立てないための定石。_buildScorchBlotSprite と同じ手法の開曲線版）。
-   これを通さないとフィラメントが折れ線＝ジグザグの「静電気」に見えてしまい、
-   プラズマボールのうねる曲線にならない */
-function _pathKingPlasma(n) {
-  if (n < 2) return;
-  ctx.moveTo(_kingPlasmaX[0], _kingPlasmaY[0]);
-  for (let i = 1; i < n - 1; i++) {
-    ctx.quadraticCurveTo(_kingPlasmaX[i], _kingPlasmaY[i],
-                         (_kingPlasmaX[i] + _kingPlasmaX[i + 1]) / 2,
-                         (_kingPlasmaY[i] + _kingPlasmaY[i + 1]) / 2);
-  }
-  ctx.lineTo(_kingPlasmaX[n - 1], _kingPlasmaY[n - 1]);
-}
-
-function _kingPlasmaFilament(mx, my, a0, r0, r1, t, ph, segs, fork) {
-  let a = a0, ba = 0, br = 0;
-  _kingPlasmaX[0] = mx + Math.cos(a) * r0; _kingPlasmaY[0] = my + Math.sin(a) * r0;
-  const forkAt = Math.floor(segs * 0.55);
-  for (let s = 1; s <= segs; s++) {
-    const u = s / segs;
-    a += Math.sin(t * 2.1 + ph + s * 1.7) * 0.30 * (1.1 - u * 0.6);
-    const r = r0 + (r1 - r0) * u;
-    _kingPlasmaX[s] = mx + Math.cos(a) * r; _kingPlasmaY[s] = my + Math.sin(a) * r;
-    if (fork && s === forkAt) { ba = a; br = r; }
-  }
-  _pathKingPlasma(segs + 1);
-  if (!fork || br <= 0) return;
-  let a2 = ba + (Math.sin(t * 1.6 + ph) > 0 ? 0.55 : -0.55);
-  _kingPlasmaX[0] = mx + Math.cos(ba) * br; _kingPlasmaY[0] = my + Math.sin(ba) * br;
-  for (let s = 1; s <= 3; s++) {
-    a2 += Math.sin(t * 2.4 + ph + s) * 0.22;
-    const r = br + (r1 - br) * (s / 3) * 0.95;
-    _kingPlasmaX[s] = mx + Math.cos(a2) * r; _kingPlasmaY[s] = my + Math.sin(a2) * r;
-  }
-  _pathKingPlasma(4);
-}
-
-/* 撃ち込み済み・焼き込み待ちの焦げ跡の位置で、文字の「外」を走るプラズマ
+/* 撃ち込み済み・焼き込み待ちの焦げ跡の位置で、文字の「外」に走る帯電
    （KING_TETHER_* の定義部参照）。三角との接続が切れた分のエネルギーがそこに
    溜まっている、という見え方にする。座標変換は _kingFlightTargetPos および
    アクセントの発光と同じ（ボスの表示位置・呼吸・のけぞりに追従）。
+
+   描き方は的の三角の帯電（_drawKingReelCharge）とそのまま揃える: 時間バケツを
+   疑似乱数シードにして数十msごとに形を切り替え、根元ほど大きく振れて先端へ
+   収束する3折れの稲妻を、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の
+   2回ストロークで光らせる。一度うねる曲線（プラズマボール風）にしてみたが、
+   同じ画面にある的側の帯電と別物に見えて統一感が崩れるという実機評価で戻した。
+   違いは発生点だけ（的は中心から、こちらは文字の縁から外へ）。
+
    充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
-   焼き込み直前にフィラメントがいちばん外まで伸びて明るくなる */
+   的の帯電がバッテリー残量で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
+   いちばん長く明るい */
 function _drawKingMarkCharges(breath, accentDy) {
   if (_kingChargedMarks.length === 0) return;
   const ct = audioCtx ? audioCtx.currentTime : null;
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.globalCompositeOperation = 'lighter'; // 電気は加算光（ボス本体の色を潰さない）
   for (const m of _kingChargedMarks) {
     let p = 1; // 時計が引けない場合は満充電で描く
     if (ct !== null && m.chargedAt !== null && _king.seqAccentAt !== null) {
@@ -5203,37 +5161,36 @@ function _drawKingMarkCharges(breath, accentDy) {
     /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
        面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
     const R = m.chargeR;
-    const t = performance.now() / 1000;
-    const ph0 = m.rot; // マークごとにうねりの位相をずらす（同じ動きが4つ並ばない）
-    /* 明滅もパッと切り替えず連続に呼吸させる（プラズマは点滅しない） */
-    const flick = 0.78 + 0.22 * Math.sin(t * 4.7 + ph0);
+    /* シードの作りも的側と同じ（45msバケツ）。位相だけマークごとにずらして、
+       4箇所が同じ形で明滅しないようにする */
+    let seed = Math.floor(performance.now() / 45) + Math.floor(m.rot * 97);
+    const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const flick = 0.55 + rnd() * 0.45;
     const vigor = 0.55 + 0.45 * p;
-    const rIn  = R * 0.45;              // 発生点＝グリフの縁
-    const rOut = R * (0.8 + 0.4 * p);   // 外殻。充電が進むほど遠くまで届く
+    const rIn = R * 0.5; // 発生点＝グリフの縁。ここから外へ伸ばす＝「文字の外」
     ctx.beginPath();
     for (let b = 0; b < KING_CHARGE_BOLTS; b++) {
-      const ph = ph0 + b * 2.39996; // 黄金角でずらして本ごとに違う動きにする
-      const a0 = (b / KING_CHARGE_BOLTS) * Math.PI * 2 + ph0 + Math.sin(t * 0.6 + ph) * 0.4;
-      /* 長さも本ごとに時間で伸び縮みさせる。全部同じ長さで等間隔に並ぶと
-         「放射状の飾り」に見え、プラズマボールの不揃いさが出ない */
-      const rEnd = rOut * (0.72 + 0.28 * (0.5 + 0.5 * Math.sin(t * 0.9 + ph * 1.3)));
-      _kingPlasmaFilament(mx, my, a0, rIn, rEnd, t, ph, 7, b % 2 === 0);
+      const baseAng = (b / KING_CHARGE_BOLTS) * Math.PI * 2 + rnd() * 0.9;
+      const len = R * (0.45 + rnd() * 0.5) * vigor;
+      ctx.moveTo(mx + Math.cos(baseAng) * rIn, my + Math.sin(baseAng) * rIn);
+      for (let s = 1; s <= 3; s++) {
+        const u = s / 3;
+        const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - u * 0.5);
+        const r = rIn + len * u;
+        ctx.lineTo(mx + Math.cos(a) * r, my + Math.sin(a) * r);
+      }
     }
-    /* グローは広く薄く、芯はプラズマボールらしくどこまでも細く
-       （実機評価「スパークの走り方や細さをプラズマボールに」） */
-    ctx.globalAlpha = 0.13 * flick * vigor;
+    /* 線幅の比も的側と同じ（グロー 0.15R・芯 0.045R） */
+    ctx.globalAlpha = 0.40 * flick * vigor;
     ctx.strokeStyle = '#ffd34d';
-    ctx.lineWidth = Math.max(2, R * 0.12);
+    ctx.lineWidth = Math.max(3, R * 0.15);
     ctx.stroke();
-    ctx.globalAlpha = (0.5 + 0.35 * flick) * vigor;
+    ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
     ctx.strokeStyle = '#fffde7';
-    ctx.lineWidth = Math.max(0.8, R * 0.04);
+    ctx.lineWidth = Math.max(1.2, R * 0.045);
     ctx.stroke();
-    /* 文字の裏に溜まっていく芯（プラズマボールの中心電極にあたる）。充電が進む
-       ほど明るくなるが、グリフが読めなくなるほど乗せない＝あくまで背後の輝き */
-    ctx.globalAlpha = (0.05 + 0.13 * p) * flick;
-    ctx.fillStyle = Y;
-    ctx.beginPath(); ctx.arc(mx, my, R * (0.5 + 0.3 * p), 0, Math.PI * 2); ctx.fill();
+    /* 的側にある「根元の輝き」に相当するものはここでは置かない（中心はグリフが
+       占めていて空かないため。文字の上に光を乗せると読めなくなる） */
   }
   ctx.restore();
 }
@@ -8075,7 +8032,7 @@ const KING_FIRE_FLASH_FRAMES = 12;
    消える瞬間と線が切れる瞬間は構造的に一致する */
 const KING_TETHER_SEG   = 7;    // 稲妻の折れ数
 const KING_TETHER_AMP   = 0.13; // 横揺れ幅（両端間の距離に対する比・中央で最大）
-const KING_CHARGE_BOLTS = 5;    // 文字側の帯電（プラズマ）のフィラメント本数
+const KING_CHARGE_BOLTS = 7;    // 文字側の帯電の本数（的側 _drawKingReelCharge と同数）
 let _kingFireFlash = 0;
 let _kingAccentFlash  = 0;
 let _kingAccentRecoil = 0;
