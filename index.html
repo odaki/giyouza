@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.95';
+const VERSION = 'v6.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10207,14 +10207,6 @@ const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 92; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
 const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 44; // 文字列の開始位置（アイコンの実測幅とは無関係）
 const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
-/* 実績の達成日（右寄せ・小さめ・薄め）。右端は実績名と衝突しない位置に置く:
-   最長の実績名「ベテランプレイヤー」は _TRUE_ENDING_ROLL_TEXT_FONT で実測135px、
-   開始が W/2-44 なので右端は W/2+91 に来る。そこから14px空けて日時列を始め、
-   日時は11pxで約60px幅（'2026/12/31'）なので右端は W/2+165 になる。
-   まとめ（そうけっさん）の行は最長でも W/2+126 までで、そちらには日時が付かない */
-const _TRUE_ENDING_ROLL_DATE_R    = W / 2 + 165; // 右端（textAlign='right'の基準X）
-const _TRUE_ENDING_ROLL_DATE_FONT = `11px 'Hiragino Mincho ProN',serif`;
-const _TRUE_ENDING_ROLL_DATE_FILL = 'rgba(245,208,32,0.55)';
 /* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
    （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
 const _TRUE_ENDING_BEAT = 0.6;
@@ -10336,7 +10328,16 @@ function _buildTrueEndingContent() {
 
   const rollStartIdx = rows.length;
   for (const a of ACHIEVEMENTS) {
-    rows.push({ type: 'roll', icon: a.icon, text: a.name, date: _achDateText(a.id),
+    /* 達成日は実績名と同じ1つの文字列にする＝まとめ（そうけっさん）の
+       「総プレイ回数 142」と完全に同じ書式（同じ大きさ・同じ色・説明の直後）。
+       一度は行の右端へ右寄せし小さく薄く描いていたが、同じロールの中に
+       「値が説明の直後に来る行」と「値が右端へ飛ぶ行」が混在して様式が
+       揃っていなかった（実機評価）。ロールは1行ずつ読み下すもので、日時を
+       列で見比べる機会が無く右寄せの利点は活きていない。
+       日時が無い（未解除・または日時を記録していなかった頃のデータ）なら
+       名前だけ。区切りはまとめの行と同じ半角スペース1つ */
+    const _achDate = _achDateText(a.id);
+    rows.push({ type: 'roll', icon: a.icon, text: _achDate ? `${a.name} ${_achDate}` : a.name,
                 y, h: _TRUE_ENDING_ROLL_ROW_H });
     y += _TRUE_ENDING_ROLL_ROW_H;
   }
@@ -10554,15 +10555,6 @@ function _drawTrueEndingRows(o) {
       ctx.fillStyle = Y;
       ctx.textAlign = 'left';
       ctx.fillText(row.text, _TRUE_ENDING_ROLL_TEXT_X, screenY);
-      /* 達成日（あれば）。名前より小さく薄く、右寄せで列を揃える
-         （_TRUE_ENDING_ROLL_DATE_R 参照）。まとめの行は date を持たないので出ない */
-      if (row.date) {
-        ctx.font = _TRUE_ENDING_ROLL_DATE_FONT;
-        ctx.fillStyle = _TRUE_ENDING_ROLL_DATE_FILL;
-        ctx.textAlign = 'right';
-        ctx.fillText(row.date, _TRUE_ENDING_ROLL_DATE_R, screenY);
-        ctx.textAlign = 'left';
-      }
     } else if (row.type === 'header') {
       /* 実績一覧の見出し: 文字の上下に細い罫線を1本ずつ引くだけの最小構成
          （締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は
