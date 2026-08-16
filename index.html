@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.72';
+const VERSION = 'v6.73';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7589,11 +7589,27 @@ const KING_SEQ_PLAY_DELAY_BEATS = 1;
    ピークは decay を詰めても 0.44→0.38 とほぼ保たれるので、打撃の芯は残る。
    KING_BEAM_MIN_DECAY は詰まりすぎたときの下限。 */
 const KING_BEAM_CHOKE_REF  = 0.42;
-/* OK以下（グレー）のタップを再生で鳴らすときの音量倍率。加点も焦げ跡も無い扱いは
-   変えないまま、叩いた拍が無音で抜けないようにするためだけの音（実機評価
-   「グレーOKのはずれでも何か音は鳴らしてフィードバックしたい。ごく小さくスネアを
-   鳴らすとか」）。命中との差が一聴で分かる程度に小さくする */
+/* 再生時のベロシティ。飛翔する文字の大きさ（drawKingCharFlights: JUSTだけ
+   KING_CHAR_JUST_FONT_SCALE=2倍）と対応させる。実機要望「文字の大きさに合わせて
+   スネアの音量やらアクセントやら変えられませんか」。見た目の大きさと音の強さが
+   揃うので、タイミング精度の差が目でも耳でも同じ形で返る。
+   文字は面積比で4倍になるが、音量をその比にするとGOODが埋もれるので差は穏やかに取る。
+   また5音目のアクセント（1.35倍）は超えないようにして、フレーズの終止が常に一番強い
+   状態を保つ。
+   OK以下（グレー）は加点も焦げ跡も無い扱いのまま、叩いた拍が無音で抜けないための
+   音だけを残す（実機要望「グレーOKのはずれでも何か音は鳴らしてフィードバックしたい。
+   ごく小さくスネアを鳴らすとか」）。 */
+/* JUSTの上限は1.15。1.25まで上げるとサンプルピークが1.47となり、5音目のアクセント
+   （1.38）を超えて常時リミッターに当たる。アクセントを最大に保つ意味でもここで頭打ち */
+const KING_BEAM_VOL_JUST   = 1.15;
+const KING_BEAM_VOL_GOOD   = 0.85;
 const KING_BEAM_QUIET_VOL  = 0.3;
+/* 飛翔体の判定ティアから再生ベロシティを引く（tier: 'just' | 'good' | null=OK以下） */
+function _kingBeamVol(tier) {
+  return tier === 'just' ? KING_BEAM_VOL_JUST
+       : tier === 'good' ? KING_BEAM_VOL_GOOD
+       : KING_BEAM_QUIET_VOL;
+}
 const KING_BEAM_MIN_DECAY  = 0.25;
 /* 再生タイミングの倍率＝1（打ち込んだ間隔をそのまま鳴らす）。
 
@@ -8209,11 +8225,12 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
        音だけ小さく鳴らす。加点しない・焦げ跡も付かないという扱いは変えないので、
        バランスはそのままにリズムの形だけが完全になる */
     const quiet = !rec[i].flight.markRef;
+    const vol = _kingBeamVol(rec[i].flight.tier);
     if (!quiet) {
       /* ビームは着弾（＝焦げ跡が焼き付く瞬間＝音）がスロットに来るよう前倒しで撃つ */
       events.push({ at: at - KING_SEQ_BEAM_LEAD, kind: 'shot', f: rec[i].flight });
     }
-    events.push({ at, kind: 'impact', f: rec[i].flight, quiet });
+    events.push({ at, kind: 'impact', f: rec[i].flight, quiet, vol });
   }
   /* 5音目（アクセント）。ここが次のトライの開始と同じ瞬間になる（ユーザー選択:
      死に時間をゼロにして、アクセントがそのまま次の「1」になる）。そのため次トライの
@@ -8264,11 +8281,9 @@ function _kingSeqScheduleAudio(events) {
       continue;
     }
     /* 次の音（次の着弾かアクセント）までの間隔でチョーク量を決める。
-       quiet（OK以下のタップ）はビームも焦げ跡も無いので、リズムを欠けさせないための
-       ごく小さいスネアだけを鳴らす（KING_BEAM_QUIET_VOL 参照） */
+       音量は打ち込み時の判定ティア＝飛翔する文字の大きさに対応させる（_kingBeamVol） */
     const gap = i + 1 < hits.length ? hits[i + 1].at - e.at : Infinity;
-    _playKingBeamHit(audioCtx, e.at, null, false, gap / KING_BEAM_CHOKE_REF,
-                     e.quiet ? KING_BEAM_QUIET_VOL : 1);
+    _playKingBeamHit(audioCtx, e.at, null, false, gap / KING_BEAM_CHOKE_REF, e.vol);
   }
 }
 
