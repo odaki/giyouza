@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.96';
+const VERSION = 'v6.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10203,9 +10203,17 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
    シフトする計算が入るため、送り幅の実測がグリフと食い違う環境ではその
    ぶんズレる。'left'はシフト計算そのものが無いのでこのズレが原理的に
    起きない。ユーザー指摘により変更） */
-const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 92; // アイコンの左端
+/* 左端の位置は「最長行の右余白が左余白と等しくなる」ように取る。実績名の直後へ
+   達成日を足したぶん行が右へ伸びたため、以前の W/2-92 / W/2-44 では縦画面(W=420)で
+   左余白118px・最長行の右余白38pxと3:1に偏り、最長行「ベテランプレイヤー 2026/3/13」が
+   右端に迫って見えていた（実機評価）。40px左へ寄せると左右とも余白78pxで対称になる。
+   ブロック幅は画面幅に依存しない（W/2基準の配置＋固定フォント）ので、横画面でも
+   同じ40pxで揃う。行長は211〜382pxとばらつきがあり、中央値の行を基準にするなら
+   シフトは6pxで足りるが、短い行が左に残るのは左揃えのロールでは自然な一方、
+   最長行が右端に迫るのは詰まって見えるため、最長行を基準にしている */
+const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 132; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
-const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 44; // 文字列の開始位置（アイコンの実測幅とは無関係）
+const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 84;  // 文字列の開始位置（アイコンの実測幅とは無関係）
 const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
 /* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
    （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
