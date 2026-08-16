@@ -532,7 +532,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.66';
+const VERSION = 'v6.67';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1717,7 +1717,7 @@ function getBeatPulse() {
    1=ジャスト, 0=最も外れている（1/4拍グリッドから半周期ずれ） */
 /* 入力時刻を「聴こえている音」基準のバッファ内積算位置（秒・ループをまたいで単調増加）
    へ変換する。判定（calcSyncScore）とキング戦リズムシーケンサの量子化
-   （_kingSeqSlotAt）が必ず同じ時計を使うための共通ヘルパー。
+   （_kingBuildSequence の間隔計算）が必ず同じ時計を使うための共通ヘルパー。
    別々に計算すると「JUSTを取ったタップが量子化スロットの境界に乗らない」という
    食い違いが起きる（採点はグリッドAに乗っているのに再生はグリッドBへ量子化される）。
    判定は「聴こえている音」を基準にする（-_hwLatency のみ適用）。
@@ -7582,8 +7582,11 @@ const KING_BEAM_MIN_DECAY  = 0.25;
 const KING_SEQ_PLAY_SCALE = 1;
 /* 再生開始アンカーの最低リード（秒）。この先の16分スロットから再生を始める。
    ビーム前倒し（KING_SEQ_BEAM_LEAD＝50ms）に1フレーム（16.7ms）を足した約70msが
-   下限なので、0.09は安全側の値。0.15から短縮した（発射から再生までの空白を詰める）。 */
-const KING_SEQ_MIN_LEAD = 0.09;
+   下限。0.15→0.09と詰めたところ実機評価「適度な間が足りなくなった」となったため
+   0.18へ。拍への切り上げをやめた（アンカーは16分単位）ので、待ちは
+   0.18〜0.18+16分＝190〜250msに収まり、以前のような1拍ぶんの跳ね（最大473ms）は
+   起きない。 */
+const KING_SEQ_MIN_LEAD = 0.18;
 /* ビームを何秒前倒しで発射するか。KING_LASER_TRAVEL_FRAMES(3F≒50ms)かけて飛ぶので、
    スロットちょうどに撃つと「着弾＝焦げ跡が焼き付く瞬間」が50ms遅れる。
    16分=82msに対して約61%＝確実に聴こえるズレになるため、着弾がスロットに
@@ -7782,7 +7785,7 @@ function _initBossBattle() {
     reelCracks: [[], [], [], []], // 的スロット単位のひび割れ蓄積（{poly,angle}の配列。drawKingReel参照。再スピンをまたいで残る）
     reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
     /* リズムシーケンサ（KING_SEQ_*の定義部参照）。
-       rec         : 打ち込み記録 [{slot, flight}]（slot=絶対スロットインデックス、強制発射分はnull）
+       rec         : 打ち込み記録 [{pos, flight}]（pos=生のバッファ位置。強制発射分はnull）
        recStartPos : 打ち込み開始のバッファ位置（拍境界）。バッテリー残量の起点。
                      nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
@@ -7989,19 +7992,11 @@ function _kingReelShoot(inputPerfMs, forced = false) {
     _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   }
   const f = _spawnKingCharFlight(w, _king.reelIdx);
-  _king.rec.push({ slot: forced ? null : _kingSeqSlotAt(inputPerfMs), flight: f });
+  /* 量子化はここでは行わず、生の位置（バッファ秒）のまま積む。タップ単位で絶対
+     グリッドへ丸めると、タップ同士の相対間隔が壊れる（_kingBuildSequence参照） */
+  _king.rec.push({ pos: forced ? null : _bgmJudgePos(inputPerfMs), flight: f });
   _king.reelIdx++;
   if (_king.reelIdx >= 4) _king.awaitingFire = true; // 4本マーク完了。発射は次の入力で_kingFireAttackが行う
-}
-
-/* 入力時刻を絶対スロットのインデックス（KING_SEQ_QUANT刻み）へ量子化する。採点（calcSyncScore）と
-   同じ _bgmJudgePos から導くため、JUSTを取ったタップは必ずスロット境界に乗る。
-   ループ内位置ではなく単調増加の絶対位置を使うので、1トライがBGMのループ境界を
-   跨いでもオフセットの計算が壊れない（量子化グリッドとループ長の丸め差は
-   1ループあたり1サンプル未満＝1トライ内では無視できる）。音声が無ければ null */
-function _kingSeqSlotAt(atPerfMs) {
-  const pos = _bgmJudgePos(atPerfMs);
-  return pos === null ? null : Math.round(pos / KING_SEQ_QUANT);
 }
 
 /* 4本マーク後の発射入力（handleGameClickのphase==='boss'分岐、_king.awaitingFire
@@ -8110,16 +8105,16 @@ function _kingFireAttack(inputPerfMs, forced = false) {
 function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
   if (!audioCtx || _bgmRateRamping()) return false; // レートランプ中は将来位置を外挿できない
   /* 打ち込みの起点が定まらないまま進んだトライ（戦闘開始直後のテープ演出中に
-     叩き切った場合）は、記録したスロットがレート変動下の値で相対間隔が歪んでいる。
+     叩き切った場合）は、記録した位置がレート変動下の値で相対間隔が歪んでいる。
      そのまま再生すると打ったリズムと違うものが鳴るので組まない */
   if (_king.recStartPos === null) return false;
   const nowPos = _bgmJudgePos();
   /* 発射タップ（5打目）も他の4打と同じ扱いでリズムに参加させる。
      一度「4射目までで決めてアクセントは次の拍境界へ置く」方式にしたが、ユーザー判断で
      元へ戻した。強制発射にはタップが無いので、その瞬間を5打目の位置として使う */
-  const accentSlot = forced ? _kingSeqSlotAt() : _kingSeqSlotAt(inputPerfMs);
-  if (nowPos === null || accentSlot === null) return false;
-  const rec = _king.rec.filter(r => r.slot !== null);
+  const accentPosRaw = forced ? _bgmJudgePos() : _bgmJudgePos(inputPerfMs);
+  if (nowPos === null || accentPosRaw === null) return false;
+  const rec = _king.rec.filter(r => r.pos !== null);
   if (rec.length === 0) return false;
   /* 再生開始アンカー: 最低リードを確保した先の「16分」スロット。
      以前はここからさらに拍へ切り上げていたが、拍は329ms間隔なので最大1拍まるごと
@@ -8130,18 +8125,52 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      裏かだけ。拍へ揃える意味は、発射タップを5打目に戻した時点で
      （アクセント＝次トライ開始がもともと拍から外れうるため）既に失われていた */
   const anchor = Math.ceil((nowPos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT);
-  /* 隙間クランプ（KING_SEQ_GAP_MAX の定義部参照）。5タップ（4マーク＋発射）の
-     間の隙間それぞれに上限を掛け、超えたぶんを切り詰めた新しいオフセットを作る。
-     短い隙間＝実際に叩いている部分はそのまま残り、長い待ち時間だけが詰まる。
-     発射タップも他の4打と区別せず並べる（ユーザー判断で「4射目までで決める」方式は
-     撤回済み）。OK以下のタップ（ビームも焦げ跡も出ない）も時間としては隙間を持つので、
-     ここでは markRef の有無に関わらず全タップを並べる */
-  const taps = rec.map(r => r.slot); taps.push(accentSlot);
-  const off = [0];
+  /* ── 打ち込んだ「相対的な間隔」から意図したビートシーケンスを読み取る ──
+     実機評価「打ち込んだリズムと違うリズムが再生される」「複数の音が同じタイミングに
+     集約されすぎる」「ンタタンタタンのようなリズムが上手く再生されない」への対応。
+
+     以前は各タップを記録時に絶対16分グリッドへ独立にスナップしていた。これだと
+     タップ同士の相対関係が壊れる。実測（BGM 182BPM相当・16分=82.2ms）:
+       均等な150ms×4    → 164.5, 164.5, 82.2, 164.5  （均等に叩いたのに3発目だけ半分）
+       300,150,150,300  → 328.9, 82.2, 164.5, 328.9  （等しい2つの150msが分裂）
+     しかも結果が「最初のタップがグリッドのどこに落ちたか」に依存するため、同じ叩き方
+     でも毎回違うリズムになる。隣り合うタップが同じスロットへ丸まれば1発に潰れる。
+
+     そこで絶対位置は使わず、隣接タップの間隔だけを見る:
+       1. 各間隔を上限（KING_SEQ_GAP_MAX）でクランプ … 待ち時間の除去。ここで先に
+          潰しておかないと、後段で読み取った比を長い待ちが壊す
+       2. 最小間隔 base を「プレイヤーが刻んでいた最小単位」とみなす
+       3. 単位 U = base を16分の整数倍へ丸めたもの … BGMのテンポへ載せ替える
+       4. 各間隔 = round(間隔 / base) × U … 比を整数で保つ
+     これで「均等に叩いたら均等に鳴る」「等しい間隔は等しく鳴る」が保証され、位相にも
+     依存しなくなる。出力は必ず16分の整数倍なので、絶対グリッドの上に乗る点は不変。
+
+     各間隔は最低1スロット空ける（Math.max(1, ...)）。これで異なるタップが同じ時刻へ
+     集約されることが構造的に起きなくなる。
+     発射タップも他の4打と区別せず並べる（「4射目までで決める」方式は撤回済み）。
+     OK以下のタップ（ビームも焦げ跡も出ない）も時間としては間隔を持つので、
+     markRef の有無に関わらず全タップを並べる。
+
+     なお、これにより「JUSTを取ったタップは絶対グリッドの境界に乗る」という以前の
+     性質は無くなる。再生はプレイヤーの絶対位置ではなくパターンの内部構造の再構成に
+     なったため。採点（こんがり%）とベロシティは従来どおり生のタイミングで決まるので、
+     報酬構造には影響しない。 */
+  const taps = rec.map(r => r.pos); taps.push(accentPosRaw);
+  const gapMaxPos = KING_SEQ_GAP_MAX * KING_SEQ_QUANT;
+  const d = [];
   for (let i = 1; i < taps.length; i++) {
-    off.push(off[i - 1] + Math.min(Math.max(0, taps[i] - taps[i - 1]), KING_SEQ_GAP_MAX));
+    d.push(Math.min(Math.max(0, taps[i] - taps[i - 1]), gapMaxPos));
   }
-  const accentOff = off[off.length - 1]; // 5打目＝打ち込んだ間隔のまま
+  const off = [0];
+  if (d.length > 0) {
+    const base = Math.max(Math.min(...d), 1e-6);
+    const unit = Math.max(1, Math.round(base / KING_SEQ_QUANT)); // 基準単位（16分いくつ分か）
+    for (const x of d) {
+      const g = Math.max(1, Math.min(KING_SEQ_GAP_MAX, Math.round(x / base) * unit));
+      off.push(off[off.length - 1] + g);
+    }
+  }
+  const accentOff = off[off.length - 1]; // 5打目＝読み取った比のまま
   /* 保険の最終クランプ（通常は scale=1 のまま。KING_SEQ_SPAN_SLOTS 参照） */
   const scale = accentOff > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / accentOff : 1;
   /* 再生位置（スロット単位・小数可）。KING_SEQ_PLAY_SCALE は現在1＝等速なので、
@@ -8167,7 +8196,7 @@ function _kingBuildSequence(inputPerfMs, forced, gain, flights) {
      隙間が詰まった打ち込みは KING_SEQ_GAP_MAX の倍数＝拍の整数倍になるので次トライの
      目盛りも拍から刻まれるが、詰まっていない（速い）打ち込みではプレイヤー自身の
      置き方がそのまま残るため拍から外れうる。ずれるのはバッテリー表示の刻みの位相
-     だけで、録音のグリッドは絶対位置基準（_kingSeqSlotAt）なので影響しない。
+     だけで、打ち込みの記録は生の位置（_bgmJudgePos）なので影響しない。
      焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
      不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
   const accentPos = (anchor + mapOff(accentOff)) * KING_SEQ_QUANT;
