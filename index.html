@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.03';
+const VERSION = 'v7.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6045,29 +6045,16 @@ const _itemVariantSprites = (() => {
     const c  = oc.getContext('2d');
     c.scale(_dpr, _dpr);
     c.translate(_ITEM_SPRITE_HALF, _ITEM_SPRITE_HALF);
-    /* 影（drawOneItem のフォールバックパスと同一） */
-    c.save();
-    c.translate(s*0.06, s*0.12);
-    c.scale(1, 0.55);
-    c.beginPath(); c.arc(0, 0, s*0.58, 0, Math.PI*2);
-    c.fillStyle = 'rgba(0,0,0,0.18)'; c.fill();
-    c.restore();
-    /* 本体（makeItem と同一のランダムパレット） */
-    const skinL = `hsl(${42+Math.random()*12|0},${48+Math.random()*12|0}%,${78+Math.random()*8|0}%)`;
-    const skinD = `hsl(${38+Math.random()*10|0},${50+Math.random()*14|0}%,${62+Math.random()*8|0}%)`;
-    const grd = c.createRadialGradient(-s*0.18, -s*0.12, 0, 0, s*0.08, s*0.62);
-    grd.addColorStop(0, skinL);
-    grd.addColorStop(0.6, skinD);
-    grd.addColorStop(1, 'hsl(35,45%,50%)');
-    _drawGyozaBody(c, s, 0, 0, grd); // 関数宣言はホイスティングされるため前方参照可
-    /* 具（makeItem と同一の乱数レンジ） */
+    _drawGyozaShadow(c, s); // 関数宣言はホイスティングされるため前方参照可
+    const skin = _gyozaSkinPalette();
+    _drawGyozaBody(c, s, 0, 0, _gyozaBodyGradient(c, s, skin.skinL, skin.skinD));
     c.globalAlpha = 0.82;
+    const gs = {};
     for (let i = 0; i < 5; i++) {
+      _gyozaGreenSpec(gs);
       c.beginPath();
-      c.ellipse((Math.random()-0.5)*0.55*s, (Math.random()-0.5)*0.35*s,
-                (0.055+Math.random()*0.04)*s, (0.035+Math.random()*0.03)*s,
-                (Math.random()-0.5)*1.2, 0, Math.PI*2);
-      c.fillStyle = `hsl(${108+Math.random()*24|0},${60+Math.random()*20|0}%,${35+Math.random()*15|0}%)`;
+      c.ellipse(gs.dx*s, gs.dy*s, gs.rx*s, gs.ry*s, gs.a, 0, Math.PI*2);
+      c.fillStyle = gs.color;
       c.fill();
     }
     c.globalAlpha = 1;
@@ -6091,24 +6078,13 @@ function makeItem(x, y, vx, vy) {
     return g;
   }
   g._spr   = null;
-  g.skinL  = `hsl(${42+Math.random()*12|0},${48+Math.random()*12|0}%,${78+Math.random()*8|0}%)`;
-  g.skinD  = `hsl(${38+Math.random()*10|0},${50+Math.random()*14|0}%,${62+Math.random()*8|0}%)`;
+  const skin = _gyozaSkinPalette();
+  g.skinL  = skin.skinL;
+  g.skinD  = skin.skinD;
   /* ボディグラジェントをここで1回だけ生成してキャッシュ */
-  const s = size;
-  g.bodyGrd = ctx.createRadialGradient(-s*0.18, -s*0.12, 0, 0, s*0.08, s*0.62);
-  g.bodyGrd.addColorStop(0, g.skinL);
-  g.bodyGrd.addColorStop(0.6, g.skinD);
-  g.bodyGrd.addColorStop(1, 'hsl(35,45%,50%)');
+  g.bodyGrd = _gyozaBodyGradient(ctx, size, g.skinL, g.skinD);
   /* greens: 事前確保済みの配列オブジェクトを再利用してGCゼロ */
-  for (let i = 0; i < 5; i++) {
-    const gr = g.greens[i];
-    gr.dx    = (Math.random()-0.5)*0.55;
-    gr.dy    = (Math.random()-0.5)*0.35;
-    gr.rx    = 0.055+Math.random()*0.04;
-    gr.ry    = 0.035+Math.random()*0.03;
-    gr.a     = (Math.random()-0.5)*1.2;
-    gr.color = `hsl(${108+Math.random()*24|0},${60+Math.random()*20|0}%,${35+Math.random()*15|0}%)`;
-  }
+  for (let i = 0; i < 5; i++) _gyozaGreenSpec(g.greens[i]);
   return g;
 }
 
@@ -6286,6 +6262,59 @@ function updateItems() {
    c2: 描画先コンテキスト / s: サイズ / ox,oy: 中心座標 / bodyGrd: 本体グラジェント
    影・具（greens）・オーラ・ハロ・尾は呼び出し側で個別に描く。
    オブジェクト生成なし（c2の参照とプリミティブのみ）→ GC 影響ゼロ。 */
+/* ── ギヨウザの外観パラメータ ──────────────────────────
+   アイテムは「起動時に焼き込んだスプライトを転写する」経路と「毎フレーム
+   ベクタで描く」フォールバック経路の2つを持ち、同じ見た目を別々のコードで
+   作っていた（片方を直してもう片方が古いまま、が起きる形）。
+   両経路が同じ関数を呼ぶようにして、外観の定義を1箇所にまとめる。
+   Math.randomを消費する順序は元のインライン版と同じ（皮→具、具は位置→大きさ→
+   角度→色）。ここが変わると同じ乱数列から別の見た目が出るので動かさないこと。
+   これらは起動時のスプライト生成（即時実行）からも呼ばれるが、関数宣言は
+   ホイスティングされるため定義位置より前から参照できる */
+
+/* 皮の焼き色（個体差用のランダムパレット） */
+function _gyozaSkinPalette() {
+  return {
+    skinL: `hsl(${42+Math.random()*12|0},${48+Math.random()*12|0}%,${78+Math.random()*8|0}%)`,
+    skinD: `hsl(${38+Math.random()*10|0},${50+Math.random()*14|0}%,${62+Math.random()*8|0}%)`,
+  };
+}
+
+/* 本体の陰影グラデーション。中心を左上へずらして光の当たりを作る比率は
+   _drawGyozaBodyの形（中心Y=+s*0.08、rx=s*0.58・ry=s*0.48）と対で決まっている
+   ため、アイテム・スプライト・キング本体で同じ式を使う。キングだけは焼き色を
+   固定色で持つのでouterまで指定する */
+function _gyozaBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
+  const grd = c2.createRadialGradient(-s*0.18, -s*0.12, 0, 0, s*0.08, s*0.62);
+  grd.addColorStop(0, skinL);
+  grd.addColorStop(0.6, skinD);
+  grd.addColorStop(1, outer);
+  return grd;
+}
+
+/* 具（緑）1粒のランダムな配置・大きさ・角度・色。値はsizeに対する比率。
+   結果は渡されたオブジェクトへ書き込む（アイテム側は事前確保した器を
+   使い回してGCを出さない設計のため、戻り値で新しい器を作らない） */
+function _gyozaGreenSpec(out) {
+  out.dx = (Math.random()-0.5)*0.55;
+  out.dy = (Math.random()-0.5)*0.35;
+  out.rx = 0.055+Math.random()*0.04;
+  out.ry = 0.035+Math.random()*0.03;
+  out.a  = (Math.random()-0.5)*1.2;
+  out.color = `hsl(${108+Math.random()*24|0},${60+Math.random()*20|0}%,${35+Math.random()*15|0}%)`;
+  return out;
+}
+
+/* 接地影（真下に潰した楕円） */
+function _drawGyozaShadow(c2, s) {
+  c2.save();
+  c2.translate(s*0.06, s*0.12);
+  c2.scale(1, 0.55);
+  c2.beginPath(); c2.arc(0, 0, s*0.58, 0, Math.PI*2);
+  c2.fillStyle = 'rgba(0,0,0,0.18)'; c2.fill();
+  c2.restore();
+}
+
 function _drawGyozaBody(c2, s, ox, oy, bodyGrd) {
   /* 本体楕円 */
   c2.beginPath();
@@ -6345,15 +6374,7 @@ function drawOneItem(g) {
     return;
   }
 
-  /* 影（drawOneItem固有） */
-  ctx.save();
-  ctx.translate(s*0.06, s*0.12);
-  ctx.scale(1, 0.55);
-  ctx.beginPath();
-  ctx.arc(0, 0, s*0.58, 0, Math.PI*2);
-  ctx.fillStyle = 'rgba(0,0,0,0.18)';
-  ctx.fill();
-  ctx.restore();
+  _drawGyozaShadow(ctx, s);
 
   /* 本体形状（共通） */
   _drawGyozaBody(ctx, s, 0, 0, g.bodyGrd);
@@ -7295,10 +7316,8 @@ function _buildBossOC() {
   const bc = bodyOC.getContext('2d');
   bc.scale(_dpr, _dpr);
   bc.translate(half, half);
-  const grd = bc.createRadialGradient(-REF*0.18, -REF*0.12, 0, 0, REF*0.08, REF*0.62);
-  grd.addColorStop(0, 'hsl(46,50%,80%)');
-  grd.addColorStop(0.6, 'hsl(40,52%,64%)');
-  grd.addColorStop(1, 'hsl(35,45%,48%)');
+  /* 焼き色はアイテムのようなランダムではなく固定（キングは1体しかいない） */
+  const grd = _gyozaBodyGradient(bc, REF, 'hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)');
   bc.save();
   bc.scale(kk, kk);
   _drawGyozaBody(bc, REF, 0, 0, grd);
