@@ -549,13 +549,16 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.99';
+const VERSION = 'v7.00';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
 const YD  = '#c8a800';
 const GN  = '#0f5c22';
-const GN2 = '#1a7a30';
+
+/* canvasのfont指定で使う明朝ファミリ。88箇所に直書きされていたものを一本化
+   （CSS側のbody指定はフォールバックを含む別の並びである点に注意: 変更時は両方見る） */
+const FONT_MIN = "'Hiragino Mincho ProN',serif";
 
 /* ホイールハブグラジェント: 全ホイール・全トライ共通（毎トライの生成＆GCを排除）
    ctx.scale(_dpr,_dpr)適用済み・カラー定数定義後に1回だけ生成。
@@ -723,8 +726,8 @@ const COIN_DISP_MIN_RATE = 0.5;
 function _initBetLabelWidth() {
   ctx.save();
   ctx.font = IS_PORTRAIT
-    ? `bold 24px 'Hiragino Mincho ProN',serif`
-    : `bold 28px 'Hiragino Mincho ProN',serif`;
+    ? `bold 24px ${FONT_MIN}`
+    : `bold 28px ${FONT_MIN}`;
   _cachedBetLabelW = ctx.measureText('BET').width;
   ctx.restore();
 }
@@ -733,7 +736,7 @@ function _initBetLabelWidth() {
    コイン数値(60px)・BET数値(42/46px)は文字列が変わった時だけ OC に描画し、
    毎フレームは drawImage 1回にする。カウントアップアニメ中は毎フレーム
    再描画になるが、静止時（大半の時間）のラスタライズコストがゼロになる。 */
-const _COINS_FONT   = `bold 60px 'Hiragino Mincho ProN',serif`;
+const _COINS_FONT   = `bold 60px ${FONT_MIN}`;
 const _COINS_TEXT_H = 72;
 let _coinsTextOC = null, _coinsTextW = 0, _coinsTextColor = '', _coinsTextStr = '';
 function _ensureCoinsTextOC(color) {
@@ -759,8 +762,8 @@ function _ensureCoinsTextOC(color) {
 }
 
 const _BET_FONT   = IS_PORTRAIT
-  ? `bold 42px 'Hiragino Mincho ProN',serif`
-  : `bold 46px 'Hiragino Mincho ProN',serif`;
+  ? `bold 42px ${FONT_MIN}`
+  : `bold 46px ${FONT_MIN}`;
 const _BET_TEXT_H = 56;
 let _betTextOC = null, _betTextStr = '';
 function _ensureBetTextOC() {
@@ -797,8 +800,8 @@ function _updateDisplayCaches() {
     /* bet 数字幅を計測（フォントサイズはレイアウトに合わせる） */
     ctx.save();
     ctx.font = IS_PORTRAIT
-      ? `bold 42px 'Hiragino Mincho ProN',serif`
-      : `bold 46px 'Hiragino Mincho ProN',serif`;
+      ? `bold 42px ${FONT_MIN}`
+      : `bold 46px ${FONT_MIN}`;
     _cachedBetNumW = ctx.measureText(_cachedBetStr).width;
     ctx.restore();
   }
@@ -1372,7 +1375,7 @@ function _buildResultOC(w) {
   c.clearRect(0, 0, sz, sz);
   c.scale(_dpr, _dpr);
   const [fillC, glowC] = _syncBarColor(w.syncScore);
-  c.font = `bold 44px 'Hiragino Mincho ProN',serif`;
+  c.font = `bold 44px ${FONT_MIN}`;
   c.textAlign = 'center'; c.textBaseline = 'middle';
   /* ?noresblur: グローを外して焼く調査用フラグ。
      「1射ごとの30msスパイクはこのぼかしのラスタライズではないか」という仮説の
@@ -4981,7 +4984,7 @@ function createWheel(x, y, feverChar) {
        font は OC 描画でも使うので常に作る（fontOf: s => s.font） */
     const grd = !_CACHE_OK ? _segFallbackGradient(c, mid) : null;
     const fontSize = Math.max(12, Math.min(33, (span / (Math.PI * 2)) * 116));
-    const font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+    const font = `bold ${fontSize}px ${FONT_MIN}`;
     const s = { char: c, start: angle, span, gradient: grd, font };
     angle += span;
     return s;
@@ -5130,7 +5133,7 @@ function _releaseKingReelOCs(reels) {
    フィールドを持たないため都度計算する） */
 function _kingReelFontOf(s) {
   const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
-  return `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+  return `bold ${fontSize}px ${FONT_MIN}`;
 }
 
 function _buildKingReelOC(w) {
@@ -5437,7 +5440,7 @@ function drawKingReel(w, active, idx) {
   if (w.result) {
     ctx.save();
     ctx.translate(w.x, w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2);
-    ctx.font = `bold ${KING_RESULT_FONT}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${KING_RESULT_FONT}px ${FONT_MIN}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)'; ctx.strokeText(w.result, 0, 0);
     ctx.fillStyle = '#fffde7'; ctx.fillText(w.result, 0, 0);
@@ -7092,7 +7095,7 @@ function drawGyogyo(list, outroTimer) {
     ctx.translate(tx2, ty2);
     ctx.scale(scale2, scale2);
     ctx.rotate(Math.sin(t * 0.07 + k) * 0.3);
-    ctx.font = `bold 26px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 26px ${FONT_MIN}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.strokeStyle = 'rgba(0,0,0,0.7)';
@@ -7187,7 +7190,7 @@ const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていっ
    使わないと、計測結果と実際の幅がずれてそのまま横はみ出しになる（実機で一度
    発生済み）。サイズだけでなくフォント文字列そのものを一本化しておく */
 function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
-function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px 'Hiragino Mincho ProN',serif`; }
+function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px ${FONT_MIN}`; }
 /* 締めメッセージを画面幅に収まるよう折り返す。
    実機指摘: 縦画面（W=420）で「ギヨウザは また あつまりはじめる……」が横から
    はみ出していた。文言は後から調整する前提なので、固定の行配列をそのまま
@@ -7831,7 +7834,7 @@ function drawBossOmen() {
   if (o.step >= 1 && o.step <= 4) {
     const fsL = IS_PORTRAIT ? 22 : 26;
     const lineY0 = H * 0.30, lineDy = fsL * 2.2;
-    ctx.font = `bold ${fsL}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${fsL}px ${FONT_MIN}`;
     for (let i = 0; i < o.step && i < _OMEN_LINES.length; i++) {
       const isCur = (i === o.step - 1);
       ctx.globalAlpha = isCur ? Math.min(1, o.timer / 20) : 0.5;
@@ -7852,7 +7855,7 @@ function drawBossOmen() {
     ctx.translate(bx, by); ctx.scale(k, k);
     ctx.drawImage(_bossOC.oc, -_bossOC.half, -_bossOC.half, _bossOC.half*2, _bossOC.half*2);
     ctx.restore();
-    ctx.font = `bold ${IS_PORTRAIT ? 28 : 40}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${IS_PORTRAIT ? 28 : 40}px ${FONT_MIN}`;
     outText('キングギヨウザ とうじょう！！', W/2, by - _BOSS_S*0.62,
       '#ffdd55', 'rgba(60,0,0,0.9)', 8);
     if (o.step === 7) _drawBottomPillBadge('CONTINUE');
@@ -8059,8 +8062,6 @@ let _kingCrackKinLastMs = -Infinity;
    遅れ気味のGOODは隣の16分＝裏に置かれるようになる＝より忠実に再現される。 */
 const KING_SEQ_DIV = 4;
 const KING_SEQ_QUANT = BGM_BEAT / KING_SEQ_DIV; // 量子化の刻み（16分音符 ≈ 82ms）
-/* スロット s を「次の拍境界」へ切り上げる（再生開始アンカー・次トライ開始の位置決め用） */
-const _kingSeqBeatUp = s => Math.ceil(s / KING_SEQ_DIV) * KING_SEQ_DIV;
 /* 1小節のスロット数（BGMは4/4。BGM_MEL_BOSSの定義部参照）と、小節境界への切り上げ。
    コール＆レスポンスの枠はすべてこの単位で決まる（_kingBuildSequence参照） */
 const KING_BAR_BEATS = 4;
@@ -9621,7 +9622,7 @@ function drawKingCharFlights() {
     ctx.globalAlpha = alpha;
     ctx.fillStyle = _syncBarColor(f.score)[0];
     const fontSize = _kingCharFontSize(f);
-    ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${fontSize}px ${FONT_MIN}`;
     /* fall中（弾き飛ばされた後）はrotで回転させ、勢いよく弾かれた様子を強調する
        （KING_CHAR_KNOCK_ROT_SPD、_updateKingCharFlights参照） */
     if (f.state === 'fall' && f.rot) {
@@ -9777,7 +9778,7 @@ function drawKingCookGauge(achieved = false) {
       x += cw + ((i + 1) % KING_BATTERY_GROUP === 0 ? ggap : cgap);
     }
   }
-  ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = Y;
   /* 四捨五入(Math.round)だと99.5%が「100%」と表示されるのに勝利条件
      （_king.cookPct>=100、_kingReelShoot参照）は満たさず、表示100%なのに
@@ -9953,7 +9954,7 @@ function drawBossVictory() {
     drawKingCharFlights();
   }
   _drawVictorySteam();
-  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   /* 文言はボスの裾（拡大アニメ中は dscale に連動して動く）のすぐ下に置く。
      旧実装は画面上部固定だったため、所持ギヨウザ表示・上部アイコンと重なっていた
@@ -9967,7 +9968,7 @@ function drawBossVictory() {
      coinsDispのカウントアップで増えていくが、それだけだと「なぜ増えたのか」が
      分からないため理由を明示する */
   if (_bossVictoryTimer > 40 && _bossVictoryWonCoins > 0) {
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 15px ${FONT_MIN}`;
     outText(`ギヨウザ ${fmt(_bossVictoryWonCoins)}個が 解放された！`, W / 2, Math.max(H - 80, titleY + 40),
       '#ffe9a8', 'rgba(60,20,0,0.85)', 4);
   }
@@ -10214,7 +10215,7 @@ const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
 const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 132; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
 const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 84;  // 文字列の開始位置（アイコンの実測幅とは無関係）
-const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px 'Hiragino Mincho ProN',serif`;
+const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px ${FONT_MIN}`;
 /* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
    （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
 const _TRUE_ENDING_BEAT = 0.6;
@@ -10326,7 +10327,7 @@ function _buildTrueEndingContent() {
   const spacerBeforeClose   = H * _TRUE_ENDING_SPACER_BEFORE_CLOSE_RATIO;
   const maxTextWidth = W - 48; // 左右マージン24pxずつ
 
-  const closeFont = `bold ${fsClose}px 'Hiragino Mincho ProN',serif`;
+  const closeFont = `bold ${fsClose}px ${FONT_MIN}`;
   const closeDisplayLines = _TRUE_ENDING_CLOSE_LINES.flatMap(t => _wrapTrueEndingLine(t, closeFont, maxTextWidth));
 
   const rows = [];
@@ -10596,7 +10597,7 @@ function _drawTrueEndingRows(o) {
          文字と罫線のみに留める）。罫線は文字幅より少し広い固定幅で、
          中央から左右対称に引く */
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `bold ${row.fs}px ${FONT_MIN}`;
       const ruleHalfW = Math.min(W * 0.34, ctx.measureText(row.text).width / 2 + row.fs * 1.6);
       const ruleDy = row.fs * 1.05;
       ctx.strokeStyle = 'rgba(245,208,32,0.55)';
@@ -10616,7 +10617,7 @@ function _drawTrueEndingRows(o) {
          詰まったまま無言で描かれてしまうため）。全体幅を先に合計して中央から
          左右対称に配置する */
       ctx.textBaseline = 'middle';
-      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `bold ${row.fs}px ${FONT_MIN}`;
       const chars = [...row.text];
       const tracking = row.fs * _TRUE_ENDING_SUBHEADER_TRACKING_RATIO;
       const widths = chars.map(c => ctx.measureText(c).width);
@@ -10629,7 +10630,7 @@ function _drawTrueEndingRows(o) {
       }
     } else {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = `bold ${row.fs}px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `bold ${row.fs}px ${FONT_MIN}`;
       outText(row.text, W / 2, screenY, '#e8e2d0', 'rgba(0,0,0,0.9)', 6);
     }
   }
@@ -10679,7 +10680,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   /* エリア中央（数学的な中点）よりわずかに内周（中央エリア）寄りにオフセットし、
      文字の周囲に均等な余白ができるようにする（崎陽軒の実物パッケージ参照） */
   const sideCX    = (centerHalfW + R) / 2 - R * 0.05;
-  ctx.font = `bold ${sideFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${sideFont}px ${FONT_MIN}`;
   ctx.fillStyle = GN;
   ctx.fillText('横', sideCX, -sideLineH / 2 - sideGap / 2);
   ctx.fillText('濱', sideCX, sideLineH / 2 + sideGap / 2);
@@ -10688,7 +10689,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
 
   const centerFont  = R * 0.34 * 1.4 * 1.08; // 「ギヨウザ」を1.4倍、さらに全体を1.08倍に
   const centerLineH = centerFont * 0.88; // 文字間隔を少し詰める（中心揃えは対称な配置式のため自動的に維持される）
-  ctx.font = `bold ${centerFont}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${centerFont}px ${FONT_MIN}`;
   ctx.fillStyle = '#ffffff';
   const chars = ['ギ', 'ヨ', 'ウ', 'ザ'];
   const charScaleX = [1.08, 1.20, 1.00, 0.94]; // ヨを少し大きく、ウ・ザを少し小さく
@@ -10729,7 +10730,7 @@ function drawTrueEnding() {
     const titleY = H * 0.5 - _TRUE_ENDING_TITLE_Y_OFFSET + creditFontSize;
     ctx.globalAlpha = o.titleAlpha;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px ${FONT_MIN}`;
     ctx.fillStyle = Y;
     /* macOS Safari実機報告: アルファのフェードとshadowBlurのグローを同時に
        変化させると、globalAlphaにもshadowColor自体へのalpha埋め込みにも
@@ -10750,7 +10751,7 @@ function drawTrueEnding() {
     ctx.globalAlpha = 1;
     if (o.stage === 'titleHold' && o.creditAlpha > 0) {
       ctx.globalAlpha = o.creditAlpha;
-      ctx.font = `${creditFontSize}px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `${creditFontSize}px ${FONT_MIN}`;
       ctx.fillStyle = 'rgba(245,208,32,0.75)';
       ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 78 : 90) - _TRUE_ENDING_TITLE_Y_OFFSET - creditFontSize * 2);
       ctx.globalAlpha = 1;
@@ -10979,7 +10980,7 @@ function drawBossDefeat() {
      その後、所持ギヨウザ0のゲームオーバー演出に進んでください」）。
      coins<=0によるここでの早期分岐（通常ゲームオーバー画面を先に出す）は
      廃止し、_kingBattleEnd側で出口を分ける（コメント参照） */
-  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const titleY = _king
     ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
@@ -10991,7 +10992,7 @@ function drawBossDefeat() {
      状態でtitleYがそのオフセットを超え、見出しと重なってしまうため
      （実機指摘: 「下に表示される文字列が重なっている」） */
   if (_bossDefeatTimer > 40) {
-    ctx.font = `bold 15px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 15px ${FONT_MIN}`;
     /* 没収個数の実数表示（ギヨウザN個が吸収された）から、割合表示に変更
        （ユーザー要望）。_startBossDefeatの没収ロジック（Math.ceil(coins/2)）
        が常に「所持数の半分」である事実そのままの文言にした */
@@ -11443,7 +11444,7 @@ function draw() {
     /* 実績パネルが開いている間は "PAUSED" テキストを非表示（パネルが全面を覆うため） */
     if (!showAchievements) {
       ctx.fillStyle = 'rgba(245,208,32,0.95)';
-      ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
+      ctx.font = `bold 36px ${FONT_MIN}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('PAUSED', W/2, H/2);
@@ -11667,7 +11668,7 @@ function _drawBetBtn(rect, label, canChange, fontSize) {
   ctx.fillStyle = canChange ? 'rgba(245,208,32,0.18)' : 'rgba(120,120,120,0.10)'; ctx.fill();
   ctx.strokeStyle = canChange ? 'rgba(245,208,32,0.55)' : 'rgba(120,120,120,0.25)';
   ctx.lineWidth = 1.4; ctx.stroke();
-  ctx.font = `bold ${fontSize}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${fontSize}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
@@ -11770,7 +11771,7 @@ function drawWheel(i) {
     } else {
       /* フォールバック: OffscreenCanvas 未対応時 */
       const [fillC, glowC] = _syncBarColor(w.syncScore);
-      ctx.font=`bold 44px 'Hiragino Mincho ProN',serif`;
+      ctx.font=`bold 44px ${FONT_MIN}`;
       ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.shadowColor=glowC; ctx.shadowBlur=10 + w.syncScore * 20;
       ctx.fillStyle=fillC; ctx.fillText(w.result,0,0);
@@ -11883,7 +11884,7 @@ function drawCoinHeader() {
 
   /* ラベル「所持ギヨウザ」- 左上（BESTスコアの対角） */
   ctx.globalAlpha = blink * 0.7;
-  ctx.font = `11px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `11px ${FONT_MIN}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillStyle = mainColor;
   ctx.fillText('所持ギヨウザ', px + 8, py + 6);
@@ -11941,7 +11942,7 @@ function drawBottomBar() {
   const startX = cx - totalW / 2;
   ctx.fillStyle = Y;
   ctx.textAlign = 'left';
-  ctx.font = `bold 28px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 28px ${FONT_MIN}`;
   ctx.fillText('BET', startX, cy);
   const _bOC = _ensureBetTextOC();
   if (_bOC) {
@@ -11997,7 +11998,7 @@ function drawPortraitBottomBar() {
   const startX = cx - totalW / 2;
   ctx.fillStyle = Y;
   ctx.textAlign = 'left';
-  ctx.font = `bold 24px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 24px ${FONT_MIN}`;
   ctx.fillText('BET', startX, cy);
   const _bOCp = _ensureBetTextOC();
   if (_bOCp) {
@@ -12178,7 +12179,7 @@ function drawReachText() {
   ctx.save();
   ctx.translate(W / 2, 78);
   ctx.scale(pulse, pulse);
-  _outTextCached('reach_t', 'リーチ！', `bold 58px 'Hiragino Mincho ProN',serif`,
+  _outTextCached('reach_t', 'リーチ！', `bold 58px ${FONT_MIN}`,
     Y, 'rgba(0,0,0,0.92)', 10, Y, 45, 0, 0);
   ctx.restore();
 
@@ -12186,7 +12187,7 @@ function drawReachText() {
   if (reachTimer > REACH_DECEL_FRAMES) {
     const blink = 0.45 + 0.45 * Math.sin(reachTimer * 0.15);
     ctx.globalAlpha = blink * fadeIn;
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 22px ${FONT_MIN}`;
     ctx.textAlign = 'center';
     ctx.shadowColor = Y; ctx.shadowBlur = 18;
     outText('矢を放て！', W / 2, 125, '#fffde7', 'rgba(0,0,0,0.85)', 5);
@@ -12200,7 +12201,7 @@ function drawMissPopup() {
   if (missPopups.length === 0) return;
   const TOTAL = 120;
   ctx.save();
-  ctx.font = `bold 36px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 36px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   /* shadowBlur除去: 黒アウトライン(lw=6)で視認性は確保済み。GPU負荷削減。 */
   for (const p of missPopups) {
@@ -12220,7 +12221,7 @@ function drawPayoutPopup() {
   if (payoutPopups.length === 0) return;
   const TOTAL = 150;
   ctx.save();
-  ctx.font = `bold 42px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 42px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.shadowColor = '#ffcc00'; ctx.shadowBlur = 30;
   for (const p of payoutPopups) {
@@ -12359,13 +12360,13 @@ function _drawGameOverTitle(alpha, timer, canProceed) {
     const goLine = Math.round(goFs * 1.3); // 行中心間距離 ≈ 57px
     const goY1   = H / 2 - goLine / 2 - 30;    // 「ギヨウザが」中心（30px上げ）
     const goY2   = H / 2 + goLine / 2 - 30;    // 「なくなりました」中心（30px上げ）
-    const goFont = `bold ${goFs}px 'Hiragino Mincho ProN',serif`;
+    const goFont = `bold ${goFs}px ${FONT_MIN}`;
     _outTextCached('go_t2', 'なくなりました', goFont,
       '#ff8866', 'rgba(40,0,0,0.95)', 9, '#ff2200', 50, W/2, goY2); // 先に描画
     _outTextCached('go_t1', 'ギヨウザが', goFont,
       '#ff8866', 'rgba(40,0,0,0.95)', 9, '#ff2200', 50, W/2, goY1); // 後に描画→前面
   } else {
-    _outTextCached('go_t', 'ギヨウザがなくなりました', `bold 56px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('go_t', 'ギヨウザがなくなりました', `bold 56px ${FONT_MIN}`,
       '#ff8866', 'rgba(40,0,0,0.95)', 9, '#ff2200', 50, W/2, H/2 - 30);
   }
   ctx.restore();
@@ -12375,7 +12376,7 @@ function _drawGameOverTitle(alpha, timer, canProceed) {
     const blink = 0.45 + 0.45 * Math.sin(timer * 0.1);
     ctx.globalAlpha = blink * alpha;
     ctx.shadowBlur = 0;
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 22px ${FONT_MIN}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     outText(
       'ギヨウザを10パック買って出直す',
@@ -12421,7 +12422,7 @@ function drawEndScreen() {
 
       /* 虹色グラデーションテキスト:
          フィル色はアニメーションするためグロー+縁取りだけ焼き、フィルのみ毎フレーム描く */
-      const _rjFont = `bold ${_fsR(96)}px 'Hiragino Mincho ProN',serif`;
+      const _rjFont = `bold ${_fsR(96)}px ${FONT_MIN}`;
       ctx.font = _rjFont;
       ctx.textAlign='center'; ctx.textBaseline='middle';
       const grad = ctx.createLinearGradient(-_fsR(200),0,_fsR(200),0);
@@ -12441,7 +12442,7 @@ function drawEndScreen() {
         outText('超大当たり',0,0, grad, 'rgba(0,0,0,0.92)', _fsR(13));
         ctx.shadowBlur = 0;
       }
-      _outTextCached('rjp_s', 'リーチ達成！ ギ ヨ ウ ザ', `bold ${_fs(36)}px 'Hiragino Mincho ProN',serif`,
+      _outTextCached('rjp_s', 'リーチ達成！ ギ ヨ ウ ザ', `bold ${_fs(36)}px ${FONT_MIN}`,
         '#ffffff', 'rgba(0,0,0,0.88)', _fs(8), '#fff', 22, 0, _fy(92));
       ctx.restore();
 
@@ -12452,9 +12453,9 @@ function drawEndScreen() {
       const halo=ctx.createRadialGradient(0,0,_fs(20),0,0,_fs(230));
       halo.addColorStop(0,'rgba(245,208,32,0.4)'); halo.addColorStop(1,'rgba(245,208,32,0)');
       ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(0,0,_fs(230),0,Math.PI*2); ctx.fill();
-      _outTextCached('jp_t', '大当たり', `bold ${_fs(88)}px 'Hiragino Mincho ProN',serif`,
+      _outTextCached('jp_t', '大当たり', `bold ${_fs(88)}px ${FONT_MIN}`,
         Y, 'rgba(0,0,0,0.9)', _fs(11), Y, 55, 0, 0);
-      _outTextCached('jp_s', 'ギ ヨ ウ ザ 達成！', `bold ${_fs(32)}px 'Hiragino Mincho ProN',serif`,
+      _outTextCached('jp_s', 'ギ ヨ ウ ザ 達成！', `bold ${_fs(32)}px ${FONT_MIN}`,
         '#fffde7', 'rgba(0,0,0,0.85)', _fs(7), Y, 20, 0, _fy(80));
       ctx.restore();
     }
@@ -12463,18 +12464,18 @@ function drawEndScreen() {
   } else if (hitType === 'gizagiza') {
     const pulse=1+0.05*Math.sin(endTimer*0.10);
     ctx.save(); ctx.translate(W/2,cy); ctx.scale(pulse,pulse);
-    _outTextCached('gz_t', '小当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10), '#c0d8f0', 50, 0, 0);
-    _outTextCached('gz_s', 'ギ ザ ギ ザ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gz_s', 'ギ ザ ギ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#e8f4ff', 'rgba(0,20,60,0.85)', _fs(7), '#c0d8f0', 20, 0, _fy(78));
     ctx.restore();
 
   /* ━━ ウヨウヨ 中当たり ━━ */
   } else if (hitType === 'uyouyo') {
     ctx.save(); ctx.translate(W/2,cy);
-    _outTextCached('uy_t', '中当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#aaee66', 'rgba(0,40,0,0.9)', _fs(10), '#7ec850', 50, 0, 0);
-    _outTextCached('uy_s', 'ウ ヨ ウ ヨ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uy_s', 'ウ ヨ ウ ヨ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#ccff88', 'rgba(0,40,0,0.85)', _fs(7), '#7ec850', 20, 0, _fy(78));
     ctx.restore();
 
@@ -12483,9 +12484,9 @@ function drawEndScreen() {
     ctx.save(); ctx.translate(W/2,cy);
     const wobbleX=Math.sin(endTimer*2.1)*4, wobbleY=Math.cos(endTimer*1.7)*3;
     ctx.translate(wobbleX,wobbleY);
-    _outTextCached('uz_t', '小当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10), '#ff6600', 40, 0, 0);
-    _outTextCached('uz_s', 'ウ ザ ウ ザ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uz_s', 'ウ ザ ウ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#ffcc44', 'rgba(60,0,0,0.85)', _fs(7), '#ff6600', 15, 0, _fy(78));
     ctx.restore();
 
@@ -12493,10 +12494,10 @@ function drawEndScreen() {
   } else if (hitType === 'giugiu') {
     const squeeze = 1 - Math.abs(Math.sin(endTimer*0.08))*0.08;
     ctx.save(); ctx.translate(W/2,cy); ctx.scale(1, squeeze);
-    _outTextCached('gu_t', '中当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
-      '#f5d020', 'rgba(0,0,0,0.9)', _fs(10), '#f5d020', 45, 0, 0);
-    _outTextCached('gu_s', 'ギ ウ ギ ウ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
-      '#fffde7', 'rgba(0,0,0,0.85)', _fs(7), '#f5d020', 18, 0, _fy(78));
+    _outTextCached('gu_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
+      Y, 'rgba(0,0,0,0.9)', _fs(10), Y, 45, 0, 0);
+    _outTextCached('gu_s', 'ギ ウ ギ ウ', `bold ${_fs(38)}px ${FONT_MIN}`,
+      '#fffde7', 'rgba(0,0,0,0.85)', _fs(7), Y, 18, 0, _fy(78));
     ctx.restore();
 
   /* ━━ ギギギギ 小当たり ━━ */
@@ -12504,9 +12505,9 @@ function drawEndScreen() {
     /* ガタガタ揺れる */
     const jx = (Math.random()-0.5)*6, jy = (Math.random()-0.5)*4;
     ctx.save(); ctx.translate(W/2+jx, cy+jy);
-    _outTextCached('gg_t', '小当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gg_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10), '#aaddff', 40, 0, 0);
-    _outTextCached('gg_s', 'ギ ギ ギ ギ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gg_s', 'ギ ギ ギ ギ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#ffffff', 'rgba(0,0,20,0.88)', _fs(7), '#aaddff', 18, 0, _fy(78));
     ctx.restore();
 
@@ -12515,9 +12516,9 @@ function drawEndScreen() {
     /* 上下にわずかに弾む */
     const bounce = Math.abs(Math.sin(endTimer*0.15)) * 8;
     ctx.save(); ctx.translate(W/2, cy + bounce);
-    _outTextCached('yy_t', '中当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('yy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#55eedd', 'rgba(0,30,30,0.92)', _fs(10), '#44ddcc', 45, 0, 0);
-    _outTextCached('yy_s', 'ヨ ヨ ヨ ヨ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('yy_s', 'ヨ ヨ ヨ ヨ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#aaffee', 'rgba(0,30,30,0.88)', _fs(7), '#44ddcc', 18, 0, _fy(78));
     ctx.restore();
 
@@ -12526,18 +12527,18 @@ function drawEndScreen() {
     /* ゆらゆら漂う */
     const fx = Math.sin(endTimer*0.04)*5, fy = Math.cos(endTimer*0.03)*3;
     ctx.save(); ctx.translate(W/2+fx, cy+fy);
-    _outTextCached('uu_t', '中当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uu_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#cce8ff', 'rgba(0,10,40,0.92)', _fs(10), '#aaccff', 55, 0, 0);
-    _outTextCached('uu_s', 'ウ ウ ウ ウ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('uu_s', 'ウ ウ ウ ウ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#e8f4ff', 'rgba(0,10,40,0.88)', _fs(7), '#aaccff', 20, 0, _fy(78));
     ctx.restore();
 
   /* ━━ ザザザザ 小当たり ━━ */
   } else if (hitType === 'zazazaza') {
     ctx.save(); ctx.translate(W/2, cy);
-    _outTextCached('zz_t', '小当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('zz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#88ccff', 'rgba(0,10,40,0.92)', _fs(10), '#66aaff', 45, 0, 0);
-    _outTextCached('zz_s', 'ザ ザ ザ ザ', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('zz_s', 'ザ ザ ザ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#bbddff', 'rgba(0,10,40,0.88)', _fs(7), '#66aaff', 18, 0, _fy(78));
     ctx.restore();
 
@@ -12547,9 +12548,9 @@ function drawEndScreen() {
     const shock = (Math.random() - 0.5) * 5;
     const scaleX = 1 + Math.sin(endTimer * 0.22) * 0.04;
     ctx.save(); ctx.translate(W/2 + shock, cy); ctx.scale(scaleX, 1);
-    _outTextCached('gy_t', '中当たり', `bold ${_fs(78)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
       '#ffee44', 'rgba(40,20,0,0.92)', _fs(10), '#ffcc00', 55, 0, 0);
-    _outTextCached('gy_s', 'ギョ ギョ ！', `bold ${_fs(38)}px 'Hiragino Mincho ProN',serif`,
+    _outTextCached('gy_s', 'ギョ ギョ ！', `bold ${_fs(38)}px ${FONT_MIN}`,
       '#ffe066', 'rgba(40,20,0,0.88)', _fs(7), '#ffcc00', 20, 0, _fy(78));
     ctx.restore();
 
@@ -12569,7 +12570,7 @@ const _syncColorBuf = ['', '', 0];
 function _syncBarColor(r) {
   /* 0=グレー → 0.4=赤 → 0.6=黄 → 0.8=緑 → 1.0=ゴールド
      テンプレートリテラル文字列の動的生成を排除するため _SYNC_RGB_TABLE を参照 */
-  if (r >= 0.9) { _syncColorBuf[0]='#f5d020'; _syncColorBuf[1]='#f5a623'; _syncColorBuf[2]=1.0; return _syncColorBuf; }
+  if (r >= 0.9) { _syncColorBuf[0]=Y; _syncColorBuf[1]='#f5a623'; _syncColorBuf[2]=1.0; return _syncColorBuf; }
   if (r >= 0.7) { const i=Math.min(63,(r-0.7)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.green[i];  _syncColorBuf[1]='#40c840'; _syncColorBuf[2]=0.85; return _syncColorBuf; }
   if (r >= 0.5) { const i=Math.min(63,(r-0.5)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.yellow[i]; _syncColorBuf[1]='#ddc020'; _syncColorBuf[2]=0.75; return _syncColorBuf; }
   if (r >= 0.3) { const i=Math.min(63,(r-0.3)/0.2*63)|0; _syncColorBuf[0]=_SYNC_RGB_TABLE.red[i];    _syncColorBuf[1]='#c83020'; _syncColorBuf[2]=0.65; return _syncColorBuf; }
@@ -12625,7 +12626,7 @@ function drawSyncMeter() {
     ctx.textAlign = 'right';
     ctx.fillStyle = syncChain >= BEAT_BONUS_CHAIN
       ? _RAINBOW_COLORS[_rainbowIdx()]
-      : '#f5d020';
+      : Y;
     ctx.fillText(chainText, mx + mw - 6, my + mh / 2);
   }
 
@@ -12659,7 +12660,7 @@ function drawSyncJust() {
   ctx.globalAlpha = alpha;
   ctx.translate(px, py);
   ctx.scale(scale, scale);
-  ctx.font = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${fs}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.shadowColor = glw; ctx.shadowBlur = 14;
   ctx.fillStyle = col;
@@ -12716,7 +12717,7 @@ function drawSlowHandBadge() {
 
   const text  = '🐌  ス ロ ー ハ ン ド  発 動 中';
   const fs    = IS_PORTRAIT ? 13 : 14;
-  ctx.font    = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  ctx.font    = `bold ${fs}px ${FONT_MIN}`;
   const tw    = ctx.measureText(text).width;
   const padX  = 18, padY = 7;
   const bw    = tw + padX * 2;
@@ -12761,7 +12762,7 @@ function drawBeatBonusBadge() {
   const text = '♪BONUS READY';
   const fs   = 9; // 2/3サイズ（キャンバス内に収める）
   ctx.save();
-  ctx.font = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${fs}px ${FONT_MIN}`;
   const tw = ctx.measureText(text).width;
   const padX = 12, padY = 4;
   const bw = tw + padX * 2;
@@ -12823,13 +12824,13 @@ function drawFeverBanner(timer, reason) {
 
   if (isStart) {
     /* FEVER START: ドロップシャドウ＋ゴールド文字 */
-    ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${fs1}px ${FONT_MIN}`;
     ctx.fillStyle = '#000'; ctx.shadowColor = 'transparent';
     ctx.fillText('FEVER START!', 2, -fs2 / 2 - 4 + 2);
     ctx.fillStyle = '#ffdd00'; ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 10;
     ctx.fillText('FEVER START!', 0, -fs2 / 2 - 4);
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
-    ctx.font = `${fs2}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `${fs2}px ${FONT_MIN}`;
     ctx.fillStyle = '#fff8d0';
     ctx.fillText('連チャンスタート！！', 0, fs1 / 2 + 4);
   } else {
@@ -12838,7 +12839,7 @@ function drawFeverBanner(timer, reason) {
     const col1   = isMiss ? '#ff7070'          : '#ffe870';
     const shade1 = isMiss ? 'rgba(120,0,0,0.8)' : 'rgba(0,0,80,0.8)';
     const line1y = -bh / 2 + fs1 / 2 + (IS_PORTRAIT ? 14 : 18);
-    ctx.font = `bold ${fs1}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${fs1}px ${FONT_MIN}`;
     ctx.shadowColor = 'transparent';
     for (const [ox, oy] of [[-2,-2],[2,-2],[-2,2],[2,2]]) {
       ctx.fillStyle = shade1;
@@ -12849,7 +12850,7 @@ function drawFeverBanner(timer, reason) {
 
     const line2  = isMiss ? 'ミスでフィーバー終了' : 'フル連チャン達成！！';
     const line2y = bh / 2 - fs2 / 2 - (IS_PORTRAIT ? 12 : 16);
-    ctx.font = `bold ${fs2}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold ${fs2}px ${FONT_MIN}`;
     ctx.fillStyle = isMiss ? '#ffaaaa' : '#ffffc8';
     ctx.fillText(line2, 0, line2y);
   }
@@ -12870,7 +12871,7 @@ function drawFeverBadge() {
 
   const text = '🔥  F E V E R  残り ' + feverTriesLeft + ' 回';
   const fs   = IS_PORTRAIT ? 13 : 14;
-  ctx.font   = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  ctx.font   = `bold ${fs}px ${FONT_MIN}`;
   const tw   = ctx.measureText(text).width;
   const padX = 18, padY = 7;
   const bw   = tw + padX * 2;
@@ -12907,7 +12908,7 @@ function _drawBottomPillBadge(text, bottomOffset = IS_PORTRAIT ? 12 : 10, pulse 
                                 : 1 + 0.04 * Math.sin(performance.now() / 500);
 
   const fs   = IS_PORTRAIT ? 13 : 14;
-  ctx.font   = `bold ${fs}px 'Hiragino Mincho ProN',serif`;
+  ctx.font   = `bold ${fs}px ${FONT_MIN}`;
   const tw   = ctx.measureText(text).width;
   const padX = 18, padY = 7;
   const bw   = tw + padX * 2;
@@ -12964,10 +12965,10 @@ function drawAchBanner() {
   ctx.font = '22px serif';
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(ach.icon, bx+10, by+bh/2);
-  ctx.font = `bold 11px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 11px ${FONT_MIN}`;
   ctx.fillStyle = 'rgba(245,208,32,0.7)';
   ctx.fillText('実績解除！', bx+42, by+16);
-  ctx.font = `bold 16px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold 16px ${FONT_MIN}`;
   ctx.fillStyle = '#fff';
   ctx.fillText(ach.name, bx+42, by+36);
   ctx.restore();
@@ -13008,7 +13009,7 @@ function drawAchOverlay() {
 
   /* タイトル */
   const titleH = IS_PORTRAIT ? 38 : 48;
-  ctx.font = `bold ${IS_PORTRAIT ? 18 : 24}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `bold ${IS_PORTRAIT ? 18 : 24}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = Y;
   ctx.fillText('🏆 実績一覧', px + pw/2, py + titleH/2);
@@ -13089,12 +13090,12 @@ function drawAchOverlay() {
     ctx.fillText(ach.icon, iconX, mid);
 
     /* 実績名 */
-    ctx.font=`bold ${nameFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.font=`bold ${nameFs}px ${FONT_MIN}`;
     ctx.fillStyle = unlocked ? Y : 'rgba(245,208,32,0.5)';
     ctx.fillText(ach.name, textX, mid + nameOY);
 
     /* 説明文 */
-    ctx.font=`${descFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.font=`${descFs}px ${FONT_MIN}`;
     ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.28)';
     ctx.fillText(ach.desc, textX, mid + descOY);
 
@@ -13105,7 +13106,7 @@ function drawAchOverlay() {
 
   /* 解除数 */
   const cnt = ACHIEVEMENTS.filter(a => !!unlockedAch[a.id]).length;
-  ctx.font = `${IS_PORTRAIT ? 11 : 11}px 'Hiragino Mincho ProN',serif`;
+  ctx.font = `${IS_PORTRAIT ? 11 : 11}px ${FONT_MIN}`;
   ctx.textAlign='right'; ctx.textBaseline='bottom';
   ctx.fillStyle='rgba(245,208,32,0.45)';
   ctx.fillText(`${cnt} / ${ACHIEVEMENTS.length} 解除済み`, px+pw-12, py+ph-6);
@@ -13135,20 +13136,20 @@ function drawStartup() {
     const cy = H / 2;
     /* タイトル（2行）: 上段を下段と同幅になるようフォントサイズをスケール */
     const refFs    = 42; // 計測基準サイズ
-    ctx.font = `900 ${refFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 ${refFs}px ${FONT_MIN}`;
     const refW     = ctx.measureText('ルーレット').width;
     const srcW     = ctx.measureText('ギヨウザ').width;
     const scaledFs = Math.round(refFs * (refW / srcW));
     ctx.fillStyle = Y;
     ctx.shadowColor = 'rgba(245,208,32,0.7)';
     ctx.shadowBlur = 18 + pulse * 10;
-    ctx.font = `900 ${scaledFs}px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 ${scaledFs}px ${FONT_MIN}`;
     ctx.fillText('ギヨウザ', W / 2, cy - 91);
-    ctx.font = `900 36px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 36px ${FONT_MIN}`;
     ctx.fillText('ルーレット', W / 2, cy - 29);
     ctx.shadowBlur = 0;
     /* サブタイトル（2行） */
-    ctx.font = `13px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `13px ${FONT_MIN}`;
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
     ctx.fillText('「ギヨウザ」のパッケージを', W / 2, cy + 14);
     ctx.fillText('モチーフにしたルーレットゲーム', W / 2, cy + 34);
@@ -13159,19 +13160,19 @@ function drawStartup() {
     ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
     ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
     ctx.globalAlpha = 1;
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 22px ${FONT_MIN}`;
     ctx.fillStyle = '#fff';
     ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
   } else {
     /* タイトル */
-    ctx.font = `900 54px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `900 54px ${FONT_MIN}`;
     ctx.fillStyle = Y;
     ctx.shadowColor = 'rgba(245,208,32,0.7)';
     ctx.shadowBlur = 18 + pulse * 10;
     ctx.fillText('ギヨウザ ルーレット', W / 2, H / 2 - 50);
     ctx.shadowBlur = 0;
     /* サブタイトル */
-    ctx.font = `16px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `16px ${FONT_MIN}`;
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
     ctx.fillText('「ギヨウザ」のパッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
     /* スタートボタン */
@@ -13181,7 +13182,7 @@ function drawStartup() {
     ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
     ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
     ctx.globalAlpha = 1;
-    ctx.font = `bold 22px 'Hiragino Mincho ProN',serif`;
+    ctx.font = `bold 22px ${FONT_MIN}`;
     ctx.fillStyle = '#fff';
     ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
   }
