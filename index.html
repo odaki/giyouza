@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.10';
+const VERSION = 'v7.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2717,7 +2717,7 @@ function _acidDistortionCurve(amount) {
    (→ ソフトクリップ歪み) → gain → dest を構築してノード束を返す。
    周波数・Q・包絡線の設定は呼び出し側が行う。現在は地鳴り（_playGroundRumble）
    専用（キング戦のリール射撃音・メロディ層は後にそれぞれクローズハイハット
-   風ノイズ・低音ベースシンセへ変更済み。playSE('kingShoot')・
+   風ノイズ・低音ベースシンセへ変更済み。playSE('kingMark')・
    _playBossBassMel参照）。distAmount=null で歪みなし */
 function _acidChain(ctx, dest, distAmount) {
   const osc    = ctx.createOscillator();
@@ -3906,7 +3906,7 @@ const SE_TABLE = {
     playNoise(ctx, t, 0.05, 0.20, 3000);
     playOsc(ctx, 'triangle', _SHOOT_ARPEGIO[Math.min(curIdx, 3)], t, 0.03, 0.15, 0.06);
   },
-  kingShoot(ctx, t) { _playKingHat(ctx, t, null, false); }, // 的をマーク（クローズ）
+  kingMark(ctx, t) { _playKingHat(ctx, t, null, false); }, // 的をマーク（クローズ）
   kingFire(ctx, t) { _playKingHat(ctx, t, null, true); }, // 発射（オープン）
   kingBeam(ctx, t) {
     /* キングギヨウザ戦、ビーム着弾音（スネアドラム風、_playKingBeamHit参照）。
@@ -3985,7 +3985,7 @@ const SE_TABLE = {
     _playPhrase(ctx, t, [noteHz('C',3), noteHz('G',3)],
                 { type:'sine', step:0.36, dur:0.6, vol:0.32, decay:0.2 });
   },
-  reach_jackpot(ctx, t) {
+  reachJackpot(ctx, t) {
     /* 超大当たり: より派手なファンファーレ */
     const big = [
       [noteHz('C',5), 0.00, 0.12], [noteHz('E',5), 0.10, 0.12],
@@ -4010,7 +4010,7 @@ const SE_TABLE = {
     for (let i = 0; i < 5; i++) jingle.push(noteHz('C', 6) * (0.95 + Math.random() * 0.15));
     _playPhrase(ctx, t, jingle, { type:'sine', step:0.055, dur:0.12, vol:0.20, decay:0.08 });
   },
-  gameover(ctx, t) {
+  gameOver(ctx, t) {
     /* ゲームオーバー: 悲しい下降 */
     const goSeq = [
       [noteHz('G',4), 0.00, 0.3],
@@ -4025,27 +4025,27 @@ const SE_TABLE = {
     const achSeq = [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)];
     _playPhrase(ctx, t, achSeq, { type:'sine', step:0.06, dur:0.15, vol:0.25, decay:0.10 });
   },
-  boss_rumble(ctx, t) {
+  bossRumble(ctx, t) {
     /* 地鳴り: 低いA1+低域ノイズ（ボスBGM（Aマイナー予定）の予兆として調内） */
     playOsc(ctx, 'sine', noteHz('A',1), t, 0.5, 0.4, 0.3);
     playNoise(ctx, t, 0.35, 0.25, 150);
   },
-  boss_flash(ctx, t) {
+  bossFlash(ctx, t) {
     /* 雷鳴: ノイズバースト+A2 */
     playNoise(ctx, t, 0.5, 0.4, 400);
     playOsc(ctx, 'sawtooth', noteHz('A',2), t, 0.3, 0.2, 0.2);
   },
-  king_appear(ctx, t) {
+  kingAppear(ctx, t) {
     /* キングギヨウザ登場の瞬間専用（_playDoraHit参照）:
        バーンという衝撃＋ドラのような金属的な余韻 */
     _playDoraHit(ctx, t);
   },
-  kongari_complete(ctx, t) {
+  kongariComplete(ctx, t) {
     /* こんがり達成（キング撃破）の瞬間専用（_playKongariCompleteFanfare参照）:
        上昇アルペジオ＋明るいベルの残響（チーンで終わる） */
     _playKongariCompleteFanfare(ctx, t);
   },
-  slow_hand(ctx, t) {
+  slowHand(ctx, t) {
     /* スローハンド発動: テープが引っかかって遅くなるような"ウォ〜ン"音
        C5→E3 スライド（テープ感を保ちつつ両端を調内に調律） */
     _playSlideOsc(ctx, _seDest(ctx), t, 'sine', noteHz('C',5), noteHz('E',3), 0.65,
@@ -4060,7 +4060,10 @@ const SE_TABLE = {
 /* BGMを一時停止して前に出す効果音と、復帰までのms。stopBGM()と
    scheduleBGMRestart()を各ケースに手書きで対にしていたが、片方だけ書き忘れると
    BGMが二度と戻らない。宣言にして書き忘れが起きないようにする */
-const SE_DUCK_BGM = { reach: 900, jackpot: 2000, reach_jackpot: 2500 };
+const SE_DUCK_BGM = { reach: 900, jackpot: 2000, reachJackpot: 2500 };
+/* 名前で引く表が2つある以上、改名で片方だけ直す事故が起きる（実際に
+   reach_jackpot の改名でBGMの停止・復帰が外れた）。起動時に食い違いを知らせる */
+for (const _n of Object.keys(SE_DUCK_BGM)) if (!SE_TABLE[_n]) console.warn('SE_DUCK_BGM: SE_TABLEに無い名前', _n);
 
 /* 全効果音の名前（?cheatpanelの試聴リスト用。drawCheatPanel参照） */
 const SE_NAMES = Object.keys(SE_TABLE);
@@ -4828,7 +4831,7 @@ function init(fromStartup, fromGameOver) {
       rampBGMRate(_slowHandRate(bet), 1200, 'easeOut', true); // 通常→スロー: BET対応速度へ、ランプ中は射撃・BET変更ロック
       slowHandLockUntil = performance.now() + 1000; // 約1秒: バッジ・テンポ変化に気づくまで入力ロック（wall-clock基準）
       slowHandPopTimer   = 25; // バッジポップアニメーション開始
-      playSE('slow_hand');     // 発動SE
+      playSE('slowHand');     // 発動SE
     } else if (!isSlowSpin && prevSlowSpin) {
       rampBGMRate(1.0, 1200, 'easeIn');  // スロー→通常: 1.2秒でテンポ復帰
     }
@@ -5507,7 +5510,7 @@ function _resolveTrialResult() {
       launchReachFireworks();
       initItems(_itemBurst(PAYOUT_RATE.reachJackpot), true);
       unlockAch('reach_jackpot');
-      playSE('reach_jackpot');
+      playSE('reachJackpot');
       if (!feverPending && Math.random() < FEVER_PROB) feverPending = true;
     } else {
       launchFireworks();
@@ -7395,7 +7398,7 @@ function _startBossOmen() {
   phase = 'bossOmen';
   stopBGMTape(1600);      // 世界が止まる（テープストップ+グレースケール）
   grayRateTarget = 0.001; // 無音起動（bgmSourceなし）でもグレースケールは進める
-  playSE('boss_rumble');
+  playSE('bossRumble');
 }
 
 function _updateBossOmen() {
@@ -7405,15 +7408,15 @@ function _updateBossOmen() {
   if (o.flash > 0) o.flash -= 0.05;
   if (o.step === 0) {
     /* 暗転 */
-    if (o.timer > 50) { o.step = 1; o.timer = 0; o.flash = 0.25; playSE('boss_rumble'); }
+    if (o.timer > 50) { o.step = 1; o.timer = 0; o.flash = 0.25; playSE('bossRumble'); }
   } else if (o.step >= 1 && o.step <= 4) {
     /* 台詞1〜4を1行ずつ */
     if (o.timer > _OMEN_LINE_FRAMES) {
       o.step++; o.timer = 0;
-      if (o.step <= 4) { o.flash = 0.25; playSE('boss_rumble'); }
+      if (o.step <= 4) { o.flash = 0.25; playSE('bossRumble'); }
       if (o.step === 5) {
         /* 収束開始: 画面外から霊ギヨウザが逆流 */
-        playSE('boss_flash');
+        playSE('bossFlash');
         const R = Math.hypot(W, H) * 0.6;
         for (let i = 0; i < 44; i++) {
           const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2;
@@ -7434,7 +7437,7 @@ function _updateBossOmen() {
       for (const g of o.items) g._dead = true;
       o.items = [];
       grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
-      playSE('king_appear'); // バーン+ドラの派手な一撃（ユーザー要望、_playDoraHit参照）
+      playSE('kingAppear'); // バーン+ドラの派手な一撃（ユーザー要望、_playDoraHit参照）
     }
   } else if (o.step === 6) {
     /* 誕生フラッシュ+タイトル */
@@ -7767,7 +7770,7 @@ function _updateBossDefeatShrink() {
     if (_king) _releaseKingReelOCs(_king.reels); // 的OCをプールへ返却（リーク防止・水平展開）
     _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
     phase = 'bossDefeatOutro';
-    playSE('boss_flash');
+    playSE('bossFlash');
   }
 }
 
@@ -8618,7 +8621,7 @@ function _kingReelShoot(inputPerfMs, forced = false) {
   if (!forced) {
     /* 4打目だけオープンハット（kingFire）にして「コールを閉じた」ことを音で示す。
        発射トリガーがあった頃の5打目と同じ音・同じ役割で、位置が1つ前に移った */
-    playSE(last ? 'kingFire' : 'kingShoot');
+    playSE(last ? 'kingFire' : 'kingMark');
     if (last) _kingFireFlash = KING_FIRE_FLASH_FRAMES;
     _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   }
@@ -9923,7 +9926,7 @@ function _startBossVictory() {
      が復活してしまっていた。専用のBGM停止＋専用ファンファーレに差し替える
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
-  playSE('kongari_complete');
+  playSE('kongariComplete');
   /* 実機報告で発覚: 「実績解除が今回初めてか」（!unlockedAch[KONGARI_ACH_ID]）
      で判定していたが、こんがり実績自体は真エンディング実装より前の別セッション
      で既に解除済みのプレイヤーが実在し、その場合は常にfalseになって
@@ -10852,7 +10855,7 @@ function _startKingReelShatter() {
     }
   }
   _kingShatter = { pieces, timer: 0 };
-  playSE('boss_flash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
+  playSE('bossFlash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
 }
 
 function _updateKingReelShatter() {
@@ -10946,7 +10949,7 @@ function _startBossDefeat() {
      _kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートから
      イーズインするため、ここで止めても復帰時に自然に繋がる */
   stopBGMTape(700);
-  playSE('gameover');
+  playSE('gameOver');
 }
 
 function _updateBossDefeat() {
@@ -11054,22 +11057,22 @@ const SE_LABEL = {
   reach:             'リーチ',
   medium:            '中当たり',
   jackpot:           '大当たり',
-  reach_jackpot:     'リーチ大当たり',
+  reachJackpot:      'リーチ大当たり',
   miss:              'ハズレ',
   coin:              'コイン獲得',
   ach:               '実績解除',
-  gameover:          'ゲームオーバー',
-  slow_hand:         'スローハンド',
-  boss_rumble:       '予兆 地鳴り',
-  boss_flash:        '予兆 雷鳴',
-  king_appear:       'キング登場',
-  kingShoot:         '的をマーク',
+  gameOver:          'ゲームオーバー',
+  slowHand:          'スローハンド',
+  bossRumble:        '予兆 地鳴り',
+  bossFlash:         '予兆 雷鳴',
+  kingAppear:        'キング登場',
+  kingMark:          '的をマーク',
   kingFire:          '4打目 発射',
   kingBeam:          'ビーム着弾',
   kingBeamDud:       'ビーム不発',
   kingCrack:         '的にひび',
   kingSift:          '篩い落とし',
-  kongari_complete:  'こんがり達成',
+  kongariComplete:   'こんがり達成',
   kingVictoryInhale: '勝利 息を吸う',
   kingVictoryFly:    '勝利 飛び去る',
 };
@@ -11077,11 +11080,11 @@ const SE_LABEL = {
    聴き比べたい順に並べる）。SE_TABLEに足したのにここへ入れ忘れたものは
    「未分類」として最後にまとめて出す＝一覧から消えることはない */
 const ST_SE_GROUPS = [
-  { label: '効果音（通常）', names: ['bet', 'shoot', 'reach', 'medium', 'jackpot', 'reach_jackpot',
-                                     'miss', 'coin', 'ach', 'gameover', 'slow_hand'] },
-  { label: '効果音（キング戦）', names: ['boss_rumble', 'boss_flash', 'king_appear', 'kingShoot',
+  { label: '効果音（通常）', names: ['bet', 'shoot', 'reach', 'medium', 'jackpot', 'reachJackpot',
+                                     'miss', 'coin', 'ach', 'gameOver', 'slowHand'] },
+  { label: '効果音（キング戦）', names: ['bossRumble', 'bossFlash', 'kingAppear', 'kingMark',
                                          'kingFire', 'kingBeam', 'kingBeamDud', 'kingCrack',
-                                         'kingSift', 'kongari_complete', 'kingVictoryInhale',
+                                         'kingSift', 'kongariComplete', 'kingVictoryInhale',
                                          'kingVictoryFly'] },
 ];
 function _stSeSections() {
@@ -11096,6 +11099,9 @@ function _stSeSections() {
   return secs;
 }
 function _seLabel(name) { return SE_LABEL[name] ?? name; }
+/* SE_DUCK_BGM側と同じ理由の整合チェック（表示名だけ古い名前で残っていないか）。
+   逆向き（SE_TABLEにあるのに表示名が無い）はサウンドテストの「未分類」で見える */
+for (const _n of Object.keys(SE_LABEL)) if (!SE_TABLE[_n]) console.warn('SE_LABEL: SE_TABLEに無い名前', _n);
 
 let _soundTest = null;      // { items } 入場時に組んだ配置（毎フレーム作らない）
 let _stNowPlaying = -1;     // 再生中の曲のindex（ST_MUSIC基準。-1=なし）
