@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.14';
+const VERSION = 'v7.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3861,9 +3861,23 @@ document.addEventListener('mousedown', _onFirstGesture, true);
      ・AudioContext を閉じる（?closebg）→ 閉じてもキューの中身は消えない
      ・無音<audio>要素の有無（?noelev）→ 無関係。出力先(スピーカー/AirPods)にも依らない
    OSの出力キューに渡った音声はこちらのどの操作でも取り消せない。追わないこと */
+/* 自動PAUSEの対象外フェーズ。タイトルは進行中の状態が無く、サウンドテストと
+   ドラムパッドは演奏の邪魔になるのでPAUSEボタンを描いていない＝入ってしまうと
+   解除する手段が無くなる（実機報告: ドラムパッドでPAUSEDになると戻せない）。
+   ゲーム本編を同じように自動解除しないのは意図的で、復帰時のaudioCtx回復
+   （interrupted状態の再作成）をPAUSE解除のタップ＝ユーザージェスチャーに
+   一本化しているため。ジェスチャー無しで解除するとiOSでその経路が働かない */
+function _autoPauseExempt() {
+  return phase === 'startup' || phase === 'soundTest' || phase === 'drumPad';
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    if (!isPaused && phase !== 'startup') togglePause();
+    if (!isPaused && !_autoPauseExempt()) togglePause();
+  } else if (isPaused && _autoPauseExempt()) {
+    /* 対象外フェーズなのにPAUSE中＝別経路（画面回転など）で入っている。
+       解除ボタンが無いので復帰時に自動で戻す */
+    togglePause();
   }
   /* フォアグラウンド復帰時の resume() は削除。
      interrupted 状態を suspended に変えてしまい、PAUSEボタンの
@@ -14448,8 +14462,8 @@ window.addEventListener('resize', fitCanvas);
 let _orientationFitTimer = null;
 function _onOrientationChange() {
   /* 既にPAUSE中なら二重にトグルして解除してしまわないよう条件付きで呼ぶ
-     （visibilitychangeハンドラと同じ書き方） */
-  if (phase !== 'startup' && !isPaused) togglePause();
+     （visibilitychangeハンドラと同じ書き方）。解除手段の無いフェーズは対象外 */
+  if (!_autoPauseExempt() && !isPaused) togglePause();
   /* iOSはorientationchangeの時点でvisualViewportがまだ旧値を返すことがあり、
      続けてresizeが複数回発火する。まとめて1回に束ねてから再フィットする */
   if (_orientationFitTimer) clearTimeout(_orientationFitTimer);
