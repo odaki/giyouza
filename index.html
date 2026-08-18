@@ -173,8 +173,11 @@ const H = IS_PORTRAIT ? 820  : 560;
    一切描画・判定されない（既存の?king=等のデバッグ用URLパラメータと
    同じ位置づけ） */
 const CHEAT_PANEL_ON = _dbgFlag('cheatpanel');
+/* ?soundtest: 真エンディング未視聴でもサウンドテストのボタンを出す（調査・調整用）。
+   本来は視聴後に解禁される隠し要素だが、セーブを消した直後などに音を確かめたい
+   ことがあるため、既存の?cheatpanel等と同じURLフラグの作法で抜け道を用意する */
+const SOUND_TEST_FORCE = _dbgFlag('soundtest');
 const CHEAT_PANEL_BTNS = [
-  { id: 'se',     label: 'SE'    },
   { id: 'fever',  label: 'FEVER' },
   { id: 'slow',   label: 'SLOW'  },
   { id: 'clr',    label: 'CLR'   },
@@ -190,7 +193,6 @@ function _cheatPanelRect(i) {
   return { x: i * (w + gap), y: H - h, w, h };
 }
 function _runCheatPanelAction(id) {
-  if (id === 'se') { _cheatSEOpen = !_cheatSEOpen; return; }
   if (id === 'fever') { _cheatFeverQueued = true; return; }
   if (id === 'slow') {
     _cheatSlowQueued = _cheatSlowQueued !== null ? null : !isSlowSpin;
@@ -215,42 +217,8 @@ function _runCheatPanelAction(id) {
   const charMap = { gi: 'ギ', yo: 'ヨ', u: 'ウ', za: 'ザ' };
   if (charMap[id] && phase === 'idle' && curIdx < 4) cheatShoot(charMap[id]);
 }
-/* 効果音の試聴リスト（?cheatpanel の SE ボタンで開閉）。
-   効果音を作り込むとき、その音が鳴るゲーム状態まで到達しないと聴けないのが
-   反復の一番の足かせだった。SE_TABLEを一覧にして、その場で鳴らせるようにする。
-   効果音を足せば自動的にこの一覧にも出る（SE_NAMES参照）。
-   縦画面は3列、横画面は6列。ボタン行のすぐ上に積む */
-function _seAuditionCols() { return W >= 700 ? 6 : 3; }
-function _seAuditionRect(i) {
-  const cols = _seAuditionCols(), h = 22, gap = 2;
-  const w = (W - gap * (cols - 1)) / cols;
-  const rows = Math.ceil(SE_NAMES.length / cols);
-  const top = H - 26 - 4 - rows * (h + gap);
-  return { x: (i % cols) * (w + gap), y: top + ((i / cols) | 0) * (h + gap), w, h };
-}
-function drawSEAudition() {
-  if (!_cheatSEOpen) return;
-  const first = _seAuditionRect(0), last = _seAuditionRect(SE_NAMES.length - 1);
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.72)';
-  ctx.fillRect(0, first.y - 4, W, (last.y + last.h) - first.y + 8);
-  ctx.font = `bold 9px sans-serif`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (let i = 0; i < SE_NAMES.length; i++) {
-    const r = _seAuditionRect(i);
-    ctx.fillStyle = 'rgba(30,30,40,0.95)';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
-    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(SE_NAMES[i], r.x + r.w / 2, r.y + r.h / 2);
-  }
-  ctx.restore();
-}
-
 function drawCheatPanel() {
   if (!CHEAT_PANEL_ON) return;
-  drawSEAudition();
   ctx.save();
   ctx.font = `bold 11px sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -585,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.08';
+const VERSION = 'v7.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1187,7 +1155,6 @@ let feverPending     = false; // 次トライ開始時にフィーバーへ移�
 let _jackpotAutoReset = false; // フィーバー中（または完走）の大当たり → ユーザー入力なし自動リセット対象
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
 /* チートキー予約（当たり判定時に pending へ転写） */
-let _cheatSEOpen = false;      // チートパネルの効果音試聴リストを開いているか
 let _cheatFeverQueued = false; // チートパネルのFEVER予約
 let _cheatSlowQueued  = null;  // チートパネルのSLOW予約: null=なし / true=スロー / false=通常
 
@@ -1493,12 +1460,16 @@ const PAUSE_BTN   = { x: BTN_RIGHT, y: BTN_TOP + BTN_SIZE + BTN_GAP,  w: BTN_SIZ
 /* 真エンディング再生ボタン（トロフィーの右隣・startup画面限定）。
    PAUSE_BTNはstartup中は非表示のため、この行のこの位置は常に空いている */
 const TRUE_ENDING_BTN = { x: BTN_RIGHT + BTN_SIZE + BTN_GAP, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE };
+/* サウンドテストボタン（エンディング再生ボタンの右隣・タイトル画面かつ視聴済みのみ）。
+   市販ゲームの「クリア後に解禁」の作法に合わせ、真エンディングを見るまでは
+   描画も判定もしない（drawSoundTest参照） */
+const SOUND_TEST_BTN = { x: BTN_RIGHT + (BTN_SIZE + BTN_GAP) * 2, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE };
 /* エンドロール中は実績ボタンを無効にする（ユーザー要望）。全画面の演出中に実績
    パネルが重なると演出が読めなくなる。ボタン自体も描画しない: 見えているのに
    反応しないほうが迷わせるうえ、エンドロールはどこをタップしても段送りする画面
    なので、この領域のタップも素直に段送りとして扱えばよい（drawの右上ボタン群と
    各入力ハンドラの両方でこの述語を使う＝表示と当たり判定を一箇所で揃える） */
-function _achBtnEnabled() { return phase !== 'trueEnding'; }
+function _achBtnEnabled() { return phase !== 'trueEnding' && phase !== 'soundTest'; }
 
 /* 全画面ボタン: Canvas 描画用（HTML button 廃止）
    Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
@@ -1533,6 +1504,7 @@ const P_BET_INC_BTN = IS_PORTRAIT ? { x:P_BAR_X+P_BAR_W-P_BAR_H+1, y:P_BAR_Y+1, 
 let audioCtx = null;
 let _pendingInitGame = false; // touchstart で START ボタンを検出し touchend で initGame() するためのフラグ
 let _pendingTrueEndingReplay = false; // touchstart で真エンディング再生ボタンを検出し touchend で開始するためのフラグ
+let _pendingSoundTest = false;        // 同上（サウンドテストの入場。_startSoundTest参照）
 let bgmGain  = null; // BGM専用gainノード（SEとは独立して音量制御）
 /* BGM専用のハイシェルフ。こんがり度に応じて高域を持ち上げる（_updateBgmToneShelf
    参照）。SEは_seDest経由でmasterGainに直結するのでこのフィルターを通らない */
@@ -5790,6 +5762,8 @@ function _updateAlways() {
 
 function update() {
   _updateAlways();
+  /* サウンドテスト中はゲームを進めない（音の再生だけを行うモード） */
+  if (phase === 'soundTest') return;
   if (phase === 'startup') {
     /* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
        その回転角は startupTimer と w.speed から直接求める（draw側参照）。
@@ -11037,6 +11011,178 @@ function drawBossDefeatOutro() {
   ctx.restore();
 }
 
+/* ════════════════ サウンドテスト ════════════════
+   市販ゲームでよくある「クリア後に解禁されるサウンドテスト」。真エンディングを
+   一度見るとタイトルにボタンが出る（trueEndingSeen、エンディング再生ボタンの右隣）。
+   曲・効果音・再生速度の演出を1画面で確かめられる。
+   もとは効果音の試聴だけを?cheatpanelに一覧表示していたが、デバッグ用パネルに
+   23個のボタンが並んで煩雑になったため、独立したモードへ移した。
+   このモード中はゲームの更新を止め（update参照）、全面を暗幕で覆う。
+   トロフィー・ポーズは隠し、ミュートと全画面だけ残す（音を止めたい場面があるため）。 */
+const ST_ROW_H = 24, ST_GAP = 3, ST_SECT_GAP = 14, ST_LABEL_H = 15;
+
+/* 曲。bufを持つものはループ再生（バッファを差し替えて鳴らす）、onceは一回きり。
+   ボス戦BGMの4段階は、鳴り比べができると調整に効く（tier0が最も凶暴） */
+const ST_MUSIC = [
+  { label: 'BGM 通常',      buf: () => bgmBuffer },
+  { label: 'ボス 1 (凶暴)',  buf: () => bossBgmBuffers && bossBgmBuffers[0] },
+  { label: 'ボス 2',        buf: () => bossBgmBuffers && bossBgmBuffers[1] },
+  { label: 'ボス 3',        buf: () => bossBgmBuffers && bossBgmBuffers[2] },
+  { label: 'ボス 4 (穏)',    buf: () => bossBgmBuffers && bossBgmBuffers[3] },
+  { label: '起動ジングル',    once: () => playStartJingle(null) },
+  { label: 'エンディング',    once: () => _playTrueEndingTheme() },
+];
+/* 再生速度の演出。鳴っている曲に対して掛ける（曲を止めていると効かないものがある） */
+const ST_CTRL = [
+  { label: '停止',       act: () => _stStopAll() },
+  { label: 'テープ再生',  act: () => startBGMTape(1400) },
+  { label: 'テープ停止',  act: () => stopBGMTape(1300) },
+  { label: 'スロー',     act: () => rampBGMRate(0.5, 1200, 'easeOut') },
+  { label: '通常速度',    act: () => rampBGMRate(1.0, 800, 'easeIn') },
+];
+
+/* 解禁されているか。真エンディングを一度見ていれば解禁（市販ゲームの作法）。
+   ?soundtest を付けた場合は未視聴でも出す（SOUND_TEST_FORCE参照） */
+function _soundTestUnlocked() { return trueEndingSeen || SOUND_TEST_FORCE; }
+
+let _soundTest = null;      // { items } 入場時に組んだ配置（毎フレーム作らない）
+let _stNowPlaying = -1;     // 再生中の曲のindex（ST_MUSIC基準。-1=なし）
+
+/* 鳴っているものを全部止め、再生速度とグレースケールも通常へ戻す */
+function _stStopAll() {
+  _destroyBGMSource(0.12);
+  stopJingle();
+  _stopTrueEndingTheme(0.2);
+  _stNowPlaying = -1;
+  grayRateTarget = 1.0; grayRateCur = 1.0;
+}
+
+/* ループものを鳴らす。startBGM()は「今のゲーム状況に応じたバッファ」を選ぶので使えず、
+   指定バッファで作り直す（_createBGMSourceがloopEndと_bgmIsBossを面倒見る） */
+function _stPlayLoop(i, buf) {
+  if (!audioCtx) return;
+  _stStopAll();
+  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  const src = _createBGMSource(1.0, buf);
+  if (!src) return;
+  src.start();
+  bgmPhaseRef = audioCtx.currentTime;
+  _bgmAccumReset();
+  _stNowPlaying = i;
+}
+
+function _stPlayMusic(i) {
+  const m = ST_MUSIC[i];
+  if (m.once) { _stStopAll(); m.once(); _stNowPlaying = i; return; }
+  const buf = m.buf();
+  if (!buf) return;              // まだ焼けていない（描画側で「準備中」と出す）
+  _stPlayLoop(i, buf);
+}
+
+/* 配置。縦画面と横画面で列数を変え、全体を上下中央へ寄せる */
+function _stBuildLayout() {
+  const wide = W >= 700;
+  const secs = [
+    { label: '音楽',   type: 'music', n: ST_MUSIC.length, cols: wide ? 4 : 2 },
+    { label: '再生',   type: 'ctrl',  n: ST_CTRL.length,  cols: wide ? 5 : 3 },
+    { label: '効果音', type: 'se',    n: SE_NAMES.length, cols: wide ? 6 : 3 },
+  ];
+  const rowsOf = sec => Math.ceil(sec.n / sec.cols);
+  let total = 30; // 見出し「SOUND TEST」
+  for (const sec of secs) total += ST_LABEL_H + rowsOf(sec) * (ST_ROW_H + ST_GAP) + ST_SECT_GAP;
+  total += ST_ROW_H + 6; // もどる
+  const items = [];
+  let y = Math.max(46, (H - total) / 2 + 30);
+  for (const sec of secs) {
+    items.push({ type: 'label', label: sec.label, x: 12, y, w: W - 24, h: ST_LABEL_H });
+    y += ST_LABEL_H;
+    const w = (W - 24 - ST_GAP * (sec.cols - 1)) / sec.cols;
+    for (let i = 0; i < sec.n; i++) {
+      items.push({ type: sec.type, idx: i,
+                   x: 12 + (i % sec.cols) * (w + ST_GAP),
+                   y: y + ((i / sec.cols) | 0) * (ST_ROW_H + ST_GAP), w, h: ST_ROW_H });
+    }
+    y += rowsOf(sec) * (ST_ROW_H + ST_GAP) + ST_SECT_GAP;
+  }
+  items.push({ type: 'back', label: 'もどる', x: W / 2 - 60, y, w: 120, h: ST_ROW_H });
+  return items;
+}
+
+function _startSoundTest() {
+  showAchievements = false;
+  phase = 'soundTest';
+  _soundTest = { items: _stBuildLayout() };
+  _stNowPlaying = -1;
+  if (!audioCtx) getAudioCtx();
+  /* ボス戦BGMの4段階は通常なら時間をおいて順に焼かれる。ここでは聴きに来ている
+     ので待たせずに焼き始める（既に焼けていれば何もしない） */
+  _scheduleBossBgmRenders(true);
+}
+
+function _exitSoundTest() {
+  _stStopAll();
+  _soundTest = null;
+  phase = 'startup';
+  /* 「もどる」のタップはこのモードの分岐が消費し切るので、指を離す側で
+     STARTを踏むことはない（touchendが見るのは入場・START用のフラグだけ）。
+     _startupGuardUntil はページ読み込み直後の誤爆よけで、ここでは触らない */
+}
+
+function _soundTestClick(x, y) {
+  if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+  for (const it of _soundTest.items) {
+    if (it.type === 'label' || !hitTest(it, x, y)) continue;
+    if (it.type === 'back') { _exitSoundTest(); return; }
+    if (it.type === 'ctrl') { ST_CTRL[it.idx].act(); return; }
+    if (it.type === 'se')   { playSE(SE_NAMES[it.idx]); return; }
+    if (it.type === 'music') {
+      if (it.idx === _stNowPlaying) _stStopAll(); // もう一度押したら止める
+      else _stPlayMusic(it.idx);
+      return;
+    }
+  }
+}
+
+function drawSoundTest() {
+  if (phase !== 'soundTest' || !_soundTest) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,6,10,0.92)';
+  ctx.fillRect(0, 0, W, H);
+  const top = _soundTest.items[0].y;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold ${IS_PORTRAIT ? 20 : 24}px ${FONT_MIN}`;
+  ctx.fillStyle = Y;
+  ctx.fillText('サウンドテスト', W / 2, top - 24);
+  for (const it of _soundTest.items) {
+    if (it.type === 'label') {
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.font = `bold 11px sans-serif`;
+      ctx.fillStyle = 'rgba(245,208,32,0.75)';
+      ctx.fillText(it.label, it.x, it.y + it.h / 2);
+      continue;
+    }
+    let label = it.label, enabled = true, on = false;
+    if (it.type === 'music') {
+      const m = ST_MUSIC[it.idx];
+      enabled = m.once ? true : !!m.buf();
+      label = enabled ? m.label : m.label + '（準備中）';
+      on = (it.idx === _stNowPlaying);
+    } else if (it.type === 'ctrl') label = ST_CTRL[it.idx].label;
+    else if (it.type === 'se')     label = SE_NAMES[it.idx];
+    ctx.fillStyle = on ? 'rgba(180,140,0,0.85)' : enabled ? 'rgba(30,30,40,0.95)' : 'rgba(20,20,24,0.8)';
+    ctx.fillRect(it.x, it.y, it.w, it.h);
+    ctx.strokeStyle = on ? Y : enabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(it.x + 0.5, it.y + 0.5, it.w - 1, it.h - 1);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = it.type === 'se' ? `bold 9px sans-serif` : `bold 11px sans-serif`;
+    ctx.fillStyle = enabled ? '#fff' : 'rgba(255,255,255,0.35)';
+    ctx.fillText(label, it.x + it.w / 2, it.y + it.h / 2);
+  }
+  ctx.restore();
+}
+
 /* ════════════════ 吉祥雲 ════════════════ */
 /* _drawCloudTo: 任意のコンテキストに雲を描く（OffscreenCanvas 事前描画用）
    drawCloud: メインcanvasへの呼び出し（_staticLayerCanvas が利用可能なら使わない） */
@@ -11318,6 +11464,22 @@ function _drawEndingMedalIcon() {
   ctx.fill();
 }
 
+/* 音符アイコン（サウンドテスト）。符頭＋符幹＋旗の単色シルエット */
+function _drawSoundTestIcon() {
+  ctx.fillStyle = Y; ctx.strokeStyle = Y;
+  ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.save();
+  ctx.translate(-3.2, 5.4); ctx.rotate(-0.32);
+  ctx.beginPath(); ctx.ellipse(0, 0, 4.4, 3.3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.moveTo(0.9, 4.6); ctx.lineTo(0.9, -8.4);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0.9, -8.4); ctx.quadraticCurveTo(8.2, -6.2, 5.8, -1.4);
+  ctx.stroke();
+}
+
 function _drawFullscreenIcon() {
   ctx.fillStyle = Y;
   ctx.scale(_FS_ICON_SCALE, _FS_ICON_SCALE);
@@ -11391,9 +11553,10 @@ function _drawPauseIcon() {
 function _drawTopButtons() {
   if (_achBtnEnabled())                      _drawTopBtn(ACH_TROPHY,      showAchievements, _drawTrophyIcon);
   if (phase === 'startup' && trueEndingSeen) _drawTopBtn(TRUE_ENDING_BTN, false,            _drawEndingMedalIcon);
+  if (phase === 'startup' && _soundTestUnlocked()) _drawTopBtn(SOUND_TEST_BTN, false,        _drawSoundTestIcon);
   if (FS_SUPPORTED)                          _drawTopBtn(FS_BTN_RECT,     false,            _drawFullscreenIcon);
                                              _drawTopBtn(MUTE_BTN,        false,            _drawMuteIcon);
-  if (phase !== 'startup')                   _drawTopBtn(PAUSE_BTN,       false,            _drawPauseIcon);
+  if (phase !== 'startup' && phase !== 'soundTest') _drawTopBtn(PAUSE_BTN, false,            _drawPauseIcon);
 }
 
 /* ピルバッジの外形パスを設定（beginPath〜closePath）。fill()/stroke()は呼び出し側で行う */
@@ -11623,6 +11786,9 @@ function draw() {
      ─────────────────────────────────────────────── */
 
   _drawForeground();
+
+  /* ── サウンドテスト（全面。ミュート・全画面ボタンだけは上に残す） ── */
+  drawSoundTest();
 
   /* ── ポーズオーバーレイ ── */
   if (isPaused) {
@@ -13714,11 +13880,6 @@ document.addEventListener('keydown', e=>{
 /* 全フェーズで最初に見るボタン（チートパネル・全画面）。処理したらtrueを返す */
 function _handleTopButtons(x, y) {
   if (CHEAT_PANEL_ON) {
-    if (_cheatSEOpen) {
-      for (let i = 0; i < SE_NAMES.length; i++) {
-        if (hitTest(_seAuditionRect(i), x, y)) { playSE(SE_NAMES[i]); return true; }
-      }
-    }
     for (let i = 0; i < CHEAT_PANEL_BTNS.length; i++) {
       if (hitTest(_cheatPanelRect(i), x, y)) { _runCheatPanelAction(CHEAT_PANEL_BTNS[i].id); return true; }
     }
@@ -13730,12 +13891,20 @@ function _handleTopButtons(x, y) {
 /* 実績・ミュート・ポーズ・BETのボタン群と、どれにも当たらなければゲーム入力へ。
    isTouch: STARTと真エンディング再生をtouchendへ回すか（iOS都合。_onTouchStart参照） */
 function _handleGameButtons(x, y, inputPerfMs, isTouch) {
+  if (phase === 'soundTest') { _soundTestClick(x, y); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, x, y)) { showAchievements = !showAchievements; return; }
     if (trueEndingSeen && hitTest(TRUE_ENDING_BTN, x, y)) {
       /* タッチはresume()完了を待ってtouchendで再生開始する */
       if (isTouch) _pendingTrueEndingReplay = true;
       else { if (!audioCtx) getAudioCtx(); _startTrueEnding(true); }
+      return;
+    }
+    /* サウンドテストも同じ理由でtouchendへ回す。入場時にgetAudioCtx()まで済ませて
+       おけば、モード内の最初の再生タップで確実に音が出る */
+    if (_soundTestUnlocked() && hitTest(SOUND_TEST_BTN, x, y)) {
+      if (isTouch) _pendingSoundTest = true;
+      else _startSoundTest();
       return;
     }
     if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
@@ -13830,6 +13999,12 @@ document.addEventListener('touchend', e => {
     e.preventDefault();
     if (!audioCtx) getAudioCtx();
     _startTrueEnding(true);
+    return;
+  }
+  if (_pendingSoundTest) {
+    _pendingSoundTest = false;
+    e.preventDefault();
+    _startSoundTest();
     return;
   }
   if (!_pendingInitGame) return;
