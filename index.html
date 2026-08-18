@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.04';
+const VERSION = 'v7.05';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6137,6 +6137,72 @@ const RMAX_ITEM_R  = 42 * 0.52;
      複数イテレーション繰り返すことで安定した堆積を実現
    ・支えを失ったアイテムは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
+/* 円衝突の解決1パス（yソート済みスイープ → 位置補正 → 法線インパルス → 接線摩擦）。
+   落下アイテム（updateItems）とギウギウ（updateGiugiu）がまったく同じソルバを
+   それぞれ持っていた。同じ物理を2箇所に写経していると片方だけ直して他方が
+   取り残される（実際、同じ役割の定数が RESTITUTION 0.06/0.50、G_FRICTION2/FRICTION2
+   と別名・別値で並存し、grepでの水平展開が効かない状態だった）。
+   差分はオプションで注入する:
+     restitution 反発係数（法線方向の速度保持率）
+     friction2   アイテム間摩擦（接線方向の減衰）
+     skipFlush   落下退場中（_flush）のアイテムを判定から外すか
+     markContact 接触したアイテムに inContact を立てるか（積み上がり判定用）
+   ソートは位置補正が入るたびに必要なのでこの関数の中で行う
+   （ほぼ整列済みなので挿入ソートで実質O(n)）。
+   n=240時は総当たりで約14万ペア/フレームになるため、yで打ち切るスイープは必須 */
+function _resolveItemCollisions(restitution, friction2, skipFlush, markContact) {
+  _insertionSortY(items);
+  for (let i = 0; i < items.length; i++) {
+    const a = items[i];
+    if (skipFlush && a._flush) continue;
+    const ra = a.size * 0.52;
+    const yLimit = ra + RMAX_ITEM_R; // これ以上yが離れたら以降のjは全て非衝突
+    for (let j = i + 1; j < items.length; j++) {
+      const b  = items[j];
+      const dy = b.y - a.y; // ソート済みなので dy >= 0
+      if (dy >= yLimit) break; // スイープ打ち切り
+      if (skipFlush && b._flush) continue;
+      const rb = b.size * 0.52;
+      const minD = ra + rb;
+      const dx = b.x - a.x;
+      if (Math.abs(dx) >= minD || dy >= minD) continue; // 安価な事前チェック
+      const d2 = dx*dx + dy*dy;
+      if (d2 >= minD*minD || d2 < 0.001) continue;
+
+      const dist = Math.sqrt(d2);
+      const nx = dx/dist, ny = dy/dist;
+
+      /* 位置修正: 重なり量を均等に分配(=等質量) */
+      const corr = (minD - dist) * 0.5;
+      a.x -= nx * corr;  a.y -= ny * corr;
+      b.x += nx * corr;  b.y += ny * corr;
+
+      /* 速度インパルス */
+      const dvx  = b.vx - a.vx, dvy = b.vy - a.vy;
+      const vrel = dvx*nx + dvy*ny;   // 法線方向相対速度
+      if (vrel >= 0) continue;        // 離れていれば無視
+
+      const imp = -(1 + restitution) * vrel * 0.5;  // 等質量なので/2
+      a.vx -= imp * nx;  a.vy -= imp * ny;
+      b.vx += imp * nx;  b.vy += imp * ny;
+
+      /* 接線摩擦: 横滑りを抑えて安定積み */
+      const tx   = -ny, ty = nx;
+      const tvel = dvx*tx + dvy*ty;
+      const fric = tvel * (1 - friction2) * 0.5;
+      a.vx += fric * tx;  a.vy += fric * ty;
+      b.vx -= fric * tx;  b.vy -= fric * ty;
+
+      /* 接触摩擦で回転を減衰 */
+      if (markContact) { a.inContact = true; b.inContact = true; }
+      a.rotSpd *= 0.85;
+      b.rotSpd *= 0.85;
+      if (Math.abs(a.rotSpd) < 0.003) a.rotSpd = 0;
+      if (Math.abs(b.rotSpd) < 0.003) b.rotSpd = 0;
+    }
+  }
+}
+
 function updateItems() {
   /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ。
      当たり演出はユーザー入力待ちで自動終了しないため、投下自体に時間上限を
@@ -6150,7 +6216,7 @@ function updateItems() {
   const GRAVITY     = 0.38;
   const RESTITUTION = 0.06;   // 反発係数(低=ほぼ非弾性)
   const G_FRICTION  = 0.80;   // 地面摩擦
-  const G_FRICTION2 = 0.92;   // アイテム間摩擦
+  const FRICTION2   = 0.92;   // アイテム間摩擦（updateGiugiuの同名定数と役割は同じ・値だけ違う）
   const ITERS       = 5;      // 衝突解決イテレーション数
 
   /* ① 積分: 重力適用・位置更新 */
@@ -6196,59 +6262,7 @@ function updateItems() {
       }
     }
 
-    /* アイテム同士の円衝突（yソート済みスイープ: 遠いペアの判定を打ち切り）
-       n=240時 約14万ペア/フレーム → 近傍ペアのみに削減 */
-    _insertionSortY(items); // イテレーションごとに位置修正が入るため都度ソート（ほぼ整列済みで実質O(n)）
-    for (let i = 0; i < items.length; i++) {
-      const a = items[i];
-      if (a._flush) continue; // 落下中は衝突スキップ
-      const ra = a.size * 0.52;
-      const yLimit = ra + RMAX_ITEM_R; // これ以上yが離れたら以降のjは全て非衝突
-      for (let j = i + 1; j < items.length; j++) {
-        const b  = items[j];
-        const dy = b.y - a.y; // ソート済みなので dy >= 0
-        if (dy >= yLimit) break; // スイープ打ち切り
-        if (b._flush) continue;
-        const rb = b.size * 0.52;
-        const minD = ra + rb;
-        const dx = b.x - a.x;
-        if (Math.abs(dx) >= minD || dy >= minD) continue; // 安価な事前チェック
-        const d2 = dx*dx + dy*dy;
-        if (d2 >= minD*minD || d2 < 0.001) continue;
-
-        const dist = Math.sqrt(d2);
-        const nx = dx/dist, ny = dy/dist;
-
-        /* 位置修正: 重なり量を均等に分配(=等質量) */
-        const corr = (minD - dist) * 0.5;
-        a.x -= nx * corr;  a.y -= ny * corr;
-        b.x += nx * corr;  b.y += ny * corr;
-
-        /* 速度インパルス */
-        const dvx  = b.vx - a.vx, dvy = b.vy - a.vy;
-        const vrel = dvx*nx + dvy*ny;   // 法線方向相対速度
-        if (vrel >= 0) continue;        // 離れていれば無視
-
-        const imp = -(1 + RESTITUTION) * vrel * 0.5;  // 等質量なので/2
-        a.vx -= imp * nx;  a.vy -= imp * ny;
-        b.vx += imp * nx;  b.vy += imp * ny;
-
-        /* 接線摩擦: 横滑りを抑えて安定積み */
-        const tx   = -ny, ty = nx;
-        const tvel = dvx*tx + dvy*ty;
-        const fric = tvel * (1 - G_FRICTION2) * 0.5;
-        a.vx += fric * tx;  a.vy += fric * ty;
-        b.vx -= fric * tx;  b.vy -= fric * ty;
-
-        /* 接触摩擦で回転を減衰 */
-        a.inContact = true;
-        b.inContact = true;
-        a.rotSpd *= 0.85;
-        b.rotSpd *= 0.85;
-        if (Math.abs(a.rotSpd) < 0.003) a.rotSpd = 0;
-        if (Math.abs(b.rotSpd) < 0.003) b.rotSpd = 0;
-      }
-    }
+    _resolveItemCollisions(RESTITUTION, FRICTION2, true, true);
   }
 
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
@@ -6517,45 +6531,9 @@ function updateGiugiu() {
     g.rot    += g.rotSpd;
   }
 
-  /* ② 衝突解決（円衝突 + 位置修正 + 速度インパルス）
-     updateItems と同じ yソート済みスイープで近傍ペアのみ判定 */
-  for (let iter = 0; iter < ITERS; iter++) {
-    _insertionSortY(items);
-    for (let i = 0; i < items.length; i++) {
-      const a = items[i], ra = a.size * 0.52;
-      const yLimit = ra + RMAX_ITEM_R;
-      for (let j = i + 1; j < items.length; j++) {
-        const b  = items[j];
-        const dy = b.y - a.y; // ソート済みなので dy >= 0
-        if (dy >= yLimit) break;
-        const rb = b.size * 0.52;
-        const minD = ra + rb;
-        const dx = b.x - a.x;
-        if (Math.abs(dx) >= minD || dy >= minD) continue;
-        const d2 = dx*dx + dy*dy;
-        if (d2 >= minD*minD || d2 < 0.001) continue;
-        const dist = Math.sqrt(d2);
-        const nx = dx/dist, ny = dy/dist;
-        const corr = (minD - dist) * 0.5;
-        a.x -= nx*corr; a.y -= ny*corr;
-        b.x += nx*corr; b.y += ny*corr;
-        const dvx = b.vx-a.vx, dvy = b.vy-a.vy;
-        const vrel = dvx*nx + dvy*ny;
-        if (vrel >= 0) continue;
-        const imp = -(1 + RESTITUTION) * vrel * 0.5;
-        a.vx -= imp*nx; a.vy -= imp*ny;
-        b.vx += imp*nx; b.vy += imp*ny;
-        const tx = -ny, ty = nx;
-        const tvel = dvx*tx + dvy*ty;
-        const fric = tvel * (1 - FRICTION2) * 0.5;
-        a.vx += fric*tx; a.vy += fric*ty;
-        b.vx -= fric*tx; b.vy -= fric*ty;
-        a.rotSpd *= 0.85; b.rotSpd *= 0.85;
-        if (Math.abs(a.rotSpd) < 0.003) a.rotSpd = 0;
-        if (Math.abs(b.rotSpd) < 0.003) b.rotSpd = 0;
-      }
-    }
-  }
+  /* ② 衝突解決（updateItemsと同じソルバ。反発・摩擦の値と、落下退場・接触フラグの
+     扱いだけが違う。_resolveItemCollisions参照） */
+  for (let iter = 0; iter < ITERS; iter++) _resolveItemCollisions(RESTITUTION, FRICTION2, false, false);
 
   _insertionSortY(items);
 }
