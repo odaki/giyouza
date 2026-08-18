@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.13';
+const VERSION = 'v7.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1477,6 +1477,14 @@ function _achBtnEnabled() { return phase !== 'trueEnding' && phase !== 'soundTes
 const FS_SUPPORTED = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
 let _isFullscreen = false; // fullscreenchange で更新
 const _FS_ICON_SCALE = BTN_SIZE / 24;
+
+/* ドラムパッドから戻るボタン。ミュート・全画面と同じ見た目のアイコンボタンにする。
+   筐体の中に置くと演奏中の手がパッドと間違えて踏む（実機評価）ため、
+   縦画面は右上の列の3つ目、横画面は右下の角に置く（どちらもパッドの列から遠い）。
+   縦画面で全画面ボタンが無い環境では詰めて2段目に来る */
+const DP_BACK_BTN = IS_PORTRAIT
+  ? { x: BTN_X, y: BTN_TOP + (BTN_SIZE + BTN_GAP) * (FS_SUPPORTED ? 2 : 1), w: BTN_SIZE, h: BTN_SIZE }
+  : { x: BTN_X, y: H - BTN_TOP - BTN_SIZE, w: BTN_SIZE, h: BTN_SIZE };
 const _FS_PATH_ENTER = new Path2D('M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z');
 const _FS_PATH_EXIT  = new Path2D('M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z');
 
@@ -11363,8 +11371,7 @@ function _dpBuildLayout() {
   const jr = wide ? 104 : 78;
   const jogD = (jr + 7) * 2;
   const lcdH = wide ? 60 : 58;
-  const backSize = 40;
-  const headH = backSize + 6;   // 戻るアイコンと銘板が並ぶ最上段の高さ
+  const headH = 34;   // 銘板（機種名の2行）が入る最上段の高さ
   /* パネルの中身: 縦画面は「銘板 → LCDとジョグを横並び」、
      横画面はパッドの右に「銘板 → LCD → ジョグ」を縦に積む */
   /* 縦横とも「銘板 → LCD → ロゴ」の縦積み。ロゴは左右中央（SP-404の面構え） */
@@ -11388,20 +11395,15 @@ function _dpBuildLayout() {
   /* 中身（LCD幅）を基準にパネル内で横中央へ寄せる。ロゴもこの中心に置く */
   const lcdW = Math.min(panelW, wide ? 320 : 260);
   const lcdX = Math.round(panelX + (panelW - lcdW) / 2);
-  /* 戻るアイコンはパネルの左上、その右に銘板を並べる。縦横とも同じ場所にする:
-     下や右下に置くと、叩いている手がパッドと間違えて踏む（実機評価）。
-     パネルの左上はパッドの列から最も遠く、演奏中に触れることがない */
-  const plate = { x: lcdX + backSize + 12, y: panelY + 2 + backSize / 2 };
+  const plate = { x: lcdX, y: panelY + 20 };
   const lcd = { x: lcdX, y: panelY + headH, w: lcdW, h: lcdH };
   const jog = { x: lcdX + lcdW / 2, y: panelY + headH + lcdH + 24 + jogD / 2, r: jr };
   /* 筐体は中身をちょうど包む大きさに */
   const bodyTop = Math.min(panelY, gy) - 14;
   const bodyBottom = Math.max(gy + gridH, panelY + panelH) + 14;
   const body = { x: 10, y: bodyTop, w: W - 20, h: bodyBottom - bodyTop };
-  /* 文字の「もどる」はこの筐体の雰囲気を壊すのでアイコンにする */
-  const back = { x: lcdX, y: panelY + 2, w: backSize, h: backSize };
   return { pads, panel: { x: panelX, y: panelY, w: panelW, h: panelH },
-           plate, lcd, jog, back, body, size,
+           plate, lcd, jog, body, size,
            flash: new Float32Array(DRUM_PADS.length),
            lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0 };
 }
@@ -11444,7 +11446,7 @@ function _dpHit(i) {
 
 function _drumPadTouch(x, y) {
   if (!_dp) return;
-  if (hitTest(_dp.back, x, y)) { _exitDrumPad(); return; }
+  if (hitTest(DP_BACK_BTN, x, y)) { _exitDrumPad(); return; }
   if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
   for (const p of _dp.pads) if (hitTest(p, x, y)) { _dpHit(p.idx); return; }
 }
@@ -11456,29 +11458,6 @@ function _updateDrumPad() {
   _dp.jogRot += _dp.jogSpin;
   _dp.jogSpin *= DP_JOG_DAMP;
   if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
-}
-
-/* リターン矢印（右上から左へ回り込んで左を向く）。筐体の一部に見えるよう、
-   塗りつぶしのボタンにはせず細い線画にする */
-function _dpDrawBackIcon(cx, cy, r) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(cx, cy, r + 7, 0, Math.PI * 2); ctx.stroke();
-  ctx.strokeStyle = 'rgba(245,208,32,0.85)';
-  ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(cx + r * 0.60, cy - r * 0.55);
-  ctx.lineTo(cx + r * 0.60, cy + r * 0.10);
-  ctx.quadraticCurveTo(cx + r * 0.60, cy + r * 0.55, cx + r * 0.10, cy + r * 0.55);
-  ctx.lineTo(cx - r * 0.45, cy + r * 0.55);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - r * 0.10, cy + r * 0.15);
-  ctx.lineTo(cx - r * 0.55, cy + r * 0.55);
-  ctx.lineTo(cx - r * 0.10, cy + r * 0.95);
-  ctx.stroke();
-  ctx.restore();
 }
 
 function drawDrumPad() {
@@ -11545,8 +11524,6 @@ function drawDrumPad() {
     }
   }
 
-  /* 戻る（リターンの矢印。筐体に馴染む控えめな金の線画） */
-  _dpDrawBackIcon(o.back.x + o.back.w / 2, o.back.y + o.back.h / 2, 12);
   ctx.restore();
 }
 
@@ -11899,6 +11876,24 @@ function _drawMuteIcon() {
   }
 }
 
+/* リターン矢印（右上から下りて左へ回り込み、左を向く）。ミュート・全画面と
+   同じ列に並ぶので、線の太さと大きさもそれらに揃える */
+function _drawReturnIcon() {
+  ctx.strokeStyle = Y;
+  ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(6, -7);
+  ctx.lineTo(6, 1);
+  ctx.quadraticCurveTo(6, 6, 1, 6);
+  ctx.lineTo(-5, 6);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-1, 1.5);
+  ctx.lineTo(-6, 6);
+  ctx.lineTo(-1, 10.5);
+  ctx.stroke();
+}
+
 function _drawPauseIcon() {
   ctx.fillStyle = Y;
   if (isPaused) {
@@ -11924,6 +11919,7 @@ function _drawTopButtons() {
   if (FS_SUPPORTED)                          _drawTopBtn(FS_BTN_RECT,     false,            _drawFullscreenIcon);
                                              _drawTopBtn(MUTE_BTN,        false,            _drawMuteIcon);
   if (phase !== 'startup' && phase !== 'soundTest' && phase !== 'drumPad') _drawTopBtn(PAUSE_BTN, false, _drawPauseIcon);
+  if (phase === 'drumPad')                   _drawTopBtn(DP_BACK_BTN,     false,            _drawReturnIcon);
 }
 
 /* ピルバッジの外形パスを設定（beginPath〜closePath）。fill()/stroke()は呼び出し側で行う */
