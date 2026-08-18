@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.15';
+const VERSION = 'v7.16';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11306,6 +11306,7 @@ function drawSoundTest() {
 const DP_PAD_GAP = 8;
 const DP_FLASH_FRAMES = 10;    // 叩いた光の減衰（フレーム）
 const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
+const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量（左2列は逆回り。_dpHit参照）
 
 /* 4x4。配列は画面の上段から並べる（上段=ベース、下段=キック/スネア）。
    gainはパッドごとの音量補正。各音はBGMの中での相対バランスで決めた値で、
@@ -11444,7 +11445,10 @@ function _dpHit(i) {
   _dp.flash[i] = DP_FLASH_FRAMES;
   _dp.lastName = pad.name; _dp.lastTag = pad.tag;
   _dp.hits++;
-  _dp.jogSpin += 0.10;
+  /* 叩いた列でジョグの回る向きを変える: 左2列は逆時計回り、右2列は時計回り。
+     左右を交互に叩くと回転が打ち消し合ってスクラッチのような動きになる
+     （積算した速度に足すので、同じ側を連打すれば速く回り続ける） */
+  _dp.jogSpin += (i % 4) < 2 ? -DP_JOG_KICK : DP_JOG_KICK;
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const t = audioCtx.currentTime + 0.01; // クオンタイズしない（叩いた瞬間に鳴らす）
   let dest = _seDest(audioCtx);
