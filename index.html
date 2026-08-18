@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v6.98';
+const VERSION = 'v6.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10277,12 +10277,14 @@ const _TRUE_ENDING_FIN_LINGER_FRAMES = 150; // クレジットが出そろって
 const _TRUE_ENDING_TITLE_MIN_HOLD_FRAMES =
   _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES + _TRUE_ENDING_CREDIT_FADEIN_FRAMES + _TRUE_ENDING_FIN_LINGER_FRAMES;
 
-/* { stage, timer, scrollY, targetScrollY,
-     content:{rows,rollStartIdx,closeStartIdx},
+/* { stage, timer, scrollY, summaryScrollY, targetScrollY,
+     content:{rows,rollStartIdx,summaryStartIdx,closeStartIdx},
      closeAlpha, titleAlpha, canExit }
    stage: 'scroll' → 'closeLinesRest' → 'closeLinesFadeOut' → 'titleFadeIn' → 'titleHold'
-   タップ操作は3段階の"表示"（見出し＋実績一覧／締めセリフ／タイトル）を
-   順に1段ずつ進める（handleGameClickのphase==='trueEnding'分岐参照） */
+   タップ操作は4段階の"表示"（見出し＋実績一覧／そうけっさん／締めセリフ／
+   タイトル）を順に1段ずつ進める。'scroll'ステージだけが2段ぶんを受け持ち、
+   現在位置がsummaryScrollYの手前かどうかで飛び先を選ぶ
+   （handleGameClickのphase==='trueEnding'分岐参照） */
 let _trueEnding = null;
 let _trueEndingIsReplay = false; // タイトル画面のボタンからの単体再生か（_finishTrueEndingでのキング戦state後片付けの要否に使う）
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
@@ -10356,6 +10358,9 @@ function _buildTrueEndingContent() {
      （_TRUE_ENDING_SUBHEADER_TEXT参照）。行高はフォント基準で持ち、上下に
      ほぼ半行ぶんずつの余白を作って、直後の統計行と詰まって見えないようにする */
   y += spacerBeforeSummary;
+  /* スキップ操作の中間ジャンプ先（handleGameClick参照）。小見出しの行を
+     基準にすることで、まとめブロックの先頭からきちんと読ませられる */
+  const summaryStartIdx = rows.length;
   rows.push({ type: 'subheader', text: _TRUE_ENDING_SUBHEADER_TEXT, y, h: fsSub * 3.0, fs: fsSub });
   y += fsSub * 3.0;
   const summaryStats = [
@@ -10393,7 +10398,7 @@ function _buildTrueEndingContent() {
     rows.push({ type: 'close', text, y, h: closeDy, fs: fsClose });
     y += closeDy;
   }
-  return { rows, rollStartIdx, closeStartIdx, closeRowCount: closeDisplayLines.length };
+  return { rows, rollStartIdx, summaryStartIdx, closeStartIdx, closeRowCount: closeDisplayLines.length };
 }
 
 /* こんがり達成直後（自動）・タイトル画面のボタン（手動リプレイ）どちらからもここから入る */
@@ -10432,13 +10437,16 @@ function _startTrueEnding(replay) {
      折り返しで画面幅ごとに変わるため、常に実際の行数から中央行を求める */
   const midClose = content.rows[content.closeStartIdx + Math.floor(content.closeRowCount / 2)];
   const targetScrollY = H * 0.5 + (midClose.y + midClose.h / 2) - H * _TRUE_ENDING_CLOSE_REST_Y_RATIO;
-  /* 旧openSceneEndScrollY（タップで「開幕セリフ→実績一覧」へ飛ばす中間地点）は
-     廃止した。開幕セリフが無くなり、見出しの直後がもう実績一覧なので、
-     この中間ジャンプは移動量がほぼ無く意味を持たない。スキップは
-     「1タップで締めセリフまで」の1段になる（handleGameClick参照） */
+  /* スキップ1段目の着地点（2段目が上のtargetScrollY＝締めセリフ）。
+     描画は screenY = H/2 + 行の中心 - scrollY なので、小見出し行のyを
+     そのままscrollYにすると小見出しが画面中央のすぐ下（H/2 + 行高/2）に来る
+     ＝スクロール開始時に「たっせいのあかし」が置かれるのと同じ相対位置になり、
+     直後の統計5行も画面内に収まる。まとめの先頭から読ませたいので、
+     ブロックを画面中央に載せるのではなく先頭行の位置で決める */
+  const summaryScrollY = content.rows[content.summaryStartIdx].y;
   _trueEnding = {
     stage: 'scroll', timer: 0,
-    scrollY: 0, targetScrollY, content,
+    scrollY: 0, summaryScrollY, targetScrollY, content,
     closeAlpha: 1, titleAlpha: 0, titleGlow: 0, creditAlpha: 0, canExit: false,
   };
   _playTrueEndingTheme();
@@ -13519,14 +13527,24 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'trueEnding') {
-    /* 「開幕セリフ→実績一覧→締めセリフ→タイトル＋COPYRIGHT」の4段階を、
+    /* 「実績一覧→そうけっさん→締めセリフ→タイトル＋COPYRIGHT」の4段階を、
        タップ/クリック/キー入力のたびに1段ずつ順送りする（ユーザー要望）。
        速度が一定なので、途中の停止位置までスキップしても自然に流れた
        場合と同じ着地位置になる */
     const o = _trueEnding;
-    if (o.stage === 'scroll') {
-      /* 見出し＋実績一覧 → 締めセリフ。開幕セリフ廃止で中間ジャンプ
-         （旧openSceneEndScrollY）が不要になったため1段に統合した */
+    if (o.stage === 'scroll' && o.scrollY < o.summaryScrollY) {
+      /* 実績一覧 → そうけっさん。まとめは実績ロールの末尾にあるため、
+         従来の「1タップで締めセリフまで」だと総決算を読む機会が無かった
+         （ユーザー要望）。速度が一定なので、飛ばしても自然に流れた場合と
+         同じ見え方でここから続く */
+      o.scrollY = o.summaryScrollY;
+      /* 見出しの静止表示はo.timerで制御している（_TRUE_ENDING_HEADER_HOLD_FRAMES、
+         _updateTrueEnding参照）。スクロールが始まる前にスキップされた場合、
+         timerをそのままにするとジャンプ先で残りのホールド時間ぶん止まって
+         見えるため、ホールドは終わったものとして扱う */
+      o.timer = _TRUE_ENDING_HEADER_HOLD_FRAMES + 1;
+    } else if (o.stage === 'scroll') {
+      /* そうけっさん → 締めセリフ */
       o.scrollY = o.targetScrollY;
       _trueEndingEnterStage('closeLinesRest');
     } else if (o.stage === 'closeLinesRest' || o.stage === 'closeLinesFadeOut' || o.stage === 'titleFadeIn') {
