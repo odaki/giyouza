@@ -174,6 +174,7 @@ const H = IS_PORTRAIT ? 820  : 560;
    同じ位置づけ） */
 const CHEAT_PANEL_ON = _dbgFlag('cheatpanel');
 const CHEAT_PANEL_BTNS = [
+  { id: 'se',     label: 'SE'    },
   { id: 'fever',  label: 'FEVER' },
   { id: 'slow',   label: 'SLOW'  },
   { id: 'clr',    label: 'CLR'   },
@@ -189,6 +190,7 @@ function _cheatPanelRect(i) {
   return { x: i * (w + gap), y: H - h, w, h };
 }
 function _runCheatPanelAction(id) {
+  if (id === 'se') { _cheatSEOpen = !_cheatSEOpen; return; }
   if (id === 'fever') { _cheatFeverQueued = true; return; }
   if (id === 'slow') {
     _cheatSlowQueued = _cheatSlowQueued !== null ? null : !isSlowSpin;
@@ -213,8 +215,42 @@ function _runCheatPanelAction(id) {
   const charMap = { gi: 'ギ', yo: 'ヨ', u: 'ウ', za: 'ザ' };
   if (charMap[id] && phase === 'idle' && curIdx < 4) cheatShoot(charMap[id]);
 }
+/* 効果音の試聴リスト（?cheatpanel の SE ボタンで開閉）。
+   効果音を作り込むとき、その音が鳴るゲーム状態まで到達しないと聴けないのが
+   反復の一番の足かせだった。SE_TABLEを一覧にして、その場で鳴らせるようにする。
+   効果音を足せば自動的にこの一覧にも出る（SE_NAMES参照）。
+   縦画面は3列、横画面は6列。ボタン行のすぐ上に積む */
+function _seAuditionCols() { return W >= 700 ? 6 : 3; }
+function _seAuditionRect(i) {
+  const cols = _seAuditionCols(), h = 22, gap = 2;
+  const w = (W - gap * (cols - 1)) / cols;
+  const rows = Math.ceil(SE_NAMES.length / cols);
+  const top = H - 26 - 4 - rows * (h + gap);
+  return { x: (i % cols) * (w + gap), y: top + ((i / cols) | 0) * (h + gap), w, h };
+}
+function drawSEAudition() {
+  if (!_cheatSEOpen) return;
+  const first = _seAuditionRect(0), last = _seAuditionRect(SE_NAMES.length - 1);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, first.y - 4, W, (last.y + last.h) - first.y + 8);
+  ctx.font = `bold 9px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < SE_NAMES.length; i++) {
+    const r = _seAuditionRect(i);
+    ctx.fillStyle = 'rgba(30,30,40,0.95)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(SE_NAMES[i], r.x + r.w / 2, r.y + r.h / 2);
+  }
+  ctx.restore();
+}
+
 function drawCheatPanel() {
   if (!CHEAT_PANEL_ON) return;
+  drawSEAudition();
   ctx.save();
   ctx.font = `bold 11px sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -549,7 +585,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.07';
+const VERSION = 'v7.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1151,6 +1187,7 @@ let feverPending     = false; // 次トライ開始時にフィーバーへ移�
 let _jackpotAutoReset = false; // フィーバー中（または完走）の大当たり → ユーザー入力なし自動リセット対象
 let _slowSpinPending = null;  // null=なし / true=次トライでスロー強制 / false=次トライで通常強制
 /* チートキー予約（当たり判定時に pending へ転写） */
+let _cheatSEOpen = false;      // チートパネルの効果音試聴リストを開いているか
 let _cheatFeverQueued = false; // チートパネルのFEVER予約
 let _cheatSlowQueued  = null;  // チートパネルのSLOW予約: null=なし / true=スロー / false=通常
 
@@ -13677,6 +13714,11 @@ document.addEventListener('keydown', e=>{
 /* 全フェーズで最初に見るボタン（チートパネル・全画面）。処理したらtrueを返す */
 function _handleTopButtons(x, y) {
   if (CHEAT_PANEL_ON) {
+    if (_cheatSEOpen) {
+      for (let i = 0; i < SE_NAMES.length; i++) {
+        if (hitTest(_seAuditionRect(i), x, y)) { playSE(SE_NAMES[i]); return true; }
+      }
+    }
     for (let i = 0; i < CHEAT_PANEL_BTNS.length; i++) {
       if (hitTest(_cheatPanelRect(i), x, y)) { _runCheatPanelAction(CHEAT_PANEL_BTNS[i].id); return true; }
     }
