@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.11';
+const VERSION = 'v7.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1469,7 +1469,7 @@ const SOUND_TEST_BTN = { x: BTN_RIGHT + (BTN_SIZE + BTN_GAP) * 2, y: BTN_TOP, w:
    反応しないほうが迷わせるうえ、エンドロールはどこをタップしても段送りする画面
    なので、この領域のタップも素直に段送りとして扱えばよい（drawの右上ボタン群と
    各入力ハンドラの両方でこの述語を使う＝表示と当たり判定を一箇所で揃える） */
-function _achBtnEnabled() { return phase !== 'trueEnding' && phase !== 'soundTest'; }
+function _achBtnEnabled() { return phase !== 'trueEnding' && phase !== 'soundTest' && phase !== 'drumPad'; }
 
 /* 全画面ボタン: Canvas 描画用（HTML button 廃止）
    Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
@@ -2691,10 +2691,19 @@ function _playTaikoHit(ctx, t, dest, kind, body = false) {
   else                          _playSlideOsc(ctx, dest, t, 'sine', 200, 90, 0.05, [[0, 0.30, 'set'], [0.10, 0.0001]], 0.13);
   if (!body) return;
   const s = kind === 'strong' ? 1 : kind === 'flourish' ? 0.6 : 0.28;
-  /* ハイコンガ（TR-808）: キックと同じピッチ下降式を1オクターブ以上高く調律する */
-  _playSlideOsc(ctx, dest, t, 'sine', noteHz('A',4), noteHz('E',4), 0.10, [[0, 0.40 * s, 'set'], [0.18, 0.0001]], 0.22);
-  /* リムショット（TR-808）: スライドさせない単発トーンを一瞬で切る「コッ」 */
-  _playSlideOsc(ctx, dest, t, 'sine', noteHz('A',6), noteHz('A',6), 0.02, [[0, 0.16 * s, 'set'], [0.03, 0.0001]], 0.05);
+  _playConga(ctx, t, dest, 0.40 * s);
+  _playRimshot(ctx, t, dest, 0.16 * s);
+}
+
+/* ハイコンガ（TR-808）: キックと同じピッチ下降式を1オクターブ以上高く調律する。
+   和太鼓の胴鳴りの層として重ねるほか、ドラムパッドでは単体の音色として叩く
+   （DRUM_PADS参照）ため、層の中に埋めずに関数として取り出してある */
+function _playConga(ctx, t, dest, vol) {
+  _playSlideOsc(ctx, dest, t, 'sine', noteHz('A',4), noteHz('E',4), 0.10, [[0, vol, 'set'], [0.18, 0.0001]], 0.22);
+}
+/* リムショット（TR-808）: スライドさせない単発トーンを一瞬で切る「コッ」 */
+function _playRimshot(ctx, t, dest, vol) {
+  _playSlideOsc(ctx, dest, t, 'sine', noteHz('A',6), noteHz('A',6), 0.02, [[0, vol, 'set'], [0.03, 0.0001]], 0.05);
 }
 
 /* ソフトクリップ歪みカーブ（TB-303風アシッドベースの「凶悪」な唸りに使う） */
@@ -5765,8 +5774,10 @@ function _updateAlways() {
 
 function update() {
   _updateAlways();
-  /* サウンドテスト中はゲームを進めない（音の再生だけを行うモード） */
+  /* サウンドテスト・ドラムパッド中はゲームを進めない（音を鳴らすだけのモード）。
+     ドラムパッドは叩いた光とジョグの回転だけ進める */
   if (phase === 'soundTest') return;
+  if (phase === 'drumPad') { _updateDrumPad(); return; }
   if (phase === 'startup') {
     /* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
        その回転角は startupTimer と w.speed から直接求める（draw側参照）。
@@ -11182,7 +11193,8 @@ function _stBuildLayout() {
     }
     y += rowsOf(sec) * (ST_ROW_H + ST_GAP) + ST_SECT_GAP;
   }
-  items.push({ type: 'back', label: 'もどる', x: W / 2 - 60, y, w: 120, h: ST_ROW_H });
+  items.push({ type: 'pads', label: 'ドラムパッド', x: W / 2 - 130, y, w: 120, h: ST_ROW_H });
+  items.push({ type: 'back', label: 'もどる',      x: W / 2 + 10,  y, w: 120, h: ST_ROW_H });
   return items;
 }
 
@@ -11211,6 +11223,7 @@ function _soundTestClick(x, y) {
   for (const it of _soundTest.items) {
     if (it.type === 'label' || !hitTest(it, x, y)) continue;
     if (it.type === 'back') { _exitSoundTest(); return; }
+    if (it.type === 'pads') { _stStopAll(); _startDrumPad(); return; }
     if (it.type === 'ctrl') { ST_CTRL[it.key].act(); return; }
     if (it.type === 'se')   { playSE(it.key); return; }
     if (it.type === 'music') {
@@ -11256,6 +11269,265 @@ function drawSoundTest() {
     ctx.fillStyle = enabled ? '#fff' : 'rgba(255,255,255,0.35)';
     ctx.fillText(label, it.x + it.w / 2, it.y + it.h / 2);
   }
+  ctx.restore();
+}
+
+/* ════════════════ ドラムパッド ════════════════
+   サウンドテストから入る演奏モード（phase1: 叩けるところまで）。
+   音色は新規に作らず、キング戦で使っているTR/TB系の発音関数をそのまま叩く。
+   GUIはAKAI MPC・Roland SPシリーズの佇まい（ベベルの効いた4x4パッド・機種名
+   プレート・LCD窓・大きなジョグ）を借り、色はゲームの意匠（金と濃緑）で通す。
+   ジョグと銘板には丸いギヨウザロゴをそのまま使う。
+
+   クオンタイズはしない。叩いた瞬間に鳴らす（タイミング精度そのものが
+   この作品の手触りなので、入力を補正しない方針をここでも守る）。 */
+const DP_PAD_GAP = 8;
+const DP_FLASH_FRAMES = 10;    // 叩いた光の減衰（フレーム）
+const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
+
+/* 4x4。配列は画面の上段から並べる（上段=ベース、下段=キック/スネア）。
+   gainはパッドごとの音量補正。各音はBGMの中での相対バランスで決めた値で、
+   単体で叩くとピークが0.058〜1.83と32倍もばらつく（オフラインレンダで実測）。
+   min(0.80/ピーク, 0.12/RMS) で「潰れない上限」と「聴感の大きさ」の両方を
+   満たす倍率を出したもの。長い音（ACID・DORA・ベース）はピークではなくRMSが、
+   短い打点（CLAP・BLAST）はピークが効いている。
+   実機のサンプリングレート（96kHz）でも測り直し、ノイズ系（CH/OH）はピークが
+   上がるぶん下げ、CLAPは3連バーストでピークだけ立ってRMSが痩せるぶん上げた。
+   結果はピーク0.23〜0.90・RMS0.06〜0.12に収まっている。ここは耳で微調整してよい */
+const DRUM_PADS = [
+  { name: 'BASS C', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('C', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS E', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('E', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS G', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('G', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS A', tag: 'TB', gain: 1.45, hit: (c, t, d) => _playBossBassMel(c, noteHz('A', 2), t, 0.26, 0.5, d) },
+  { name: 'KIN',    tag: 'FX', gain: 1.22, hit: (c, t, d) => _playKingCrackKin(c, t, d) },
+  { name: 'BLAST',  tag: 'FX', gain: 0.63, hit: (c, t, d) => _playKingBlast(c, t, d) },
+  { name: 'DORA',   tag: 'FX', gain: 0.56, hit: (c, t, d) => _playDoraHit(c, t, d) },
+  { name: 'ACID',   tag: 'TB', gain: 4.10, hit: (c, t, d) => _playGroundRumble(c, t, d, 0) },
+  { name: 'CH',     tag: 'TR', gain: 1.30, hit: (c, t, d) => _playKingHat(c, t, d, false) },
+  { name: 'OH',     tag: 'TR', gain: 0.90, hit: (c, t, d) => _playKingHat(c, t, d, true) },
+  { name: 'RIM',    tag: 'TR', gain: 3.37, hit: (c, t, d) => _playRimshot(c, t, d, 0.16) },
+  { name: 'CONGA',  tag: 'TR', gain: 1.47, hit: (c, t, d) => _playConga(c, t, d, 0.40) },
+  { name: 'KICK',   tag: 'TR', gain: 0.64, hit: (c, t, d) => _playKick(c, t, d, 1.0) },
+  { name: 'TAIKO',  tag: 'TR', gain: 0.63, hit: (c, t, d) => _playTaikoHit(c, t, d, 'strong') },
+  { name: 'SNARE',  tag: 'TR', gain: 0.79, hit: (c, t, d) => _playKingBeamHit(c, t, d) },
+  { name: 'CLAP',   tag: 'TR', gain: 0.60, hit: (c, t, d) => _playKingCue(c, t, d) },
+];
+
+let _dp = null;            // { pads, back, size, flash, lastName, jogRot, jogSpin, hits }
+let _dpPadSprites = null;  // パッド16枚の焼き込み（毎フレームのパス＋文字描画を避ける）
+
+/* 任意のコンテキストへ角丸パスを引く（グローバルのroundRectはctx固定のため） */
+function _dpRoundPath(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);            c.lineTo(x + w - r, y);
+  c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r);    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h);        c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r);            c.quadraticCurveTo(x, y, x + r, y);
+  c.closePath();
+}
+
+/* パッド1枚を焼き込む。MPCのゴムパッドのように、上が明るく下が暗い縦グラデに
+   内側の白ベベルと外側の影を重ねる */
+function _dpBuildPadSprite(pad, size) {
+  const oc = _mkCache(size * _dpr, size * _dpr);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  const g = c.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, '#2b3f34');
+  g.addColorStop(0.55, '#1d2c24');
+  g.addColorStop(1, '#131e18');
+  c.fillStyle = g;
+  _dpRoundPath(c, 1, 1, size - 2, size - 2, 10); c.fill();
+  c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 1.5;
+  _dpRoundPath(c, 3, 3, size - 6, size - 6, 8); c.stroke();
+  c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 1;
+  _dpRoundPath(c, 0.5, 0.5, size - 1, size - 1, 10); c.stroke();
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.font = `bold ${Math.round(size * 0.155)}px sans-serif`;
+  c.fillStyle = 'rgba(245,208,32,0.92)';
+  c.fillText(pad.name, size / 2, size * 0.62);
+  c.textAlign = 'left';
+  c.font = `bold ${Math.round(size * 0.10)}px sans-serif`;
+  c.fillStyle = 'rgba(245,208,32,0.40)';
+  c.fillText(pad.tag, size * 0.11, size * 0.20);
+  return oc;
+}
+
+function _dpBuildLayout() {
+  const wide = W >= 700;
+  const size = wide ? 104 : 92;
+  const gridW = size * 4 + DP_PAD_GAP * 3, gridH = gridW;
+  const jr = wide ? 62 : 44;          // ジョグ（丸ロゴ）の半径
+  const jogD = (jr + 7) * 2;          // 外周リングを含む直径
+  const plateR = 13, lcdH = wide ? 60 : 52;
+  /* パネルの中身: 縦画面は「銘板 → LCDとジョグを横並び」、
+     横画面はパッドの右に「銘板 → LCD → ジョグ」を縦に積む */
+  const panelH = wide ? 34 + lcdH + 24 + jogD : 34 + Math.max(lcdH, jogD);
+  const contentH = wide ? Math.max(gridH, panelH) : panelH + 16 + gridH;
+  /* 上端は右上のボタン列（ミュート・全画面）の下から。中身が短いときは上下中央へ */
+  const topMin = BTN_TOP + BTN_SIZE * 2 + BTN_GAP * 2 + 8;
+  const top = wide ? Math.round((H - contentH) / 2)
+                   : Math.round(Math.max(topMin, (H - contentH - 44) / 2));
+  const gx = wide ? 44 : Math.round((W - gridW) / 2);
+  const gy = wide ? top + Math.round((contentH - gridH) / 2) : top + panelH + 16;
+  const pads = [];
+  for (let i = 0; i < DRUM_PADS.length; i++) {
+    pads.push({ idx: i, w: size, h: size,
+                x: gx + (i % 4) * (size + DP_PAD_GAP),
+                y: gy + ((i / 4) | 0) * (size + DP_PAD_GAP) });
+  }
+  const panelX = wide ? gx + gridW + 36 : gx;
+  const panelW = wide ? W - panelX - 44 : gridW;
+  const panelY = wide ? top + Math.round((contentH - panelH) / 2) : top;
+  /* 横画面はパネルが横に広いので、中身（LCD幅）を基準に横中央へ寄せる。
+     左端に貼り付けると右側が間延びして見える */
+  const lcdW = wide ? Math.min(panelW, 320) : panelW - jogD - 10;
+  const lcdX = wide ? Math.round(panelX + (panelW - lcdW) / 2) : panelX;
+  const plate = { x: lcdX + plateR + 4, y: panelY + plateR + 4, r: plateR };
+  const lcd = { x: lcdX, y: panelY + 34, w: lcdW, h: lcdH };
+  const jog = wide ? { x: lcdX + lcdW / 2, y: panelY + 34 + lcdH + 24 + jogD / 2, r: jr }
+                   : { x: panelX + panelW - jogD / 2, y: panelY + 34 + Math.max(lcdH, jogD) / 2, r: jr };
+  /* 「もどる」はジョグの下（横画面）／パッドの下（縦画面）。ジョグと重ねない */
+  const backY = wide ? jog.y + jr + 7 + 18 : gy + gridH + 18;
+  const back = { x: wide ? lcdX + lcdW / 2 - 60 : W / 2 - 60,
+                 y: Math.min(backY, H - 34), w: 120, h: 26 };
+  /* 筐体は中身をちょうど包む大きさにする（余白が空きすぎて間延びしないように） */
+  const bodyTop = Math.min(panelY, gy) - 14;
+  const bodyBottom = Math.max(gy + gridH, back.y + back.h, panelY + panelH) + 14;
+  const body = { x: 10, y: bodyTop, w: W - 20, h: bodyBottom - bodyTop };
+  return { pads, panel: { x: panelX, y: panelY, w: panelW, h: panelH },
+           plate, lcd, jog, back, body, size,
+           flash: new Float32Array(DRUM_PADS.length),
+           lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0 };
+}
+
+function _startDrumPad() {
+  phase = 'drumPad';
+  _dp = _dpBuildLayout();
+  if (!_dpPadSprites || _dpPadSprites.size !== _dp.size) {
+    _dpPadSprites = DRUM_PADS.map(p => _dpBuildPadSprite(p, _dp.size));
+    _dpPadSprites.size = _dp.size;
+  }
+  if (!audioCtx) getAudioCtx();
+}
+
+function _exitDrumPad() {
+  _dp = null;
+  _startSoundTest(); // 入ってきたサウンドテストへ戻す
+}
+
+/* 1枚叩く。パッドごとの音量補正のためだけに専用gainを1つ挟む
+   （発音関数側はdestを受け取る作りなので、音そのものには手を入れない） */
+function _dpHit(i) {
+  const pad = DRUM_PADS[i];
+  _dp.flash[i] = DP_FLASH_FRAMES;
+  _dp.lastName = pad.name; _dp.lastTag = pad.tag;
+  _dp.hits++;
+  _dp.jogSpin += 0.10;
+  if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
+  const t = audioCtx.currentTime + 0.01; // クオンタイズしない（叩いた瞬間に鳴らす）
+  let dest = _seDest(audioCtx);
+  if (pad.gain !== 1) {
+    const g = audioCtx.createGain();
+    g.gain.value = pad.gain;
+    g.connect(dest);
+    _disconnectAfter(audioCtx, t + 2.0, g);
+    dest = g;
+  }
+  pad.hit(audioCtx, t, dest);
+}
+
+function _drumPadTouch(x, y) {
+  if (!_dp) return;
+  if (hitTest(_dp.back, x, y)) { _exitDrumPad(); return; }
+  if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+  for (const p of _dp.pads) if (hitTest(p, x, y)) { _dpHit(p.idx); return; }
+}
+
+/* 叩いた光とジョグの回転だけを進める（ゲーム本体は止めたまま。update参照） */
+function _updateDrumPad() {
+  if (!_dp) return;
+  for (let i = 0; i < _dp.flash.length; i++) if (_dp.flash[i] > 0) _dp.flash[i]--;
+  _dp.jogRot += _dp.jogSpin;
+  _dp.jogSpin *= DP_JOG_DAMP;
+  if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
+}
+
+function drawDrumPad() {
+  if (phase !== 'drumPad' || !_dp) return;
+  const o = _dp;
+  ctx.save();
+  /* 筐体 */
+  ctx.fillStyle = '#0b120e';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#101b15';
+  roundRect(o.body.x, o.body.y, o.body.w, o.body.h, 12); ctx.fill();
+  ctx.strokeStyle = 'rgba(245,208,32,0.30)'; ctx.lineWidth = 1;
+  roundRect(o.body.x, o.body.y, o.body.w, o.body.h, 12); ctx.stroke();
+
+  /* 銘板（丸いギヨウザロゴ＋機種名） */
+  _drawGyozaCircleLogo(o.plate.x, o.plate.y, o.plate.r, 1);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.font = `bold 13px sans-serif`;
+  ctx.fillStyle = Y;
+  ctx.fillText('GIYOUZA SP-16', o.plate.x + o.plate.r + 8, o.plate.y - 4);
+  ctx.font = `9px sans-serif`;
+  ctx.fillStyle = 'rgba(245,208,32,0.45)';
+  ctx.fillText('TR / TB DRUM PADS', o.plate.x + o.plate.r + 8, o.plate.y + 9);
+
+  /* LCD窓（最後に叩いた音色） */
+  const L = o.lcd;
+  ctx.fillStyle = '#0a2413';
+  roundRect(L.x, L.y, L.w, L.h, 5); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 2;
+  roundRect(L.x, L.y, L.w, L.h, 5); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `9px sans-serif`;
+  ctx.fillStyle = 'rgba(159,242,168,0.55)';
+  ctx.fillText(o.lastTag ? `VOICE / ${o.lastTag}` : 'VOICE', L.x + 10, L.y + 17);
+  ctx.font = `bold ${L.h >= 60 ? 26 : 22}px sans-serif`;
+  ctx.fillStyle = '#9ff2a8';
+  ctx.fillText(o.lastName || '- - -', L.x + 10, L.y + L.h - 12);
+  ctx.textAlign = 'right';
+  ctx.font = `9px sans-serif`;
+  ctx.fillStyle = 'rgba(159,242,168,0.55)';
+  ctx.fillText(`HITS ${o.hits}`, L.x + L.w - 10, L.y + 17);
+
+  /* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる */
+  const J = o.jog;
+  ctx.fillStyle = '#0a1109';
+  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(245,208,32,0.35)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
+  _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
+
+  /* パッド（焼き込み済みを転写し、叩いた光だけ上に重ねる） */
+  for (const p of o.pads) {
+    ctx.drawImage(_dpPadSprites[p.idx], p.x, p.y, p.w, p.h);
+    const f = o.flash[p.idx];
+    if (f > 0) {
+      const a = f / DP_FLASH_FRAMES;
+      ctx.save();
+      ctx.globalAlpha = a * 0.7;
+      ctx.fillStyle = Y;
+      roundRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2, 10); ctx.fill();
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = '#fff8d0'; ctx.lineWidth = 2;
+      roundRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2, 10); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /* もどる */
+  ctx.fillStyle = 'rgba(30,30,40,0.95)';
+  ctx.fillRect(o.back.x, o.back.y, o.back.w, o.back.h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+  ctx.strokeRect(o.back.x + 0.5, o.back.y + 0.5, o.back.w - 1, o.back.h - 1);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold 11px sans-serif`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('もどる', o.back.x + o.back.w / 2, o.back.y + o.back.h / 2);
   ctx.restore();
 }
 
@@ -11632,7 +11904,7 @@ function _drawTopButtons() {
   if (phase === 'startup' && _soundTestUnlocked()) _drawTopBtn(SOUND_TEST_BTN, false,        _drawSoundTestIcon);
   if (FS_SUPPORTED)                          _drawTopBtn(FS_BTN_RECT,     false,            _drawFullscreenIcon);
                                              _drawTopBtn(MUTE_BTN,        false,            _drawMuteIcon);
-  if (phase !== 'startup' && phase !== 'soundTest') _drawTopBtn(PAUSE_BTN, false,            _drawPauseIcon);
+  if (phase !== 'startup' && phase !== 'soundTest' && phase !== 'drumPad') _drawTopBtn(PAUSE_BTN, false, _drawPauseIcon);
 }
 
 /* ピルバッジの外形パスを設定（beginPath〜closePath）。fill()/stroke()は呼び出し側で行う */
@@ -11863,8 +12135,9 @@ function draw() {
 
   _drawForeground();
 
-  /* ── サウンドテスト（全面。ミュート・全画面ボタンだけは上に残す） ── */
+  /* ── サウンドテスト／ドラムパッド（全面。ミュート・全画面ボタンだけは上に残す） ── */
   drawSoundTest();
+  drawDrumPad();
 
   /* ── ポーズオーバーレイ ── */
   if (isPaused) {
@@ -13968,6 +14241,7 @@ function _handleTopButtons(x, y) {
    isTouch: STARTと真エンディング再生をtouchendへ回すか（iOS都合。_onTouchStart参照） */
 function _handleGameButtons(x, y, inputPerfMs, isTouch) {
   if (phase === 'soundTest') { _soundTestClick(x, y); return; }
+  if (phase === 'drumPad')   { _drumPadTouch(x, y); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, x, y)) { showAchievements = !showAchievements; return; }
     if (trueEndingSeen && hitTest(TRUE_ENDING_BTN, x, y)) {
@@ -14061,6 +14335,17 @@ function _onTouchStart(e) {
      マウス側にこの呼び出しが無いのは意図的（iOSのオーディオ有効化仕様への対応） */
   _unlockAudio();
   _ensureCanvasFocus(); // 外付けキーボードのkeydownをページへ配送させるためのフォーカス確保
+  /* ドラムパッドだけは指の数だけ処理する。ゲーム本編は1点しか見ない作りで
+     （touches[0]）、そこへ手を入れると入力の意味が変わってしまうため、
+     このモード専用の分岐にする。2本指・3本指の同時打ちができないと
+     ドラムパッドとして成立しない */
+  if (phase === 'drumPad') {
+    for (const tc of e.changedTouches) {
+      const q = touchToCanvas(tc);
+      _drumPadTouch(q.x, q.y);
+    }
+    return;
+  }
   _handleGameButtons(pt.x, pt.y, inputPerfMs, true);
 }
 
