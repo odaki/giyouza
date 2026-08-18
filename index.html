@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.12';
+const VERSION = 'v7.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11358,17 +11358,22 @@ function _dpBuildLayout() {
   const wide = W >= 700;
   const size = wide ? 104 : 92;
   const gridW = size * 4 + DP_PAD_GAP * 3, gridH = gridW;
-  const jr = wide ? 62 : 44;          // ジョグ（丸ロゴ）の半径
-  const jogD = (jr + 7) * 2;          // 外周リングを含む直径
-  const plateR = 13, lcdH = wide ? 60 : 52;
+  /* ジョグ（丸ロゴ）はこの画面の主役。SP-404の上部ディスプレイくらいの
+     存在感が要るので、パネルの高さはロゴの直径で決まる大きさにする */
+  const jr = wide ? 104 : 78;
+  const jogD = (jr + 7) * 2;
+  const lcdH = wide ? 60 : 58;
+  const backSize = 40;
+  const headH = backSize + 6;   // 戻るアイコンと銘板が並ぶ最上段の高さ
   /* パネルの中身: 縦画面は「銘板 → LCDとジョグを横並び」、
      横画面はパッドの右に「銘板 → LCD → ジョグ」を縦に積む */
-  const panelH = wide ? 34 + lcdH + 24 + jogD : 34 + Math.max(lcdH, jogD);
+  /* 縦横とも「銘板 → LCD → ロゴ」の縦積み。ロゴは左右中央（SP-404の面構え） */
+  const panelH = headH + lcdH + 24 + jogD;
   const contentH = wide ? Math.max(gridH, panelH) : panelH + 16 + gridH;
-  /* 上端は右上のボタン列（ミュート・全画面）の下から。中身が短いときは上下中央へ */
-  const topMin = BTN_TOP + BTN_SIZE * 2 + BTN_GAP * 2 + 8;
+  /* 縦画面はLCDを中央寄せの幅に抑えてあるので、右上のボタン列とぶつからない。
+     上端はそのぶん高く取れる */
   const top = wide ? Math.round((H - contentH) / 2)
-                   : Math.round(Math.max(topMin, (H - contentH - 44) / 2));
+                   : Math.round(Math.max(50, (H - contentH - 28) / 2));
   const gx = wide ? 44 : Math.round((W - gridW) / 2);
   const gy = wide ? top + Math.round((contentH - gridH) / 2) : top + panelH + 16;
   const pads = [];
@@ -11380,22 +11385,21 @@ function _dpBuildLayout() {
   const panelX = wide ? gx + gridW + 36 : gx;
   const panelW = wide ? W - panelX - 44 : gridW;
   const panelY = wide ? top + Math.round((contentH - panelH) / 2) : top;
-  /* 横画面はパネルが横に広いので、中身（LCD幅）を基準に横中央へ寄せる。
-     左端に貼り付けると右側が間延びして見える */
-  const lcdW = wide ? Math.min(panelW, 320) : panelW - jogD - 10;
-  const lcdX = wide ? Math.round(panelX + (panelW - lcdW) / 2) : panelX;
-  const plate = { x: lcdX + plateR + 4, y: panelY + plateR + 4, r: plateR };
-  const lcd = { x: lcdX, y: panelY + 34, w: lcdW, h: lcdH };
-  const jog = wide ? { x: lcdX + lcdW / 2, y: panelY + 34 + lcdH + 24 + jogD / 2, r: jr }
-                   : { x: panelX + panelW - jogD / 2, y: panelY + 34 + Math.max(lcdH, jogD) / 2, r: jr };
-  /* 「もどる」はジョグの下（横画面）／パッドの下（縦画面）。ジョグと重ねない */
-  const backY = wide ? jog.y + jr + 7 + 18 : gy + gridH + 18;
-  const back = { x: wide ? lcdX + lcdW / 2 - 60 : W / 2 - 60,
-                 y: Math.min(backY, H - 34), w: 120, h: 26 };
-  /* 筐体は中身をちょうど包む大きさにする（余白が空きすぎて間延びしないように） */
+  /* 中身（LCD幅）を基準にパネル内で横中央へ寄せる。ロゴもこの中心に置く */
+  const lcdW = Math.min(panelW, wide ? 320 : 260);
+  const lcdX = Math.round(panelX + (panelW - lcdW) / 2);
+  /* 戻るアイコンはパネルの左上、その右に銘板を並べる。縦横とも同じ場所にする:
+     下や右下に置くと、叩いている手がパッドと間違えて踏む（実機評価）。
+     パネルの左上はパッドの列から最も遠く、演奏中に触れることがない */
+  const plate = { x: lcdX + backSize + 12, y: panelY + 2 + backSize / 2 };
+  const lcd = { x: lcdX, y: panelY + headH, w: lcdW, h: lcdH };
+  const jog = { x: lcdX + lcdW / 2, y: panelY + headH + lcdH + 24 + jogD / 2, r: jr };
+  /* 筐体は中身をちょうど包む大きさに */
   const bodyTop = Math.min(panelY, gy) - 14;
-  const bodyBottom = Math.max(gy + gridH, back.y + back.h, panelY + panelH) + 14;
+  const bodyBottom = Math.max(gy + gridH, panelY + panelH) + 14;
   const body = { x: 10, y: bodyTop, w: W - 20, h: bodyBottom - bodyTop };
+  /* 文字の「もどる」はこの筐体の雰囲気を壊すのでアイコンにする */
+  const back = { x: lcdX, y: panelY + 2, w: backSize, h: backSize };
   return { pads, panel: { x: panelX, y: panelY, w: panelW, h: panelH },
            plate, lcd, jog, back, body, size,
            flash: new Float32Array(DRUM_PADS.length),
@@ -11454,6 +11458,29 @@ function _updateDrumPad() {
   if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
 }
 
+/* リターン矢印（右上から左へ回り込んで左を向く）。筐体の一部に見えるよう、
+   塗りつぶしのボタンにはせず細い線画にする */
+function _dpDrawBackIcon(cx, cy, r) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(245,208,32,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, r + 7, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = 'rgba(245,208,32,0.85)';
+  ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + r * 0.60, cy - r * 0.55);
+  ctx.lineTo(cx + r * 0.60, cy + r * 0.10);
+  ctx.quadraticCurveTo(cx + r * 0.60, cy + r * 0.55, cx + r * 0.10, cy + r * 0.55);
+  ctx.lineTo(cx - r * 0.45, cy + r * 0.55);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.10, cy + r * 0.15);
+  ctx.lineTo(cx - r * 0.55, cy + r * 0.55);
+  ctx.lineTo(cx - r * 0.10, cy + r * 0.95);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawDrumPad() {
   if (phase !== 'drumPad' || !_dp) return;
   const o = _dp;
@@ -11466,15 +11493,14 @@ function drawDrumPad() {
   ctx.strokeStyle = 'rgba(245,208,32,0.30)'; ctx.lineWidth = 1;
   roundRect(o.body.x, o.body.y, o.body.w, o.body.h, 12); ctx.stroke();
 
-  /* 銘板（丸いギヨウザロゴ＋機種名） */
-  _drawGyozaCircleLogo(o.plate.x, o.plate.y, o.plate.r, 1);
+  /* 銘板（機種名のみ。ロゴはジョグで大きく見せるので重ねて出さない） */
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.font = `bold 13px sans-serif`;
   ctx.fillStyle = Y;
-  ctx.fillText('GIYOUZA SP-16', o.plate.x + o.plate.r + 8, o.plate.y - 4);
+  ctx.fillText('GIYOUZA SP-16', o.plate.x, o.plate.y - 7);
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(245,208,32,0.45)';
-  ctx.fillText('TR / TB DRUM PADS', o.plate.x + o.plate.r + 8, o.plate.y + 9);
+  ctx.fillText('TR / TB DRUM PADS', o.plate.x, o.plate.y + 7);
 
   /* LCD窓（最後に叩いた音色） */
   const L = o.lcd;
@@ -11519,15 +11545,8 @@ function drawDrumPad() {
     }
   }
 
-  /* もどる */
-  ctx.fillStyle = 'rgba(30,30,40,0.95)';
-  ctx.fillRect(o.back.x, o.back.y, o.back.w, o.back.h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
-  ctx.strokeRect(o.back.x + 0.5, o.back.y + 0.5, o.back.w - 1, o.back.h - 1);
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `bold 11px sans-serif`;
-  ctx.fillStyle = '#fff';
-  ctx.fillText('もどる', o.back.x + o.back.w / 2, o.back.y + o.back.h / 2);
+  /* 戻る（リターンの矢印。筐体に馴染む控えめな金の線画） */
+  _dpDrawBackIcon(o.back.x + o.back.w / 2, o.back.y + o.back.h / 2, 12);
   ctx.restore();
 }
 
