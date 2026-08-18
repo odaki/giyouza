@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.05';
+const VERSION = 'v7.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2395,6 +2395,37 @@ function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
   if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, gain);
 }
 
+/* 音符の並びを1本のフレーズとして鳴らす。効果音の多くは「音符を並べて
+   playOscに流す」だけで、その並べ方が7ケースに写経されていた。フレーズを
+   データ（音符の配列）として書けるようにして、効果音を足すときにコードではなく
+   並びだけを書けばよいようにする。playOscの末尾3つ（長さ・音量・減衰）が
+   位置引数で読めなかったのも名前付きにする。
+     notes  周波数の配列（optsのstep間隔で等間隔に並べる）
+            または [周波数, 開始オフセット秒, 長さ秒] の配列（並びを直接指定）
+     opts   type   波形
+            step   等間隔に並べるときの音符間隔（秒）
+            dur    1音の長さ（[f,dt,d]形式ではそちらが優先）
+            vol    音量 / decay 減衰
+            delay  フレーズ全体の開始オフセット（秒）
+            octave 1オクターブ上に重ねる層の音量（0なら重ねない）
+            octaveType 重ねる層の波形（省略時はtypeと同じ） */
+function _playPhrase(ctx, t, notes, opts) {
+  const type = opts.type ?? 'sine';
+  const step = opts.step ?? 0;
+  const dur = opts.dur ?? 0.15, vol = opts.vol ?? 0.25, decay = opts.decay ?? 0.1;
+  const delay = opts.delay ?? 0, octave = opts.octave ?? 0;
+  const octaveType = opts.octaveType ?? type;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const tuple = Array.isArray(n);
+    const f  = tuple ? n[0] : n;
+    const at = t + delay + (tuple ? n[1] : i * step);
+    const d  = tuple ? n[2] : dur;
+    playOsc(ctx, type, f, at, d, vol, decay);
+    if (octave > 0) playOsc(ctx, octaveType, f * 2, at, d, octave, decay);
+  }
+}
+
 /* ── BGM: 中華風ペンタトニック・パチンコループ ── */
 /* ペンタトニック: C D E G A */
 const BGM_BPM   = 152;
@@ -3929,9 +3960,7 @@ function playSE(name, atTime) {
          Cメジャーペンタの BGM へ教科書通りに解決する */
       stopBGM(); // BGM一時停止してSEを際立たせる
       const chord = [noteHz('G',3), noteHz('B',3), noteHz('D',4), noteHz('F',4)]; // G7
-      chord.forEach((f, i) => {
-        playOsc(ctx, 'sawtooth', f, t + i*0.04, 1.2, 0.18, 0.6);
-      });
+      _playPhrase(ctx, t, chord, { type:'sawtooth', step:0.04, dur:1.2, vol:0.18, decay:0.6 });
       playNoise(ctx, t, 0.2, 0.3, 200);
       /* 0.8秒後にBGM再開 */
       scheduleBGMRestart(900);
@@ -3940,7 +3969,7 @@ function playSE(name, atTime) {
     case 'medium': {
       /* 中当たり: 上昇フレーズ */
       const mscale = [noteHz('C',5), noteHz('E',5), noteHz('G',5), noteHz('C',6)];
-      mscale.forEach((f, i) => playOsc(ctx, 'triangle', f, t + i*0.08, 0.25, 0.30, 0.12));
+      _playPhrase(ctx, t, mscale, { type:'triangle', step:0.08, dur:0.25, vol:0.30, decay:0.12 });
       break;
     }
     case 'jackpot': {
@@ -3954,10 +3983,10 @@ function playSE(name, atTime) {
         [noteHz('G',5), 0.60, 0.12],
         [noteHz('C',6), 0.72, 0.50],
       ];
-      fanfare.forEach(([f, dt, d]) => playOsc(ctx, 'square', f, t+dt, d, 0.28, 0.08));
+      _playPhrase(ctx, t, fanfare, { type:'square', vol:0.28, decay:0.08 });
       /* ベース */
-      [noteHz('C',3), noteHz('G',3)].forEach((f, i) =>
-        playOsc(ctx, 'sine', f, t + i*0.36, 0.6, 0.32, 0.2));
+      _playPhrase(ctx, t, [noteHz('C',3), noteHz('G',3)],
+                  { type:'sine', step:0.36, dur:0.6, vol:0.32, decay:0.2 });
       scheduleBGMRestart(2000);
       break;
     }
@@ -3970,13 +3999,10 @@ function playSE(name, atTime) {
         [noteHz('E',6), 0.55, 0.12], [noteHz('G',6), 0.65, 0.12],
         [noteHz('C',7), 0.75, 0.60],
       ];
-      big.forEach(([f, dt, d]) => {
-        playOsc(ctx, 'square',    f,   t+dt, d, 0.24, 0.08);
-        playOsc(ctx, 'sawtooth',  f*2, t+dt, d, 0.10, 0.08);
-      });
+      _playPhrase(ctx, t, big, { type:'square', vol:0.24, decay:0.08, octave:0.10, octaveType:'sawtooth' });
       /* 連続コイン音: ペンタトニック上昇走句（旧: 等比5%刻みの半音階的スメアで調外を通過していた） */
-      _COIN_RUN.forEach((f, i) =>
-        playOsc(ctx, 'sine', f, t + 0.9 + i*0.07, 0.08, 0.22, 0.05));
+      _playPhrase(ctx, t, _COIN_RUN,
+                  { type:'sine', step:0.07, delay:0.9, dur:0.08, vol:0.22, decay:0.05 });
       playNoise(ctx, t, 0.3, 0.35, 100);
       scheduleBGMRestart(2500);
       break;
@@ -3989,10 +4015,9 @@ function playSE(name, atTime) {
     }
     case 'coin': {
       /* コインじゃらじゃら */
-      for (let i = 0; i < 5; i++) {
-        const f = noteHz('C', 6) * (0.95 + Math.random() * 0.15);
-        playOsc(ctx, 'sine', f, t + i*0.055, 0.12, 0.20, 0.08);
-      }
+      const jingle = [];
+      for (let i = 0; i < 5; i++) jingle.push(noteHz('C', 6) * (0.95 + Math.random() * 0.15));
+      _playPhrase(ctx, t, jingle, { type:'sine', step:0.055, dur:0.12, vol:0.20, decay:0.08 });
       break;
     }
     case 'gameover': {
@@ -4003,13 +4028,13 @@ function playSE(name, atTime) {
         [noteHz('C',4), 0.50, 0.3],
         [noteHz('A',3), 0.75, 0.6],
       ];
-      goSeq.forEach(([f, dt, d]) => playOsc(ctx, 'triangle', f, t+dt, d, 0.28, 0.15));
+      _playPhrase(ctx, t, goSeq, { type:'triangle', vol:0.28, decay:0.15 });
       break;
     }
     case 'ach': {
       /* 実績解除: キラン */
       const achSeq = [noteHz('E',5), noteHz('G',5), noteHz('A',5), noteHz('E',6)];
-      achSeq.forEach((f, i) => playOsc(ctx, 'sine', f, t + i*0.06, 0.15, 0.25, 0.10));
+      _playPhrase(ctx, t, achSeq, { type:'sine', step:0.06, dur:0.15, vol:0.25, decay:0.10 });
       break;
     }
     case 'boss_rumble': {
