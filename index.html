@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.02';
+const VERSION = 'v7.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11189,6 +11189,163 @@ function _drawBtnBg(rect, active) {
   ctx.stroke();
 }
 
+/* ── 画面最前面のボタン群 ──────────────────────────────
+   トロフィー・真エンディング再生・全画面・ミュート・ポーズの5つ。いずれも
+   「背景(_drawBtnBg) → 中心へ移動 → アイコンのベクタ描画」という同じ骨格なので、
+   骨格を_drawTopBtnに、造形だけを各アイコン関数に分ける。
+   draw()に154行そのまま並んでいたものを移した（draw()には骨格だけを残す、という
+   _drawForegroundの分割方針に揃える）。アイコンは毎フレームその場で無名関数を
+   作らずに済むよう名前付き関数で渡す（描画ループでの割り当てを増やさない） */
+function _drawTopBtn(rect, active, drawIcon) {
+  ctx.save();
+  _drawBtnBg(rect, active);
+  ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2); // アイコンは中心が原点
+  drawIcon();
+  ctx.restore();
+}
+
+/* トロフィーアイコン: カップ→ネック→台座の正しいシルエット */
+function _drawTrophyIcon() {
+  ctx.strokeStyle = Y;
+  ctx.fillStyle   = Y;
+  ctx.lineWidth   = 1.4;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  /* カップ本体 + ネック + 台座（一体の塗りつぶしパス）
+     🏆絵文字シルエットをトレース:
+     上辺 ±5.5, カップ壁がy=-5付近で最大幅x≈8, y=-2付近でx≈6, ネックy=0.5でx≈2.5
+     台座 ±7, y=3〜7.5 */
+  ctx.beginPath();
+  ctx.moveTo(-5.5, -8.5);                                      // 上辺 左
+  ctx.lineTo( 5.5, -8.5);                                      // 上辺 右
+  ctx.bezierCurveTo( 8.25, -4.75,  7.25, -1.75,  2.5,  0.5); // 右壁（膨らみ→絞り込み）
+  ctx.lineTo( 2,  0.5);  ctx.lineTo( 2,  3);                  // ネック右
+  ctx.lineTo( 6,  3);    ctx.lineTo( 6,  7.5);                // 台座右
+  ctx.lineTo(-6,  7.5);  ctx.lineTo(-6,  3);                  // 台座底・左
+  ctx.lineTo(-2,  3);    ctx.lineTo(-2,  0.5);                // ネック左
+  ctx.lineTo(-2.5, 0.5);                                       // カップ底 左
+  ctx.bezierCurveTo(-7.25, -1.75, -8.25, -4.75, -5.5, -8.5); // 左壁（右の鏡）
+  ctx.closePath();
+  ctx.fill();
+
+  /* 持ち手：カップ中段外側に付くD字アーク
+     右壁: y=-5でx≈8, y=-2でx≈7 に合わせた外側カーブ */
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo( 7, -6.5);
+  ctx.quadraticCurveTo(12.5, -5,  6, -3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-7, -6.5);
+  ctx.quadraticCurveTo(-12.5, -5, -6, -3);
+  ctx.stroke();
+}
+
+/* 祝賀メダル（円形ロゼット＋燕尾リボン）アイコン。単色シルエット。
+   ポーズ解除の再生三角と紛らわしいという指摘を受けて差し替えたが、
+   初版は細く小さすぎて遠目にメダルと判別できなかったため、
+   ボタン全体を使い切るサイズ・太いリボン幅・燕尾ノッチ付きで再設計した */
+function _drawEndingMedalIcon() {
+  ctx.fillStyle = Y;
+  ctx.beginPath();
+  ctx.moveTo(-4.5, -1); ctx.lineTo(-0.6, -1); ctx.lineTo(-0.6, 10);
+  ctx.lineTo(-2.5, 7.2); ctx.lineTo(-4.5, 10);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(4.5, -1); ctx.lineTo(0.6, -1); ctx.lineTo(0.6, 10);
+  ctx.lineTo(2.5, 7.2); ctx.lineTo(4.5, 10);
+  ctx.closePath(); ctx.fill();
+  /* メダル円の縁に沿って薄い暗色の隙間を挟み、リボン(奥)とメダル(手前)が
+     重なっているように見せる（同色ベタ塗りだと繋ぎ目が消え一体化して見えるため） */
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.arc(0, -4, 8.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = Y;
+  ctx.beginPath();
+  ctx.arc(0, -4, 7, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function _drawFullscreenIcon() {
+  ctx.fillStyle = Y;
+  ctx.scale(_FS_ICON_SCALE, _FS_ICON_SCALE);
+  ctx.translate(-12, -12); // 24×24 viewBox の中心揃え
+  ctx.fill(_isFullscreen ? _FS_PATH_EXIT : _FS_PATH_ENTER);
+}
+
+function _drawMuteIcon() {
+  const ic = Y; // 全画面ボタンと同じ金色
+  ctx.strokeStyle = ic; ctx.fillStyle = ic;
+  ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  /* ミュート時: 右へ3px移動 + 1.2倍スケールで斜線の中央に揃える
+     通常:   体 x=-9〜-4, コーン x=-4〜3（中心 x≈-3）
+     ミュート: translate(3,0)+scale(1.2) → 体 x≈-7.8〜-2.2, コーン x≈-2.2〜6.6（中心 x≈-0.8） */
+  const spkShift = audioMuted ? 2 : 0;
+  ctx.save();
+  ctx.translate(spkShift, 0);
+  if (audioMuted) ctx.scale(0.95, 1.1); // ミュート時: 縦1.1倍・横0.95倍（横圧縮）
+  /* スピーカー本体（台形＋四角） */
+  ctx.fillRect(-9, -4, 5, 8);
+  /* 台形コーン */
+  ctx.beginPath();
+  ctx.moveTo(-4, -4);
+  ctx.lineTo( 3, -8);
+  ctx.lineTo( 3,  8);
+  ctx.lineTo(-4,  4);
+  ctx.closePath();
+  ctx.fill();
+  if (!audioMuted) {
+    /* 音波 小 */
+    ctx.beginPath();
+    ctx.arc(3, 0, 5, -Math.PI * 0.45, Math.PI * 0.45);
+    ctx.stroke();
+    /* 音波 大 */
+    ctx.beginPath();
+    ctx.arc(3, 0, 9, -Math.PI * 0.45, Math.PI * 0.45);
+    ctx.stroke();
+  }
+  ctx.restore();
+  if (audioMuted) {
+    /* ミュート: 左上→右下の斜線（macOS スタイル）
+       完全不透明の黒ボーダーでスピーカーをシャープに切り、上からゴールドを重ねる */
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
+    ctx.strokeStyle = ic;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
+  }
+}
+
+function _drawPauseIcon() {
+  ctx.fillStyle = Y;
+  if (isPaused) {
+    ctx.beginPath();
+    ctx.moveTo(-5, -8); ctx.lineTo(-5, 8); ctx.lineTo(9, 0);
+    ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillRect(-6, -8, 4, 16);
+    ctx.fillRect( 2, -8, 4, 16);
+  }
+}
+
+/* 描画順＝重なり順。表示条件はボタンごとに違う:
+   トロフィー   エンドロール中は無効なので描かない（_achBtnEnabled参照）
+   エンディング タイトル画面かつ視聴済みのみ。ゲーム途中で見るものではなく
+                スタートと並列の選択肢という位置づけのため実績パネル内には置かない
+   全画面       Fullscreen API 対応環境のみ
+   ポーズ       タイトル画面以外 */
+function _drawTopButtons() {
+  if (_achBtnEnabled())                      _drawTopBtn(ACH_TROPHY,      showAchievements, _drawTrophyIcon);
+  if (phase === 'startup' && trueEndingSeen) _drawTopBtn(TRUE_ENDING_BTN, false,            _drawEndingMedalIcon);
+  if (FS_SUPPORTED)                          _drawTopBtn(FS_BTN_RECT,     false,            _drawFullscreenIcon);
+                                             _drawTopBtn(MUTE_BTN,        false,            _drawMuteIcon);
+  if (phase !== 'startup')                   _drawTopBtn(PAUSE_BTN,       false,            _drawPauseIcon);
+}
+
 /* ピルバッジの外形パスを設定（beginPath〜closePath）。fill()/stroke()は呼び出し側で行う */
 function _drawPillPath(bx, by, bw, bh) {
   const r = bh / 2;
@@ -11440,160 +11597,8 @@ function draw() {
   drawAchBanner();
   drawAchOverlay();
 
-  /* ── 右上ボタン群（トロフィー・ミュート）常時最前面 ── */
-  /* トロフィーボタン（エンドロール中は無効なので描かない。_achBtnEnabled参照） */
-  if (_achBtnEnabled()) {
-  ctx.save();
-  _drawBtnBg(ACH_TROPHY, showAchievements);
-  /* トロフィーアイコン: 完全再設計 - カップ→ネック→台座の正しいシルエット */
-  ctx.translate(ACH_TROPHY.x + ACH_TROPHY.w / 2, ACH_TROPHY.y + ACH_TROPHY.h / 2);
-  ctx.strokeStyle = '#f5d020';
-  ctx.fillStyle   = '#f5d020';
-  ctx.lineWidth   = 1.4;
-  ctx.lineCap     = 'round';
-  ctx.lineJoin    = 'round';
-
-  /* カップ本体 + ネック + 台座（一体の塗りつぶしパス）
-     🏆絵文字シルエットをトレース:
-     上辺 ±5.5, カップ壁がy=-5付近で最大幅x≈8, y=-2付近でx≈6, ネックy=0.5でx≈2.5
-     台座 ±7, y=3〜7.5 */
-  ctx.beginPath();
-  ctx.moveTo(-5.5, -8.5);                                      // 上辺 左
-  ctx.lineTo( 5.5, -8.5);                                      // 上辺 右
-  ctx.bezierCurveTo( 8.25, -4.75,  7.25, -1.75,  2.5,  0.5); // 右壁（膨らみ→絞り込み）
-  ctx.lineTo( 2,  0.5);  ctx.lineTo( 2,  3);                  // ネック右
-  ctx.lineTo( 6,  3);    ctx.lineTo( 6,  7.5);                // 台座右
-  ctx.lineTo(-6,  7.5);  ctx.lineTo(-6,  3);                  // 台座底・左
-  ctx.lineTo(-2,  3);    ctx.lineTo(-2,  0.5);                // ネック左
-  ctx.lineTo(-2.5, 0.5);                                       // カップ底 左
-  ctx.bezierCurveTo(-7.25, -1.75, -8.25, -4.75, -5.5, -8.5); // 左壁（右の鏡）
-  ctx.closePath();
-  ctx.fill();
-
-  /* 持ち手：カップ中段外側に付くD字アーク
-     右壁: y=-5でx≈8, y=-2でx≈7 に合わせた外側カーブ */
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo( 7, -6.5);
-  ctx.quadraticCurveTo(12.5, -5,  6, -3);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(-7, -6.5);
-  ctx.quadraticCurveTo(-12.5, -5, -6, -3);
-  ctx.stroke();
-  ctx.restore();
-  } // end _achBtnEnabled()
-
-  /* ── 真エンディング再生ボタン（トロフィーの右隣・startup画面かつ視聴済みのみ） ──
-     エンディング演出はゲーム途中で見るものではなく、スタートと並列の選択肢という
-     位置づけにしたため、実績パネルの中ではなくタイトル画面のボタン列に置く */
-  if (phase === 'startup' && trueEndingSeen) {
-    ctx.save();
-    _drawBtnBg(TRUE_ENDING_BTN, false);
-    ctx.translate(TRUE_ENDING_BTN.x + TRUE_ENDING_BTN.w / 2, TRUE_ENDING_BTN.y + TRUE_ENDING_BTN.h / 2);
-    /* 祝賀メダル（円形ロゼット＋燕尾リボン）アイコン。単色シルエット。
-       ポーズ解除の再生三角と紛らわしいという指摘を受けて差し替えたが、
-       初版は細く小さすぎて遠目にメダルと判別できなかったため、
-       ボタン全体を使い切るサイズ・太いリボン幅・燕尾ノッチ付きで再設計した */
-    ctx.fillStyle = '#f5d020';
-    ctx.beginPath();
-    ctx.moveTo(-4.5, -1); ctx.lineTo(-0.6, -1); ctx.lineTo(-0.6, 10);
-    ctx.lineTo(-2.5, 7.2); ctx.lineTo(-4.5, 10);
-    ctx.closePath(); ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(4.5, -1); ctx.lineTo(0.6, -1); ctx.lineTo(0.6, 10);
-    ctx.lineTo(2.5, 7.2); ctx.lineTo(4.5, 10);
-    ctx.closePath(); ctx.fill();
-    /* メダル円の縁に沿って薄い暗色の隙間を挟み、リボン(奥)とメダル(手前)が
-       重なっているように見せる（同色ベタ塗りだと繋ぎ目が消え一体化して見えるため） */
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.beginPath();
-    ctx.arc(0, -4, 8.3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#f5d020';
-    ctx.beginPath();
-    ctx.arc(0, -4, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  /* ── 全画面ボタン（Fullscreen API 対応環境のみ・常時最前面） ── */
-  if (FS_SUPPORTED) {
-    ctx.save();
-    _drawBtnBg(FS_BTN_RECT, false);
-    ctx.fillStyle = '#f5d020';
-    ctx.translate(FS_BTN_RECT.x + FS_BTN_RECT.w / 2, FS_BTN_RECT.y + FS_BTN_RECT.h / 2);
-    ctx.scale(_FS_ICON_SCALE, _FS_ICON_SCALE);
-    ctx.translate(-12, -12); // 24×24 viewBox の中心揃え
-    ctx.fill(_isFullscreen ? _FS_PATH_EXIT : _FS_PATH_ENTER);
-    ctx.restore();
-  }
-
-  /* ── ミュートボタン（右上・常時最前面） ── */
-  ctx.save();
-  _drawBtnBg(MUTE_BTN, false);
-  /* アイコンを中心座標基準で描く */
-  ctx.translate(MUTE_BTN.x + MUTE_BTN.w / 2, MUTE_BTN.y + MUTE_BTN.h / 2);
-  const ic = '#f5d020'; // 全画面ボタンと同じ金色
-  ctx.strokeStyle = ic; ctx.fillStyle = ic;
-  ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  /* ミュート時: 右へ3px移動 + 1.2倍スケールで斜線の中央に揃える
-     通常:   体 x=-9〜-4, コーン x=-4〜3（中心 x≈-3）
-     ミュート: translate(3,0)+scale(1.2) → 体 x≈-7.8〜-2.2, コーン x≈-2.2〜6.6（中心 x≈-0.8） */
-  const spkShift = audioMuted ? 2 : 0;
-  ctx.save();
-  ctx.translate(spkShift, 0);
-  if (audioMuted) ctx.scale(0.95, 1.1); // ミュート時: 縦1.1倍・横0.95倍（横圧縮）
-  /* スピーカー本体（台形＋四角） */
-  ctx.fillRect(-9, -4, 5, 8);
-  /* 台形コーン */
-  ctx.beginPath();
-  ctx.moveTo(-4, -4);
-  ctx.lineTo( 3, -8);
-  ctx.lineTo( 3,  8);
-  ctx.lineTo(-4,  4);
-  ctx.closePath();
-  ctx.fill();
-  if (!audioMuted) {
-    /* 音波 小 */
-    ctx.beginPath();
-    ctx.arc(3, 0, 5, -Math.PI * 0.45, Math.PI * 0.45);
-    ctx.stroke();
-    /* 音波 大 */
-    ctx.beginPath();
-    ctx.arc(3, 0, 9, -Math.PI * 0.45, Math.PI * 0.45);
-    ctx.stroke();
-  }
-  ctx.restore();
-  if (audioMuted) {
-    /* ミュート: 左上→右下の斜線（macOS スタイル）
-       完全不透明の黒ボーダーでスピーカーをシャープに切り、上からゴールドを重ねる */
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(0,0,0,1)';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
-    ctx.strokeStyle = ic;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(8, 8); ctx.stroke();
-  }
-  ctx.restore();
-
-  /* ── ポーズボタン（左上・トロフィー下、startup以外・常時最前面） ── */
-  if (phase !== 'startup') {
-    ctx.save();
-    _drawBtnBg(PAUSE_BTN, false);
-    ctx.translate(PAUSE_BTN.x + PAUSE_BTN.w / 2, PAUSE_BTN.y + PAUSE_BTN.h / 2);
-    ctx.fillStyle = '#f5d020';
-    if (isPaused) {
-      ctx.beginPath();
-      ctx.moveTo(-5, -8); ctx.lineTo(-5, 8); ctx.lineTo(9, 0);
-      ctx.closePath(); ctx.fill();
-    } else {
-      ctx.fillRect(-6, -8, 4, 16);
-      ctx.fillRect( 2, -8, 4, 16);
-    }
-    ctx.restore();
-  }
+  /* ── 最前面のボタン群（トロフィー・真エンディング再生・全画面・ミュート・ポーズ） ── */
+  _drawTopButtons();
 
   /* ── フィーバー内枠エフェクト: HSL色サイクル＋呼吸パルス ── */
   if (isFever && phase !== 'startup') {
