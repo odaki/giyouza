@@ -549,7 +549,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.00';
+const VERSION = 'v7.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2357,22 +2357,32 @@ function playOsc(ctx, type, freq, startT, dur, vol, decay, slurTarget, vibrato, 
   }
 }
 
-/* ノイズバースト（ハイハット・打撃音用）
-   _noiseBuffer を使い回すことでフレームごとのランダム生成ループを排除する。
-   OfflineAudioContext（BGMレンダリング）への使用時は ctx が異なるため個別生成にフォールバック */
+/* ホワイトノイズのバッファを得る。実コンテキストでは事前生成の共有バッファ
+   （_noiseBuffer）をそのまま返し、OfflineAudioContext（BGMレンダリング）や
+   未初期化時はその場で seconds 秒ぶん生成する。
+   playNoise・_playKingBlast・_playKingCue・_playDoraShimmer が同じ判定を
+   それぞれ持っていたのを一本化した（片方だけ直す事故を防ぐ） */
+function _noiseBuf(ctx, seconds) {
+  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) return _noiseBuffer;
+  const len  = Math.ceil(ctx.sampleRate * seconds);
+  const buf  = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  return buf;
+}
+/* ループ再生用のノイズソース。共有バッファは0.45秒ほどしか無いため、
+   余韻の長い音（爆発・クラップ・銅鑼のシャリ）はループさせて使う */
+function _noiseLoopSource(ctx) {
+  const src = ctx.createBufferSource();
+  src.buffer = _noiseBuf(ctx, 0.5);
+  src.loop = true;
+  return src;
+}
+
+/* ノイズバースト（ハイハット・打撃音用） */
 function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
-  let buf;
-  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
-    buf = _noiseBuffer; // 事前生成バッファを再利用（ランダムループなし）
-  } else {
-    /* フォールバック: OfflineAudioContext または未初期化時 */
-    const len  = Math.ceil(ctx.sampleRate * (dur + 0.05));
-    buf        = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-  }
   const src    = ctx.createBufferSource();
-  src.buffer   = buf;
+  src.buffer   = _noiseBuf(ctx, dur + 0.05);
   const hp     = ctx.createBiquadFilter();
   hp.type = 'highpass'; hp.frequency.value = hpFreq ?? 4000;
   const gain   = ctx.createGain();
@@ -2812,17 +2822,7 @@ function _playKingBlast(ctx, t, dest, vol = 1) {
   playNoise(ctx, t, 0.045, 0.25 * v, 4200, d);
 
   /* 2. 本体: ローパスを落としながら長く引く */
-  let buf;
-  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
-    buf = _noiseBuffer;
-  } else {
-    const len = Math.ceil(ctx.sampleRate * 0.5);
-    buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const a = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) a[i] = Math.random() * 2 - 1;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buf; src.loop = true;
+  const src = _noiseLoopSource(ctx);
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.setValueAtTime(9000, t);
@@ -2904,17 +2904,7 @@ function _playKingCue(ctx, t, dest) {
   const d = _seDest(ctx, dest);
   const v = KING_CUE_VOL;
   const dur = 0.22;
-  let buf;
-  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
-    buf = _noiseBuffer;
-  } else {
-    const len = Math.ceil(ctx.sampleRate * 0.5);
-    buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const a = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) a[i] = Math.random() * 2 - 1;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buf; src.loop = true;
+  const src = _noiseLoopSource(ctx);
   /* 下を切って箱鳴り（曇りの正体）を落とす */
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass';
@@ -3112,17 +3102,7 @@ const _DORA_KNEE_FRAC  = 0.10; // 一段目に使う時間（decayに対する�
    共有バッファ、オフラインレンダではその場で生成）。ループさせるのは、
    共有バッファが0.45秒しかなく、そのままでは余韻の長さに足りないため */
 function _playDoraShimmer(ctx, t, dest) {
-  let buf;
-  if (ctx === audioCtx && _noiseBuffer && _noiseBuffer.sampleRate === ctx.sampleRate) {
-    buf = _noiseBuffer;
-  } else {
-    const len = Math.ceil(ctx.sampleRate * 0.5);
-    buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buf; src.loop = true;
+  const src = _noiseLoopSource(ctx);
   /* 帯域はハイパス＋ローパスの2段で「広く」取る。当初バンドパス1段(Q=0.8)にしたが、
      ノイズのエネルギーの大半を捨ててしまい、低域に埋もれて全く聞こえなかった
      （レンダで高域比が0.11→0.12としか動かず発覚）。下端だけを上へ動かすことで、
@@ -3148,7 +3128,7 @@ function _playDoraShimmer(ctx, t, dest) {
   bridge.frequency.value = _DORA_SHIMMER_BRIDGE_HZ;
   bridge.Q.value = 1.0;
   bridge.gain.value = _DORA_SHIMMER_BRIDGE_DB;
-  src.connect(hp); hp.connect(lp); lp.connect(bridge); bridge.connect(gain); gain.connect(dest);
+  src.connect(hp); hp.connect(lp); lp.connect(bridge); bridge.connect(gain); gain.connect(_seDest(ctx, dest));
   const stopAt = t + _DORA_SHIMMER_DEC + 0.05;
   src.start(t); src.stop(stopAt);
   if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, lp, bridge, gain);
@@ -7772,11 +7752,7 @@ function drawBossDefeatShrink() {
   ctx.save();
   ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
   if (_king) {
-    ctx.save();
-    ctx.globalAlpha = 1 - _bossDefeatXfade;
-    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-    ctx.restore();
+    _drawKingBody(1 - _bossDefeatXfade);
     ctx.save();
     ctx.globalAlpha = 1 - _bossDefeatXfade;
     drawKingCharFlights();
@@ -9309,23 +9285,15 @@ function _kingAccentOffsetY() {
   return -KING_ACCENT_RECOIL_PX * Math.sin(p * Math.PI) * (1 - p * 0.4);
 }
 
-/* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。shadowBlurは使わず
-   （プロジェクト規約: GPUブラーパス削減のため全廃済み）、放射状グラデーション
-   自体で縁をぼかす。_buildSteamSpriteと同じ作り */
+/* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。
+   色停止以外は_buildSteamSpriteと同一なので_buildRadialSpriteに委ねる */
 function _buildKingFlashSprite() {
   if (_kingFlashSprite || !_CACHE_OK) return;
-  const r = 32;
-  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
-  const c = oc.getContext('2d');
-  c.scale(_dpr, _dpr);
-  c.translate(r, r);
-  const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
-  grd.addColorStop(0,    'rgba(255,226,150,0.95)');
-  grd.addColorStop(0.45, 'rgba(255,180,70,0.45)');
-  grd.addColorStop(1,    'rgba(255,150,40,0)');
-  c.fillStyle = grd;
-  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
-  _kingFlashSprite = oc;
+  _kingFlashSprite = _buildRadialSprite([
+    [0,    'rgba(255,226,150,0.95)'],
+    [0.45, 'rgba(255,180,70,0.45)'],
+    [1,    'rgba(255,150,40,0)'],
+  ]);
 }
 
 /* 篩い落としのスカッシュ倍率（描画時のみ。底で最大、離脱後に戻る）。
@@ -9608,6 +9576,28 @@ function _updateBossBattle() {
    文字自体の大きさもJUSTでKING_CHAR_JUST_FONT_SCALE倍にする（ユーザー指摘:
    マークされる文字の大きさと焦げ跡の面積は別物。焦げ跡側は常に一定サイズ）。
    フォントサイズが1文字ごとに変わるため ctx.font はループ内で設定する */
+/* キング本体を現在の表示姿勢（dbx/dby/dscale）で1枚描く。決着まわりの4つの
+   描画関数が同じ4行を持っていたのを一本化した。alphaを渡すとその不透明度で描く
+   （クロスフェード用。省略時は呼び出し側の状態のまま） */
+function _drawKingBody(alpha) {
+  if (!_king) return;
+  ctx.save();
+  if (alpha !== undefined) ctx.globalAlpha = alpha;
+  ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+  ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  ctx.restore();
+}
+
+/* 決着画面の見出しのY。ボスの裾（拡大アニメ中は dscale に連動して動く）の
+   すぐ下に置く。旧実装は画面上部固定だったため所持ギヨウザ表示・上部アイコンと
+   重なっていた（ユーザー報告で発覚）。dscale基準なので拡大演出中も裾の位置と
+   一緒に滑らかに動く。勝利・敗北で同じ式を持っていたのを一本化した */
+function _kingTitleY() {
+  return _king
+    ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
+    : (IS_PORTRAIT ? 90 : 70);
+}
+
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
@@ -9791,22 +9781,15 @@ function drawKingCookGauge(achieved = false) {
 }
 
 /* 湯気スプライト（柔らかい放射状グラデーションの円）を1回だけ生成する。
-   shadowBlurは使わず（プロジェクト規約: GPUブラーパス削減のため全廃済み）、
-   グラデーション自体で縁をぼかすことでソリッドな円に見えないようにする */
+   保持する形は_kingFlashSpriteと揃えて生キャンバス1枚（旧{oc,r}のrは
+   参照されていなかった） */
 function _buildSteamSprite() {
   if (_steamSprite || !_CACHE_OK) return;
-  const r = 32;
-  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
-  const c = oc.getContext('2d');
-  c.scale(_dpr, _dpr);
-  c.translate(r, r);
-  const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
-  grd.addColorStop(0,    'rgba(255,250,240,0.55)');
-  grd.addColorStop(0.55, 'rgba(255,250,240,0.24)');
-  grd.addColorStop(1,    'rgba(255,250,240,0)');
-  c.fillStyle = grd;
-  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
-  _steamSprite = { oc, r };
+  _steamSprite = _buildRadialSprite([
+    [0,    'rgba(255,250,240,0.55)'],
+    [0.55, 'rgba(255,250,240,0.24)'],
+    [1,    'rgba(255,250,240,0)'],
+  ]);
 }
 
 /* 湯気を1本、キング本体の輪郭（上半分の弧）付近から立ち上らせる。
@@ -9880,7 +9863,7 @@ function _drawVictorySteam() {
     const scale = 0.5 + t * 1.3; // 拡散して徐々に大きくなる
     const rr = p.r0 * scale;
     ctx.globalAlpha = alpha;
-    ctx.drawImage(_steamSprite.oc, p.x - rr, p.y - rr, rr * 2, rr * 2);
+    ctx.drawImage(_steamSprite, p.x - rr, p.y - rr, rr * 2, rr * 2);
   }
   ctx.restore();
 }
@@ -9947,21 +9930,13 @@ function drawBossVictory() {
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, W, H);
   if (_king) {
-    ctx.save();
-    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-    ctx.restore();
+    _drawKingBody();
     drawKingCharFlights();
   }
   _drawVictorySteam();
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  /* 文言はボスの裾（拡大アニメ中は dscale に連動して動く）のすぐ下に置く。
-     旧実装は画面上部固定だったため、所持ギヨウザ表示・上部アイコンと重なっていた
-     （ユーザー報告で発覚）。dscale基準なので拡大演出中も裾の位置と一緒に滑らかに動く。 */
-  const titleY = _king
-    ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
-    : (IS_PORTRAIT ? 90 : 70);
+  const titleY = _kingTitleY(); // 位置の意図は_kingTitleYのコメント参照
   outText('こんがり キングギヨウザ！', W / 2, titleY, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
   /* 返却されたギヨウザ数の表示。位置・書式・出るタイミングは敗北画面の没収
      メッセージ（drawBossDefeat）と対になるよう揃えてある。所持数表示自体も
@@ -10132,12 +10107,7 @@ function drawBossVictoryOutro() {
   /* 舞い上がるギヨウザはキングより先に描く（キングの手前に被らせない） */
   for (const g of o.items) drawOneItem(g);
   if (o.seedItem) drawOneItem(o.seedItem);
-  if (_king) {
-    ctx.save();
-    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-    ctx.restore();
-  }
+  if (_king) _drawKingBody();
   _drawVictorySteam();
   /* こんがりゲージの締め: 100%のまま「達成！」を出してから飛び去りに合わせて
      消す（実機指摘: 決着した瞬間にゲージが消えるのも唐突さの一因） */
@@ -10966,10 +10936,7 @@ function drawBossDefeat() {
   ctx.save();
   ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
   if (_king) {
-    ctx.save();
-    ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
-    ctx.restore();
+    _drawKingBody();
     drawKingCharFlights();
   }
 
@@ -10982,9 +10949,7 @@ function drawBossDefeat() {
      廃止し、_kingBattleEnd側で出口を分ける（コメント参照） */
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const titleY = _king
-    ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
-    : (IS_PORTRAIT ? 90 : 70);
+  const titleY = _kingTitleY();
   outText('こんがり しっぱい……', W / 2, titleY, '#ff6655', 'rgba(40,0,0,0.9)', 8);
   /* 没収個数メッセージは画面下端からの固定オフセットを基本にしつつ、ボスの拡大
      アニメ（dscale→1）でtitleYが下がってきた場合はtitleYの下側に一定間隔を
@@ -11170,6 +11135,22 @@ function _drawShishiTo(c2, cx, cy, sc, mirX) {
 function drawShishi(cx, cy, sc, mirX) { _drawShishiTo(ctx, cx, cy, sc, mirX); }
 
 /* ════════════════ Draw helpers ════════════════ */
+
+/* 放射状グラデーションで縁をぼかした円スプライトを1枚作る。shadowBlurは使わず
+   （プロジェクト規約: GPUブラーパス削減のため全廃済み）グラデーション自体で
+   ぼかす、という同じ手順を持つ生成関数が複数あったのを一本化した。
+   stopsは[位置, 色]の配列。半径はスプライトの論理半径（_dprは内部で掛ける） */
+function _buildRadialSprite(stops, r = 32) {
+  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
+  const c = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.translate(r, r);
+  const grd = c.createRadialGradient(0, 0, 0, 0, 0, r);
+  for (const [at, color] of stops) grd.addColorStop(at, color);
+  c.fillStyle = grd;
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
+  return oc;
+}
 
 /* 縁取りテキスト: stroke を先に描いてから fill を重ねる */
 function outText(text, x, y, fillStyle, strokeStyle, lw) {
