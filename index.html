@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.09';
+const VERSION = 'v7.10';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11022,15 +11022,15 @@ function drawBossDefeatOutro() {
 const ST_ROW_H = 24, ST_GAP = 3, ST_SECT_GAP = 14, ST_LABEL_H = 15;
 
 /* 曲。bufを持つものはループ再生（バッファを差し替えて鳴らす）、onceは一回きり。
-   ボス戦BGMの4段階は、鳴り比べができると調整に効く（tier0が最も凶暴） */
+   ボス戦BGMの4段階は、鳴り比べができると調整に効く（段1が最も凶暴） */
 const ST_MUSIC = [
-  { label: 'BGM 通常',      buf: () => bgmBuffer },
-  { label: 'ボス 1 (凶暴)',  buf: () => bossBgmBuffers && bossBgmBuffers[0] },
-  { label: 'ボス 2',        buf: () => bossBgmBuffers && bossBgmBuffers[1] },
-  { label: 'ボス 3',        buf: () => bossBgmBuffers && bossBgmBuffers[2] },
-  { label: 'ボス 4 (穏)',    buf: () => bossBgmBuffers && bossBgmBuffers[3] },
-  { label: '起動ジングル',    once: () => playStartJingle(null) },
-  { label: 'エンディング',    once: () => _playTrueEndingTheme() },
+  { label: '通常BGM',            buf: () => bgmBuffer },
+  { label: 'ボスBGM 段1 凶暴',    buf: () => bossBgmBuffers && bossBgmBuffers[0] },
+  { label: 'ボスBGM 段2',        buf: () => bossBgmBuffers && bossBgmBuffers[1] },
+  { label: 'ボスBGM 段3',        buf: () => bossBgmBuffers && bossBgmBuffers[2] },
+  { label: 'ボスBGM 段4 穏やか',  buf: () => bossBgmBuffers && bossBgmBuffers[3] },
+  { label: '起動ジングル',        once: () => playStartJingle(null) },
+  { label: 'エンディングテーマ',   once: () => _playTrueEndingTheme() },
 ];
 /* 再生速度の演出。鳴っている曲に対して掛ける（曲を止めていると効かないものがある） */
 const ST_CTRL = [
@@ -11041,18 +11041,85 @@ const ST_CTRL = [
   { label: '通常速度',    act: () => rampBGMRate(1.0, 800, 'easeIn') },
 ];
 
-/* 解禁されているか。真エンディングを一度見ていれば解禁（市販ゲームの作法）。
-   ?soundtest を付けた場合は未視聴でも出す（SOUND_TEST_FORCE参照） */
-function _soundTestUnlocked() { return trueEndingSeen || SOUND_TEST_FORCE; }
+/* 効果音の表示名。内部名（SE_TABLEのキー）は呼び出し側の都合で付いた識別子で、
+   camelCaseとsnake_case・英語と略語が混在している。内部名のままで困っていな
+   かったのは人目に触れなかったからで、サウンドテストで並べる以上は読み物として
+   揃える必要がある。表示は日本語の名詞句に統一し、文脈が要るものは
+   「文脈 空白 内容」の形に揃える（予兆 地鳴り／勝利 飛び去る／4打目 発射）。
+   内部名は各所の呼び出しに使われている識別子なのでそのままにし、
+   「見えない側の識別子」と「見える側の表記」を分ける。 */
+const SE_LABEL = {
+  bet:               'BET変更',
+  shoot:             '矢を放つ',
+  reach:             'リーチ',
+  medium:            '中当たり',
+  jackpot:           '大当たり',
+  reach_jackpot:     'リーチ大当たり',
+  miss:              'ハズレ',
+  coin:              'コイン獲得',
+  ach:               '実績解除',
+  gameover:          'ゲームオーバー',
+  slow_hand:         'スローハンド',
+  boss_rumble:       '予兆 地鳴り',
+  boss_flash:        '予兆 雷鳴',
+  king_appear:       'キング登場',
+  kingShoot:         '的をマーク',
+  kingFire:          '4打目 発射',
+  kingBeam:          'ビーム着弾',
+  kingBeamDud:       'ビーム不発',
+  kingCrack:         '的にひび',
+  kingSift:          '篩い落とし',
+  kongari_complete:  'こんがり達成',
+  kingVictoryInhale: '勝利 息を吸う',
+  kingVictoryFly:    '勝利 飛び去る',
+};
+/* 並び順もゲームの進行順に揃える（内部名のアルファベット順や実装順ではなく、
+   聴き比べたい順に並べる）。SE_TABLEに足したのにここへ入れ忘れたものは
+   「未分類」として最後にまとめて出す＝一覧から消えることはない */
+const ST_SE_GROUPS = [
+  { label: '効果音（通常）', names: ['bet', 'shoot', 'reach', 'medium', 'jackpot', 'reach_jackpot',
+                                     'miss', 'coin', 'ach', 'gameover', 'slow_hand'] },
+  { label: '効果音（キング戦）', names: ['boss_rumble', 'boss_flash', 'king_appear', 'kingShoot',
+                                         'kingFire', 'kingBeam', 'kingBeamDud', 'kingCrack',
+                                         'kingSift', 'kongari_complete', 'kingVictoryInhale',
+                                         'kingVictoryFly'] },
+];
+function _stSeSections() {
+  const listed = new Set();
+  const secs = ST_SE_GROUPS.map(g => {
+    const names = g.names.filter(n => SE_TABLE[n]);
+    for (const n of names) listed.add(n);
+    return { label: g.label, names };
+  });
+  const rest = SE_NAMES.filter(n => !listed.has(n));
+  if (rest.length) secs.push({ label: '効果音（未分類）', names: rest });
+  return secs;
+}
+function _seLabel(name) { return SE_LABEL[name] ?? name; }
 
 let _soundTest = null;      // { items } 入場時に組んだ配置（毎フレーム作らない）
 let _stNowPlaying = -1;     // 再生中の曲のindex（ST_MUSIC基準。-1=なし）
 
-/* 鳴っているものを全部止め、再生速度とグレースケールも通常へ戻す */
+/* 解禁されているか。真エンディングを一度見ていれば解禁（市販ゲームの作法）。
+   ?soundtest を付けた場合は未視聴でも出す（SOUND_TEST_FORCE参照） */
+function _soundTestUnlocked() { return trueEndingSeen || SOUND_TEST_FORCE; }
+
+/* 鳴っているものを全部止め、再生速度とグレースケールも通常へ戻す。
+   ここはランプにしない: 直後にソースを破棄するのでランプが渡り切らず、
+   _startTrueEnding(replay)と同じ「フェードを挟まず即座に無音化」の作法にする。
+   最後にbgmGainを1へ戻すのが要点で、これを忘れると次に鳴らすものが無音になる。
+   起動ジングルはbgmGain経由（scheduleJingle参照）で、停止のたびに0のままだと
+   ジングルだけ聞こえない、という不具合を実際に出した。ゲーム本編へ戻ったあとの
+   開始ジングルも同じ経路なので、モードを出るときにも1へ戻っている必要がある */
 function _stStopAll() {
-  _destroyBGMSource(0.12);
+  if (bgmGain && audioCtx) {
+    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
+  }
+  _destroyBGMSource();      // フェード無しで即座に破棄（上のコメント参照）
   stopJingle();
-  _stopTrueEndingTheme(0.2);
+  _stopTrueEndingTheme(0.2); // こちらは専用gain経由なので余韻を残して落とす
+  if (bgmGain && audioCtx) bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   _stNowPlaying = -1;
   grayRateTarget = 1.0; grayRateCur = 1.0;
 }
@@ -11062,8 +11129,6 @@ function _stStopAll() {
 function _stPlayLoop(i, buf) {
   if (!audioCtx) return;
   _stStopAll();
-  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
   const src = _createBGMSource(1.0, buf);
   if (!src) return;
   src.start();
@@ -11080,16 +11145,22 @@ function _stPlayMusic(i) {
   _stPlayLoop(i, buf);
 }
 
-/* 配置。縦画面と横画面で列数を変え、全体を上下中央へ寄せる */
+/* 配置。縦画面と横画面で列数を変え、全体を上下中央へ寄せる。
+   ボタンは type/key/label を自分で持ち、描画と判定は同じ配列をなぞるだけにする */
 function _stBuildLayout() {
   const wide = W >= 700;
   const secs = [
-    { label: '音楽',   type: 'music', n: ST_MUSIC.length, cols: wide ? 4 : 2 },
-    { label: '再生',   type: 'ctrl',  n: ST_CTRL.length,  cols: wide ? 5 : 3 },
-    { label: '効果音', type: 'se',    n: SE_NAMES.length, cols: wide ? 6 : 3 },
+    { label: '音楽', kind: 'music', keys: ST_MUSIC.map((m, i) => i),
+      labels: ST_MUSIC.map(m => m.label), cols: wide ? 4 : 2 },
+    { label: '再生', kind: 'ctrl', keys: ST_CTRL.map((c, i) => i),
+      labels: ST_CTRL.map(c => c.label), cols: wide ? 5 : 3 },
   ];
-  const rowsOf = sec => Math.ceil(sec.n / sec.cols);
-  let total = 30; // 見出し「SOUND TEST」
+  for (const se of _stSeSections()) {
+    secs.push({ label: se.label, kind: 'se', keys: se.names,
+                labels: se.names.map(_seLabel), cols: wide ? 6 : 3 });
+  }
+  const rowsOf = sec => Math.ceil(sec.keys.length / sec.cols);
+  let total = 30; // 見出し「サウンドテスト」
   for (const sec of secs) total += ST_LABEL_H + rowsOf(sec) * (ST_ROW_H + ST_GAP) + ST_SECT_GAP;
   total += ST_ROW_H + 6; // もどる
   const items = [];
@@ -11098,8 +11169,8 @@ function _stBuildLayout() {
     items.push({ type: 'label', label: sec.label, x: 12, y, w: W - 24, h: ST_LABEL_H });
     y += ST_LABEL_H;
     const w = (W - 24 - ST_GAP * (sec.cols - 1)) / sec.cols;
-    for (let i = 0; i < sec.n; i++) {
-      items.push({ type: sec.type, idx: i,
+    for (let i = 0; i < sec.keys.length; i++) {
+      items.push({ type: sec.kind, key: sec.keys[i], label: sec.labels[i],
                    x: 12 + (i % sec.cols) * (w + ST_GAP),
                    y: y + ((i / sec.cols) | 0) * (ST_ROW_H + ST_GAP), w, h: ST_ROW_H });
     }
@@ -11134,11 +11205,11 @@ function _soundTestClick(x, y) {
   for (const it of _soundTest.items) {
     if (it.type === 'label' || !hitTest(it, x, y)) continue;
     if (it.type === 'back') { _exitSoundTest(); return; }
-    if (it.type === 'ctrl') { ST_CTRL[it.idx].act(); return; }
-    if (it.type === 'se')   { playSE(SE_NAMES[it.idx]); return; }
+    if (it.type === 'ctrl') { ST_CTRL[it.key].act(); return; }
+    if (it.type === 'se')   { playSE(it.key); return; }
     if (it.type === 'music') {
-      if (it.idx === _stNowPlaying) _stStopAll(); // もう一度押したら止める
-      else _stPlayMusic(it.idx);
+      if (it.key === _stNowPlaying) _stStopAll(); // もう一度押したら止める
+      else _stPlayMusic(it.key);
       return;
     }
   }
@@ -11164,19 +11235,18 @@ function drawSoundTest() {
     }
     let label = it.label, enabled = true, on = false;
     if (it.type === 'music') {
-      const m = ST_MUSIC[it.idx];
+      const m = ST_MUSIC[it.key];
       enabled = m.once ? true : !!m.buf();
-      label = enabled ? m.label : m.label + '（準備中）';
-      on = (it.idx === _stNowPlaying);
-    } else if (it.type === 'ctrl') label = ST_CTRL[it.idx].label;
-    else if (it.type === 'se')     label = SE_NAMES[it.idx];
+      if (!enabled) label += '（準備中）';
+      on = (it.key === _stNowPlaying);
+    }
     ctx.fillStyle = on ? 'rgba(180,140,0,0.85)' : enabled ? 'rgba(30,30,40,0.95)' : 'rgba(20,20,24,0.8)';
     ctx.fillRect(it.x, it.y, it.w, it.h);
     ctx.strokeStyle = on ? Y : enabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
     ctx.lineWidth = 1;
     ctx.strokeRect(it.x + 0.5, it.y + 0.5, it.w - 1, it.h - 1);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = it.type === 'se' ? `bold 9px sans-serif` : `bold 11px sans-serif`;
+    ctx.font = `bold 11px sans-serif`;
     ctx.fillStyle = enabled ? '#fff' : 'rgba(255,255,255,0.35)';
     ctx.fillText(label, it.x + it.w / 2, it.y + it.h / 2);
   }
