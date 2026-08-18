@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.16';
+const VERSION = 'v7.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11306,7 +11306,15 @@ function drawSoundTest() {
 const DP_PAD_GAP = 8;
 const DP_FLASH_FRAMES = 10;    // 叩いた光の減衰（フレーム）
 const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
-const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量（左2列は逆回り。_dpHit参照）
+const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量の基準（左2列は逆回り。_dpHit参照）
+const DP_JOG_REF_DUR = 0.22;   // 回し量の基準になる音長（普通の打点1発ぶん）
+/* 回し量を音の長さに連動させる係数。短い音はちょっとだけ、長い音は長めに回す。
+   音長をそのまま倍率にすると RIM(0.03秒) と DORA(2.85秒) で95倍も開いて
+   どちらかが使い物にならないので、平方根で圧縮して 0.3〜3倍に収める。
+   回し量は積算した速度に足すため、大きいほど「速く・長く」回る */
+function _dpJogScale(dur) {
+  return Math.max(0.3, Math.min(3, Math.sqrt(dur / DP_JOG_REF_DUR)));
+}
 
 /* 4x4。配列は画面の上段から並べる（上段=ベース、下段=キック/スネア）。
    gainはパッドごとの音量補正。各音はBGMの中での相対バランスで決めた値で、
@@ -11316,24 +11324,26 @@ const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量（左2列は逆回り�
    短い打点（CLAP・BLAST）はピークが効いている。
    実機のサンプリングレート（96kHz）でも測り直し、ノイズ系（CH/OH）はピークが
    上がるぶん下げ、CLAPは3連バーストでピークだけ立ってRMSが痩せるぶん上げた。
-   結果はピーク0.23〜0.90・RMS0.06〜0.12に収まっている。ここは耳で微調整してよい */
+   結果はピーク0.23〜0.90・RMS0.06〜0.12に収まっている。ここは耳で微調整してよい。
+   durは可聴長（ピークから-60dBまで落ちる秒数）の実測値で、ジョグの回し量に使う
+   （_dpJogScale参照）。音を差し替えたらここも測り直すこと */
 const DRUM_PADS = [
-  { name: 'BASS C', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('C', 2), t, 0.26, 0.5, d) },
-  { name: 'BASS E', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('E', 2), t, 0.26, 0.5, d) },
-  { name: 'BASS G', tag: 'TB', gain: 1.46, hit: (c, t, d) => _playBossBassMel(c, noteHz('G', 2), t, 0.26, 0.5, d) },
-  { name: 'BASS A', tag: 'TB', gain: 1.45, hit: (c, t, d) => _playBossBassMel(c, noteHz('A', 2), t, 0.26, 0.5, d) },
-  { name: 'KIN',    tag: 'FX', gain: 1.22, hit: (c, t, d) => _playKingCrackKin(c, t, d) },
-  { name: 'BLAST',  tag: 'FX', gain: 0.63, hit: (c, t, d) => _playKingBlast(c, t, d) },
-  { name: 'DORA',   tag: 'FX', gain: 0.56, hit: (c, t, d) => _playDoraHit(c, t, d) },
-  { name: 'ACID',   tag: 'TB', gain: 4.10, hit: (c, t, d) => _playGroundRumble(c, t, d, 0) },
-  { name: 'CH',     tag: 'TR', gain: 1.30, hit: (c, t, d) => _playKingHat(c, t, d, false) },
-  { name: 'OH',     tag: 'TR', gain: 0.90, hit: (c, t, d) => _playKingHat(c, t, d, true) },
-  { name: 'RIM',    tag: 'TR', gain: 3.37, hit: (c, t, d) => _playRimshot(c, t, d, 0.16) },
-  { name: 'CONGA',  tag: 'TR', gain: 1.47, hit: (c, t, d) => _playConga(c, t, d, 0.40) },
-  { name: 'KICK',   tag: 'TR', gain: 0.64, hit: (c, t, d) => _playKick(c, t, d, 1.0) },
-  { name: 'TAIKO',  tag: 'TR', gain: 0.63, hit: (c, t, d) => _playTaikoHit(c, t, d, 'strong') },
-  { name: 'SNARE',  tag: 'TR', gain: 0.79, hit: (c, t, d) => _playKingBeamHit(c, t, d) },
-  { name: 'CLAP',   tag: 'TR', gain: 0.60, hit: (c, t, d) => _playKingCue(c, t, d) },
+  { name: 'BASS C', tag: 'TB', gain: 1.46, dur: 0.25, hit: (c, t, d) => _playBossBassMel(c, noteHz('C', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS E', tag: 'TB', gain: 1.46, dur: 0.25, hit: (c, t, d) => _playBossBassMel(c, noteHz('E', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS G', tag: 'TB', gain: 1.46, dur: 0.26, hit: (c, t, d) => _playBossBassMel(c, noteHz('G', 2), t, 0.26, 0.5, d) },
+  { name: 'BASS A', tag: 'TB', gain: 1.45, dur: 0.26, hit: (c, t, d) => _playBossBassMel(c, noteHz('A', 2), t, 0.26, 0.5, d) },
+  { name: 'KIN',    tag: 'FX', gain: 1.22, dur: 0.24, hit: (c, t, d) => _playKingCrackKin(c, t, d) },
+  { name: 'BLAST',  tag: 'FX', gain: 0.63, dur: 0.73, hit: (c, t, d) => _playKingBlast(c, t, d) },
+  { name: 'DORA',   tag: 'FX', gain: 0.56, dur: 2.85, hit: (c, t, d) => _playDoraHit(c, t, d) },
+  { name: 'ACID',   tag: 'TB', gain: 4.10, dur: 1.18, hit: (c, t, d) => _playGroundRumble(c, t, d, 0) },
+  { name: 'CH',     tag: 'TR', gain: 1.30, dur: 0.04, hit: (c, t, d) => _playKingHat(c, t, d, false) },
+  { name: 'OH',     tag: 'TR', gain: 0.90, dur: 0.22, hit: (c, t, d) => _playKingHat(c, t, d, true) },
+  { name: 'RIM',    tag: 'TR', gain: 3.37, dur: 0.03, hit: (c, t, d) => _playRimshot(c, t, d, 0.16) },
+  { name: 'CONGA',  tag: 'TR', gain: 1.47, dur: 0.15, hit: (c, t, d) => _playConga(c, t, d, 0.40) },
+  { name: 'KICK',   tag: 'TR', gain: 0.64, dur: 0.13, hit: (c, t, d) => _playKick(c, t, d, 1.0) },
+  { name: 'TAIKO',  tag: 'TR', gain: 0.63, dur: 0.22, hit: (c, t, d) => _playTaikoHit(c, t, d, 'strong') },
+  { name: 'SNARE',  tag: 'TR', gain: 0.79, dur: 0.34, hit: (c, t, d) => _playKingBeamHit(c, t, d) },
+  { name: 'CLAP',   tag: 'TR', gain: 0.60, dur: 0.15, hit: (c, t, d) => _playKingCue(c, t, d) },
 ];
 
 let _dp = null;            // { pads, back, size, flash, lastName, jogRot, jogSpin, hits }
@@ -11445,10 +11455,10 @@ function _dpHit(i) {
   _dp.flash[i] = DP_FLASH_FRAMES;
   _dp.lastName = pad.name; _dp.lastTag = pad.tag;
   _dp.hits++;
-  /* 叩いた列でジョグの回る向きを変える: 左2列は逆時計回り、右2列は時計回り。
-     左右を交互に叩くと回転が打ち消し合ってスクラッチのような動きになる
-     （積算した速度に足すので、同じ側を連打すれば速く回り続ける） */
-  _dp.jogSpin += (i % 4) < 2 ? -DP_JOG_KICK : DP_JOG_KICK;
+  /* ジョグを回す。向きは叩いた列で決まり（左2列は逆時計回り、右2列は時計回り）、
+     量は音の長さに比例させる（_dpJogScale参照）。左右を交互に叩くと回転が
+     打ち消し合ってスクラッチのような動きになる */
+  _dp.jogSpin += ((i % 4) < 2 ? -1 : 1) * DP_JOG_KICK * _dpJogScale(pad.dur);
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const t = audioCtx.currentTime + 0.01; // クオンタイズしない（叩いた瞬間に鳴らす）
   let dest = _seDest(audioCtx);
