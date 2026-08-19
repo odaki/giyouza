@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.25';
+const VERSION = 'v7.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11569,14 +11569,22 @@ const DP_BARS_CHOICES = [1, 2, 4];
    遊びの核なので）、ここは演奏の道具として明示的に選ぶ機能なので話が別。
    **記録は生の時刻のまま**で、再生時に丸めるだけの非破壊方式にする。
    OFFに戻せば叩いたままの演奏が戻る */
-/* 周の頭を先取りして叩いたぶんの猶予。人は拍の頭をわずかに早く叩くので、
-   そのままだと「前の周の最後尾」として記録され、直後の周の切り替わりで
-   打ち直し扱いになって消える（実機報告「頭の音が消えることがある」）。
-   この窓に入った打鍵は次の周の0拍として持ち越す。速いテンポで窓が
-   相対的に大きくなりすぎないよう、拍長の1/4で頭打ちにする */
+/* 周の境目の猶予（拍）。ジャストを中心に前後この幅までは「境目の音」とみなす。
+   幅はクオンタイズの半分（Qのグリッドに吸い込まれる範囲＝人が同じ音として
+   意図している範囲）を基本にし、Q=OFFや細かいQでも狭くなりすぎないよう
+   既定値（0.08秒、ただし拍長の1/4を上限）を下限に置く。
+
+   この窓を設ける理由は2つある:
+     ・人は拍の頭をわずかに早く叩く。そのままでは「前の周の最後尾」として
+       記録され、次の切り替わりで打ち直し扱いになってパターンが消える
+     ・逆に少し遅れて叩いた最後の一発が、次の周の先頭に落ちる。これも1発だけで
+       打ち直しとみなされ、直前に打ち込んだパターン全体を置き換えてしまう
+   どちらも「境目の音は0拍へ補正し、それ単体では打ち直しの合図とみなさない」
+   ことで塞ぐ。打ち直しは窓の外に1発でも叩いたときに成立する */
 const DP_PREROLL_SEC = 0.08;
-function _dpPreRollBeats(L) {
-  return Math.min(DP_PREROLL_SEC, _dpBeatDur(L) * 0.25) / _dpBeatDur(L);
+function _dpBoundaryWinBeats(L) {
+  const base = Math.min(DP_PREROLL_SEC, _dpBeatDur(L) * 0.25) / _dpBeatDur(L);
+  return Math.max(base, L.quant ? L.quant / 2 : 0);
 }
 
 const DP_QUANT_CHOICES = [0, 0.25, 0.5, 1];
@@ -11650,9 +11658,10 @@ function _dpLoopHasPattern(L) {
 /* 録音中の周の切り替わりで、入力があった周を採用する */
 function _dpLoopPromote(L) {
   if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
-  /* 周の頭を先取りして叩いたぶんを、新しい周の先頭として引き継ぐ */
+  /* 周の頭を先取りして叩いたぶんを、新しい周の先頭として引き継ぐ。
+     境目の音だけでは打ち直しとみなさない（窓の外を叩いて初めて成立する） */
   L.pass = L.pending.length ? L.pending : [];
-  L.passDirty = L.pass.length > 0;
+  L.passDirty = false;
   L.pending = [];
 }
 
@@ -11837,9 +11846,14 @@ function _dpHit(i) {
     const bp = _dpBeatsPerLoop(L);
     const b = (t - L.head) / _dpBeatDur(L);
     const beat = ((b % bp) + bp) % bp;
-    if (beat > bp - _dpPreRollBeats(L)) {
-      /* 周の頭の先取り。次の周の0拍として持ち越す（この周の打ち直し扱いにしない） */
+    const win = _dpBoundaryWinBeats(L);
+    if (beat > bp - win) {
+      /* 周の頭の先取り。次の周の0拍として持ち越す */
       L.pending.push({ i, beat: 0 });
+    } else if (beat < win) {
+      /* 少し遅れて境目に落ちた音。0拍へ補正して入れるが、これ単体では
+         打ち直しとみなさない（直前のパターンを1発で潰さないため） */
+      L.pass.push({ i, beat: 0 });
     } else {
       L.pass.push({ i, beat });
       L.passDirty = true;
