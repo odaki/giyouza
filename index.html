@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.17';
+const VERSION = 'v7.18';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11396,11 +11396,12 @@ function _dpBuildLayout() {
   const jr = wide ? 104 : 78;
   const jogD = (jr + 7) * 2;
   const lcdH = wide ? 60 : 58;
+  const ctlH = 26, ctlGap = 6;   // ルーパー操作ボタンの行（LCDとジョグの間）
   const headH = 34;   // 銘板（機種名の2行）が入る最上段の高さ
   /* パネルの中身: 縦画面は「銘板 → LCDとジョグを横並び」、
      横画面はパッドの右に「銘板 → LCD → ジョグ」を縦に積む */
   /* 縦横とも「銘板 → LCD → ロゴ」の縦積み。ロゴは左右中央（SP-404の面構え） */
-  const panelH = headH + lcdH + 24 + jogD;
+  const panelH = headH + lcdH + 8 + ctlH + 20 + jogD;
   const contentH = wide ? Math.max(gridH, panelH) : panelH + 16 + gridH;
   /* 縦画面はLCDを中央寄せの幅に抑えてあるので、右上のボタン列とぶつからない。
      上端はそのぶん高く取れる */
@@ -11422,15 +11423,21 @@ function _dpBuildLayout() {
   const lcdX = Math.round(panelX + (panelW - lcdW) / 2);
   const plate = { x: lcdX, y: panelY + 20 };
   const lcd = { x: lcdX, y: panelY + headH, w: lcdW, h: lcdH };
-  const jog = { x: lcdX + lcdW / 2, y: panelY + headH + lcdH + 24 + jogD / 2, r: jr };
+  /* ルーパーの操作（REC / PLAY・STOP / UNDO / CLEAR）をLCDの直下に並べる */
+  const ctlY = panelY + headH + lcdH + 8;
+  const ctlW = (lcdW - ctlGap * 3) / 4;
+  const ctls = ['rec', 'play', 'undo', 'clear'].map((id, i) => ({
+    id, x: lcdX + i * (ctlW + ctlGap), y: ctlY, w: ctlW, h: ctlH }));
+  const jog = { x: lcdX + lcdW / 2, y: ctlY + ctlH + 20 + jogD / 2, r: jr };
   /* 筐体は中身をちょうど包む大きさに */
   const bodyTop = Math.min(panelY, gy) - 14;
   const bodyBottom = Math.max(gy + gridH, panelY + panelH) + 14;
   const body = { x: 10, y: bodyTop, w: W - 20, h: bodyBottom - bodyTop };
   return { pads, panel: { x: panelX, y: panelY, w: panelW, h: panelH },
-           plate, lcd, jog, body, size,
+           plate, lcd, ctls, jog, body, size,
            flash: new Float32Array(DRUM_PADS.length),
-           lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0 };
+           lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0,
+           loop: _dpLoopNew() };
 }
 
 function _startDrumPad() {
@@ -11444,12 +11451,159 @@ function _startDrumPad() {
 }
 
 function _exitDrumPad() {
+  _dpLoopStopSched(); // ループの予約を畳んでから抜ける（残すと戻った後も鳴り続ける）
   _dp = null;
   _startSoundTest(); // 入ってきたサウンドテストへ戻す
 }
 
 /* 1枚叩く。パッドごとの音量補正のためだけに専用gainを1つ挟む
    （発音関数側はdestを受け取る作りなので、音そのものには手を入れない） */
+/* ── ルーパー ──────────────────────────────────────
+   市販のループサンプラーの作法。RECで1周目を録り、もう一度RECで「ここまで」を
+   ループ長として確定する（自由長。先にテンポを決めなくてよい）。確定後は
+   RECを押すたびに重ね録りON/OFF。通常時（REC消灯）は叩いても記録しない。
+
+   クオンタイズはしない。叩いた時刻をそのまま記録する（タイミング精度そのものが
+   この作品の手触り、という方針をここでも守る）。記録する時刻は発音を予約した
+   audioCtxの時刻を使う: performance.now()基準にすると、聴こえた音と記録が
+   出力遅延のぶんずれる。
+
+   再生はrAFではなく音声クロックの先読みスケジューラで回す（ジングル・キング戦
+   シーケンサと同じ作法）。rAFに乗せると document.hidden で拍が飛ぶ。
+   再生位置は毎tick audioCtx.currentTime から計算する: カウンタを積む書き方だと
+   バックグラウンド復帰で位置がずれる。 */
+const DP_LOOP_TICK_MS  = 40;    // スケジューラの起動間隔
+const DP_LOOP_MIN_DUR  = 0.20;  // これより短いループは作らない（誤操作よけ）
+const DP_LOOP_MAX_DUR  = 30;    // ループ長の上限（秒）
+const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
+
+function _dpLoopNew() {
+  return { state: 'idle', layers: [], cur: null, dur: 0,
+           head: 0, recT0: 0, schedTo: 0, sched: null, viz: [] };
+}
+
+/* 音だけ鳴らす（ライブの打鍵と、ループ再生の両方から使う共通部分）。
+   tは絶対時刻（audioCtx基準）。パッドごとの音量補正のためだけにgainを1つ挟む */
+function _dpVoice(i, t) {
+  if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
+  const pad = DRUM_PADS[i];
+  let dest = _seDest(audioCtx);
+  if (pad.gain !== 1) {
+    const g = audioCtx.createGain();
+    g.gain.value = pad.gain;
+    g.connect(dest);
+    _disconnectAfter(audioCtx, t + pad.dur + 1.0, g);
+    dest = g;
+  }
+  pad.hit(audioCtx, t, dest);
+}
+
+function _dpLoopEventCount(L) {
+  let n = L.cur ? L.cur.length : 0;
+  for (const layer of L.layers) n += layer.length;
+  return n;
+}
+
+/* ループ再生。schedToまで予約済みとして、先読み窓の中に入った音を予約する。
+   窓は絶対時刻で見るので、重ね録りした音も最短で次のtickから鳴り始める */
+function _dpLoopTick() {
+  const L = _dp && _dp.loop;
+  if (!L || !audioCtx || L.dur <= 0) return;
+  if (L.state !== 'play' && L.state !== 'over') return;
+  const now = audioCtx.currentTime, until = now + SCHEDULE_AHEAD;
+  if (L.schedTo < now) L.schedTo = now; // 中断からの復帰: 過ぎた分は鳴らさない
+  let guard = 0;
+  while (L.schedTo < until && guard++ < 64) {
+    const k = Math.floor((L.schedTo - L.head) / L.dur);
+    const base = L.head + k * L.dur;          // この周の先頭（絶対時刻）
+    const segEnd = Math.min(until, base + L.dur);
+    for (const layer of L.layers) {
+      for (const ev of layer) {
+        const t = base + ev.off;
+        if (t >= L.schedTo && t < segEnd) {
+          _dpVoice(ev.i, t);
+          L.viz.push({ i: ev.i, t }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
+        }
+      }
+    }
+    L.schedTo = segEnd;
+  }
+}
+
+function _dpLoopStartSched() {
+  const L = _dp.loop;
+  if (L.sched) return;
+  L.sched = setInterval(_dpLoopTick, DP_LOOP_TICK_MS);
+  _dpLoopTick();
+}
+function _dpLoopStopSched() {
+  const L = _dp && _dp.loop;
+  if (!L || !L.sched) return;
+  clearInterval(L.sched); L.sched = null;
+  L.viz.length = 0;
+}
+
+/* RECボタン。押すたびに 録音開始 → ループ確定＋再生 → 重ね録りON → OFF → ON… */
+function _dpLoopRec() {
+  const L = _dp.loop;
+  if (!audioCtx) getAudioCtx();
+  const now = audioCtx ? audioCtx.currentTime : 0;
+  if (L.state === 'rec') {
+    /* 1周目の終わり: ここまでをループ長として確定し、そのまま頭から再生に入る */
+    const dur = Math.min(DP_LOOP_MAX_DUR, now - L.recT0);
+    if (dur < DP_LOOP_MIN_DUR || !L.cur || L.cur.length === 0) { _dpLoopClear(); return; }
+    L.dur = dur;
+    L.layers = [L.cur]; L.cur = null;
+    L.head = now; L.schedTo = now;
+    L.state = 'play';
+    _dpLoopStartSched();
+    return;
+  }
+  if (L.dur <= 0) {
+    /* 1周目の録音開始。押した瞬間がループの先頭（頭に休符を置けるようにする） */
+    L.state = 'rec'; L.recT0 = now; L.cur = [];
+    return;
+  }
+  if (L.state === 'over') {                     // 重ね録りを終える
+    if (L.cur && L.cur.length) L.layers.push(L.cur);
+    L.cur = null; L.state = 'play';
+    return;
+  }
+  /* 停止中でも押せば再生しながら重ね録りに入る */
+  if (L.state === 'idle') { L.head = now; L.schedTo = now; _dpLoopStartSched(); }
+  L.state = 'over'; L.cur = [];
+}
+
+/* 再生/停止のトグル。内容は保持する */
+function _dpLoopPlayStop() {
+  const L = _dp.loop;
+  if (L.dur <= 0) return;
+  if (L.state === 'idle') {
+    if (!audioCtx) getAudioCtx();
+    L.head = audioCtx ? audioCtx.currentTime : 0; L.schedTo = L.head;
+    L.state = 'play';
+    _dpLoopStartSched();
+  } else {
+    if (L.state === 'over' && L.cur && L.cur.length) L.layers.push(L.cur);
+    L.cur = null; L.state = 'idle';
+    _dpLoopStopSched();
+  }
+}
+
+/* 直前のレイヤーを取り消す。重ね録り中なら、まずその録りかけを捨てる */
+function _dpLoopUndo() {
+  const L = _dp.loop;
+  if (L.cur && L.cur.length) { L.cur = []; return; }
+  if (L.layers.length === 0) return;
+  L.layers.pop();
+  if (L.layers.length === 0) _dpLoopClear();
+}
+
+function _dpLoopClear() {
+  _dpLoopStopSched();
+  _dp.loop = _dpLoopNew();
+}
+
 function _dpHit(i) {
   const pad = DRUM_PADS[i];
   _dp.flash[i] = DP_FLASH_FRAMES;
@@ -11461,21 +11615,29 @@ function _dpHit(i) {
   _dp.jogSpin += ((i % 4) < 2 ? -1 : 1) * DP_JOG_KICK * _dpJogScale(pad.dur);
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const t = audioCtx.currentTime + 0.01; // クオンタイズしない（叩いた瞬間に鳴らす）
-  let dest = _seDest(audioCtx);
-  if (pad.gain !== 1) {
-    const g = audioCtx.createGain();
-    g.gain.value = pad.gain;
-    g.connect(dest);
-    _disconnectAfter(audioCtx, t + 2.0, g);
-    dest = g;
+  _dpVoice(i, t);
+  /* 録音中なら、いま予約した時刻をそのままループ内の位置に直して記録する */
+  const L = _dp.loop;
+  if ((L.state === 'rec' || L.state === 'over') && L.cur &&
+      _dpLoopEventCount(L) < DP_LOOP_MAX_EV) {
+    const off = L.state === 'rec'
+      ? t - L.recT0
+      : (((t - L.head) % L.dur) + L.dur) % L.dur;
+    if (L.state !== 'rec' || off <= DP_LOOP_MAX_DUR) L.cur.push({ i, off });
   }
-  pad.hit(audioCtx, t, dest);
 }
 
 function _drumPadTouch(x, y) {
   if (!_dp) return;
   if (hitTest(DP_BACK_BTN, x, y)) { _exitDrumPad(); return; }
   if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
+  for (const c of _dp.ctls) if (hitTest(c, x, y)) {
+    if (c.id === 'rec')   _dpLoopRec();
+    if (c.id === 'play')  _dpLoopPlayStop();
+    if (c.id === 'undo')  _dpLoopUndo();
+    if (c.id === 'clear') _dpLoopClear();
+    return;
+  }
   for (const p of _dp.pads) if (hitTest(p, x, y)) { _dpHit(p.idx); return; }
 }
 
@@ -11483,6 +11645,18 @@ function _drumPadTouch(x, y) {
 function _updateDrumPad() {
   if (!_dp) return;
   for (let i = 0; i < _dp.flash.length; i++) if (_dp.flash[i] > 0) _dp.flash[i]--;
+  /* ループが鳴らした音のぶんもパッドを光らせる。予約済みの時刻と音声クロックを
+     突き合わせるので、光と音がずれない（何を重ねたかが目で分かる） */
+  const L = _dp.loop;
+  if (L.viz.length && audioCtx) {
+    const now = audioCtx.currentTime;
+    let k = 0;
+    for (const v of L.viz) {
+      if (v.t <= now) { _dp.flash[v.i] = DP_FLASH_FRAMES; continue; }
+      L.viz[k++] = v;
+    }
+    L.viz.length = k;
+  }
   _dp.jogRot += _dp.jogSpin;
   _dp.jogSpin *= DP_JOG_DAMP;
   if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
@@ -11515,6 +11689,9 @@ function drawDrumPad() {
   roundRect(L.x, L.y, L.w, L.h, 5); ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 2;
   roundRect(L.x, L.y, L.w, L.h, 5); ctx.stroke();
+  const LP = o.loop;
+  const _lpState = LP.state === 'rec' ? 'REC' : LP.state === 'over' ? 'OVER'
+                 : LP.state === 'play' ? 'PLAY' : (LP.dur > 0 ? 'STOP' : '- -');
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
@@ -11522,17 +11699,57 @@ function drawDrumPad() {
   ctx.font = `bold ${L.h >= 60 ? 26 : 22}px sans-serif`;
   ctx.fillStyle = '#9ff2a8';
   ctx.fillText(o.lastName || '- - -', L.x + 10, L.y + L.h - 12);
+  /* 右側はループの状態: 状態名／長さ・レイヤー数 */
   ctx.textAlign = 'right';
   ctx.font = `9px sans-serif`;
+  ctx.fillStyle = (LP.state === 'rec' || LP.state === 'over') ? '#ff8a7a' : 'rgba(159,242,168,0.55)';
+  ctx.fillText(`LOOP ${_lpState}`, L.x + L.w - 10, L.y + 17);
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
-  ctx.fillText(`HITS ${o.hits}`, L.x + L.w - 10, L.y + 17);
+  ctx.fillText(LP.dur > 0 ? `${LP.dur.toFixed(1)}s  x${LP.layers.length}` : `HITS ${o.hits}`,
+               L.x + L.w - 10, L.y + L.h - 12);
 
-  /* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる */
+  /* ルーパーの操作ボタン。RECだけは状態が分かるよう赤く点く */
+  const _recOn = LP.state === 'rec' || LP.state === 'over';
+  for (const c of o.ctls) {
+    const on = (c.id === 'rec' && _recOn);
+    const live = (c.id === 'rec') || (LP.dur > 0);
+    ctx.fillStyle = on ? 'rgba(200,40,30,0.85)' : 'rgba(24,34,28,0.95)';
+    roundRect(c.x, c.y, c.w, c.h, 5); ctx.fill();
+    ctx.strokeStyle = on ? '#ff8a7a' : live ? 'rgba(245,208,32,0.45)' : 'rgba(245,208,32,0.15)';
+    ctx.lineWidth = 1;
+    roundRect(c.x, c.y, c.w, c.h, 5); ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `bold 10px sans-serif`;
+    ctx.fillStyle = on ? '#fff' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
+    const label = c.id === 'rec' ? 'REC'
+                : c.id === 'play' ? (LP.state === 'idle' ? 'PLAY' : 'STOP')
+                : c.id === 'undo' ? 'UNDO' : 'CLEAR';
+    ctx.fillText(label, c.x + c.w / 2, c.y + c.h / 2 + 0.5);
+  }
+
+  /* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる。
+     外周のリングはループの再生位置（真上から時計回りに1周＝ループ1周）。
+     ロゴ自体の回転（打鍵に反応）とは別の層なので衝突しない */
   const J = o.jog;
   ctx.fillStyle = '#0a1109';
   ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.35)'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
+  if (LP.state === 'rec') {
+    /* 1周目は長さが未定なので、位置ではなく「録っている」ことだけを点滅で示す */
+    const bl = 0.45 + 0.55 * Math.abs(Math.sin(performance.now() / 260));
+    ctx.strokeStyle = `rgba(220,60,45,${bl.toFixed(3)})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
+  } else if (LP.dur > 0 && audioCtx) {
+    const pos = LP.state === 'idle' ? 0
+      : (((audioCtx.currentTime - LP.head) % LP.dur) + LP.dur) % LP.dur;
+    ctx.strokeStyle = LP.state === 'over' ? '#e0483c' : Y;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(J.x, J.y, J.r + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / LP.dur));
+    ctx.stroke();
+  }
   _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
 
   /* パッド（焼き込み済みを転写し、叩いた光だけ上に重ねる） */
