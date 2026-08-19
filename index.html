@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.30';
+const VERSION = 'v7.31';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11562,7 +11562,7 @@ const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジュー
    一音が鳴らない」として出る（実機報告）。取りこぼすくらいなら数十ms遅れて
    鳴らすほうが良い。長い中断のあとに大量の音が一気に鳴らないよう上限を置く */
 const DP_LATE_TOL_SEC  = 0.12;
-const DP_BPM_MIN = 60, DP_BPM_MAX = 200, DP_BPM_STEP = 1;
+const DP_BPM_MIN = 40, DP_BPM_MAX = 200, DP_BPM_STEP = 1;
 /* 4→2→1→4 の順に巡回する。2小節から1小節へ下げるのが1押しで済むように
    （2で打ち込む→1で半分だけ鳴らす→4で2回鳴らす、という使い方を想定） */
 const DP_BARS_CHOICES = [4, 2, 1];
