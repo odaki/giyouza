@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.19';
+const VERSION = 'v7.20';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11365,6 +11365,20 @@ const DRUM_PADS = [
 let _dp = null;            // { pads, back, size, flash, lastName, jogRot, jogSpin, hits }
 let _dpPadSprites = null;  // パッド16枚の焼き込み（毎フレームのパス＋文字描画を避ける）
 
+/* 平行四辺形のパス。SP-404の面ボタンは長方形でも楕円でもなく、上辺を右へ
+   ずらした斜めの四角。ロゴの左右に並ぶ操作ボタンをこの形にする。
+   当たり判定は外接矩形のまま（指の当たりを狭めない） */
+const DP_BTN_SKEW = 10;
+function _dpBtnPath(x, y, w, h) {
+  const k = DP_BTN_SKEW;
+  ctx.beginPath();
+  ctx.moveTo(x + k, y);
+  ctx.lineTo(x + w, y);
+  ctx.lineTo(x + w - k, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.closePath();
+}
+
 /* 任意のコンテキストへ角丸パスを引く（グローバルのroundRectはctx固定のため） */
 function _dpRoundPath(c, x, y, w, h, r) {
   c.beginPath();
@@ -11439,12 +11453,28 @@ function _dpBuildLayout() {
   const lcdX = Math.round(panelX + (panelW - lcdW) / 2);
   const plate = { x: lcdX, y: panelY + 20 };
   const lcd = { x: lcdX, y: panelY + headH, w: lcdW, h: lcdH };
-  /* ルーパーの操作（REC / PLAY・STOP / UNDO / CLEAR）をLCDの直下に並べる */
+  /* 操作の配置:
+       LCD直下の横並び … UNDO / CLEAR（編集）
+       ロゴの左右に3段 … 左=REC/PLAY/CLICK（演奏）、右=テンポ±/小節数（設定）
+     SPシリーズのように大きなノブの左右へ縦に並べる。行を増やすとパネルが縦に
+     伸びてロゴを小さくせざるを得ないが、ロゴの左右は元々空いているのでここへ置く */
   const ctlY = panelY + headH + lcdH + 8;
-  const ctlW = (lcdW - ctlGap * 3) / 4;
-  const ctls = ['rec', 'play', 'undo', 'clear'].map((id, i) => ({
+  const ctlW = (lcdW - ctlGap) / 2;
+  const ctls = ['undo', 'clear'].map((id, i) => ({
     id, x: lcdX + i * (ctlW + ctlGap), y: ctlY, w: ctlW, h: ctlH }));
   const jog = { x: lcdX + lcdW / 2, y: ctlY + ctlH + 20 + jogD / 2, r: jr };
+  /* 左右のピルボタン（3段） */
+  const sideGap = (panelW - jogD) / 2;
+  const sideW = Math.min(96, sideGap - 14);
+  const sideH = 34, sideSp = 8;
+  const sideX0 = panelX + (sideGap - sideW) / 2;
+  const sideX1 = panelX + panelW - sideW - (sideGap - sideW) / 2;
+  const sideY0 = jog.y - (sideH * 3 + sideSp * 2) / 2;
+  [['rec', 'play', 'click'], ['bpmUp', 'bpmDn', 'bars']].forEach((col, ci) => {
+    col.forEach((id, ri) => ctls.push({
+      id, skew: true, w: sideW, h: sideH,
+      x: ci === 0 ? sideX0 : sideX1, y: sideY0 + ri * (sideH + sideSp) }));
+  });
   /* 筐体は中身をちょうど包む大きさに */
   const bodyTop = Math.min(panelY, gy) - 14;
   const bodyBottom = Math.max(gy + gridH, panelY + panelH) + 14;
@@ -11474,32 +11504,45 @@ function _exitDrumPad() {
 
 /* 1枚叩く。パッドごとの音量補正のためだけに専用gainを1つ挟む
    （発音関数側はdestを受け取る作りなので、音そのものには手を入れない） */
-/* ── ルーパー ──────────────────────────────────────
-   市販のループサンプラーの作法。RECで1周目を録り、もう一度RECで「ここまで」を
-   ループ長として確定する（自由長。先にテンポを決めなくてよい）。確定後は
-   RECを押すたびに重ね録りON/OFF。通常時（REC消灯）は叩いても記録しない。
+/* ── パターンシーケンサ（ドラムマシン式のループ録音） ──────────
+   尺は固定（1/2/4小節）で、テンポも指定する。RECを押すとその場から録音アームが
+   入り、パターンが回り続けるところへ重ねていく（実機のライブレコーディング）。
+   通常時（REC消灯）は叩いても記録しない。
 
-   クオンタイズはしない。叩いた時刻をそのまま記録する（タイミング精度そのものが
-   この作品の手触り、という方針をここでも守る）。記録する時刻は発音を予約した
-   audioCtxの時刻を使う: performance.now()基準にすると、聴こえた音と記録が
-   出力遅延のぶんずれる。
+   **固定するのは尺だけで、打点は叩いたままの時刻で記録する**（クオンタイズしない）。
+   タイミング精度そのものがこの作品の手触り、という方針をここでも守る。
+   記録の単位は秒ではなく拍。こうしないとテンポを変えたときにパターンが
+   伸び縮みしない。記録する時刻は発音を予約したaudioCtxの時刻を使う:
+   performance.now()基準にすると聴こえた音と記録が出力遅延ぶんずれる。
 
-   再生はrAFではなく音声クロックの先読みスケジューラで回す（ジングル・キング戦
-   シーケンサと同じ作法）。rAFに乗せると document.hidden で拍が飛ぶ。
-   再生位置は毎tick audioCtx.currentTime から計算する: カウンタを積む書き方だと
-   バックグラウンド復帰で位置がずれる。 */
+   再生はrAFではなく音声クロックの先読みスケジューラ（ジングル・キング戦
+   シーケンサと同じ作法）。再生位置は毎tick audioCtx.currentTime から計算する。
+   カウンタを積む書き方だとバックグラウンド復帰で位置がずれる。 */
 const DP_LOOP_TICK_MS  = 40;    // スケジューラの起動間隔
-const DP_LOOP_MIN_DUR  = 0.20;  // これより短いループは作らない（誤操作よけ）
-const DP_LOOP_MAX_DUR  = 30;    // ループ長の上限（秒）
 const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
+const DP_BPM_MIN = 60, DP_BPM_MAX = 200, DP_BPM_STEP = 4;
+const DP_BARS_CHOICES = [1, 2, 4];
+const DP_BEATS_PER_BAR = 4;
+/* クリックの音量。パッドと同じ音源を使うが、伴走なので控えめにする */
+const DP_CLICK_VOL = 0.30, DP_CLICK_ACCENT_VOL = 0.50;
 
 function _dpLoopNew() {
-  return { state: 'idle', layers: [], cur: null, dur: 0,
-           head: 0, recT0: 0, schedTo: 0, sched: null, viz: [] };
+  return { playing: false, rec: false, bpm: 152, bars: 2,
+           layers: [], cur: null,
+           head: 0, schedTo: 0, clickTo: 0, sched: null, viz: [], click: false };
+}
+function _dpBeatDur(L) { return 60 / L.bpm; }
+function _dpBeatsPerLoop(L) { return L.bars * DP_BEATS_PER_BAR; }
+function _dpLoopDur(L) { return _dpBeatsPerLoop(L) * _dpBeatDur(L); }
+/* 現在の拍位置（0〜beatsPerLoop）。停止中は0 */
+function _dpLoopBeatPos(L) {
+  if (!L.playing || !audioCtx) return 0;
+  const bp = _dpBeatsPerLoop(L);
+  const b = (audioCtx.currentTime - L.head) / _dpBeatDur(L);
+  return ((b % bp) + bp) % bp;
 }
 
-/* 音だけ鳴らす（ライブの打鍵と、ループ再生の両方から使う共通部分）。
-   tは絶対時刻（audioCtx基準）。パッドごとの音量補正のためだけにgainを1つ挟む */
+/* 音だけ鳴らす（ライブの打鍵とパターン再生の共通部分）。tは絶対時刻 */
 function _dpVoice(i, t) {
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const pad = DRUM_PADS[i];
@@ -11514,32 +11557,47 @@ function _dpVoice(i, t) {
   pad.hit(audioCtx, t, dest);
 }
 
+/* クリック。小節の頭はリムショット、他の拍はクローズハット（TR音源のまま） */
+function _dpClickVoice(t, accent) {
+  if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
+  const d = _seDest(audioCtx);
+  if (accent) _playRimshot(audioCtx, t, d, DP_CLICK_ACCENT_VOL);
+  else        _playKingHat(audioCtx, t, d, false);
+}
+
 function _dpLoopEventCount(L) {
   let n = L.cur ? L.cur.length : 0;
   for (const layer of L.layers) n += layer.length;
   return n;
 }
 
-/* ループ再生。schedToまで予約済みとして、先読み窓の中に入った音を予約する。
+/* パターン再生。schedToまで予約済みとして、先読み窓に入った音を予約する。
    窓は絶対時刻で見るので、重ね録りした音も最短で次のtickから鳴り始める */
 function _dpLoopTick() {
   const L = _dp && _dp.loop;
-  if (!L || !audioCtx || L.dur <= 0) return;
-  if (L.state !== 'play' && L.state !== 'over') return;
+  if (!L || !audioCtx || !L.playing) return;
+  const dur = _dpLoopDur(L), beat = _dpBeatDur(L);
   const now = audioCtx.currentTime, until = now + SCHEDULE_AHEAD;
   if (L.schedTo < now) L.schedTo = now; // 中断からの復帰: 過ぎた分は鳴らさない
   let guard = 0;
   while (L.schedTo < until && guard++ < 64) {
-    const k = Math.floor((L.schedTo - L.head) / L.dur);
-    const base = L.head + k * L.dur;          // この周の先頭（絶対時刻）
-    const segEnd = Math.min(until, base + L.dur);
+    const k = Math.floor((L.schedTo - L.head) / dur);
+    const base = L.head + k * dur;            // この周の先頭（絶対時刻）
+    const segEnd = Math.min(until, base + dur);
     for (const layer of L.layers) {
       for (const ev of layer) {
-        const t = base + ev.off;
+        const t = base + ev.beat * beat;
         if (t >= L.schedTo && t < segEnd) {
           _dpVoice(ev.i, t);
           L.viz.push({ i: ev.i, t }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
         }
+      }
+    }
+    if (L.click) {
+      const bp = _dpBeatsPerLoop(L);
+      for (let b = 0; b < bp; b++) {
+        const t = base + b * beat;
+        if (t >= L.schedTo && t < segEnd) _dpClickVoice(t, b % DP_BEATS_PER_BAR === 0);
       }
     }
     L.schedTo = segEnd;
@@ -11559,65 +11617,81 @@ function _dpLoopStopSched() {
   L.viz.length = 0;
 }
 
-/* RECボタン。押すたびに 録音開始 → ループ確定＋再生 → 重ね録りON → OFF → ON… */
-function _dpLoopRec() {
+/* 再生開始（基準時刻を今に置き直す）。停止中の操作から共通で呼ぶ */
+function _dpLoopStart() {
   const L = _dp.loop;
   if (!audioCtx) getAudioCtx();
-  const now = audioCtx ? audioCtx.currentTime : 0;
-  if (L.state === 'rec') {
-    /* 1周目の終わり: ここまでをループ長として確定し、そのまま頭から再生に入る */
-    const dur = Math.min(DP_LOOP_MAX_DUR, now - L.recT0);
-    if (dur < DP_LOOP_MIN_DUR || !L.cur || L.cur.length === 0) { _dpLoopClear(); return; }
-    L.dur = dur;
-    L.layers = [L.cur]; L.cur = null;
-    L.head = now; L.schedTo = now;
-    L.state = 'play';
-    _dpLoopStartSched();
-    return;
-  }
-  if (L.dur <= 0) {
-    /* 1周目の録音開始。押した瞬間がループの先頭（頭に休符を置けるようにする） */
-    L.state = 'rec'; L.recT0 = now; L.cur = [];
-    return;
-  }
-  if (L.state === 'over') {                     // 重ね録りを終える
-    if (L.cur && L.cur.length) L.layers.push(L.cur);
-    L.cur = null; L.state = 'play';
-    return;
-  }
-  /* 停止中でも押せば再生しながら重ね録りに入る */
-  if (L.state === 'idle') { L.head = now; L.schedTo = now; _dpLoopStartSched(); }
-  L.state = 'over'; L.cur = [];
+  L.head = audioCtx ? audioCtx.currentTime : 0;
+  L.schedTo = L.head;
+  L.playing = true;
+  _dpLoopStartSched();
 }
 
-/* 再生/停止のトグル。内容は保持する */
 function _dpLoopPlayStop() {
   const L = _dp.loop;
-  if (L.dur <= 0) return;
-  if (L.state === 'idle') {
-    if (!audioCtx) getAudioCtx();
-    L.head = audioCtx ? audioCtx.currentTime : 0; L.schedTo = L.head;
-    L.state = 'play';
-    _dpLoopStartSched();
-  } else {
-    if (L.state === 'over' && L.cur && L.cur.length) L.layers.push(L.cur);
-    L.cur = null; L.state = 'idle';
+  if (L.playing) {
+    if (L.rec && L.cur && L.cur.length) L.layers.push(L.cur);
+    L.rec = false; L.cur = null; L.playing = false;
     _dpLoopStopSched();
+  } else {
+    _dpLoopStart();
   }
 }
 
-/* 直前のレイヤーを取り消す。重ね録り中なら、まずその録りかけを捨てる */
+/* RECは録音アームのON/OFF。停止中に押したら再生ごと始める */
+function _dpLoopRec() {
+  const L = _dp.loop;
+  if (L.rec) {                                   // 録音を終える＝1レイヤー確定
+    if (L.cur && L.cur.length) L.layers.push(L.cur);
+    L.cur = null; L.rec = false;
+    return;
+  }
+  if (!L.playing) _dpLoopStart();
+  L.cur = []; L.rec = true;
+}
+
+/* 直前のレイヤーを取り消す。録音中なら、まずその録りかけを捨てる */
 function _dpLoopUndo() {
   const L = _dp.loop;
   if (L.cur && L.cur.length) { L.cur = []; return; }
   if (L.layers.length === 0) return;
   L.layers.pop();
-  if (L.layers.length === 0) _dpLoopClear();
 }
 
 function _dpLoopClear() {
-  _dpLoopStopSched();
-  _dp.loop = _dpLoopNew();
+  const L = _dp.loop;
+  L.layers = []; L.cur = null; L.rec = false;
+}
+
+/* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
+   （拍で記録しているのでパターンはそのまま伸び縮みする） */
+function _dpLoopSetBpm(delta) {
+  const L = _dp.loop;
+  const next = Math.max(DP_BPM_MIN, Math.min(DP_BPM_MAX, L.bpm + delta));
+  if (next === L.bpm) return;
+  const pos = _dpLoopBeatPos(L);
+  L.bpm = next;
+  if (L.playing && audioCtx) {
+    L.head = audioCtx.currentTime - pos * _dpBeatDur(L);
+    L.schedTo = audioCtx.currentTime;
+  }
+}
+
+/* 小節数の切り替え。増やすと前半にそのまま残り、減らすとはみ出した音は捨てる */
+function _dpLoopCycleBars() {
+  const L = _dp.loop;
+  const i = DP_BARS_CHOICES.indexOf(L.bars);
+  L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
+  const bp = _dpBeatsPerLoop(L);
+  L.layers = L.layers.map(layer => layer.filter(e => e.beat < bp)).filter(layer => layer.length);
+  if (L.cur) L.cur = L.cur.filter(e => e.beat < bp);
+  if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
+}
+
+function _dpLoopToggleClick() {
+  const L = _dp.loop;
+  L.click = !L.click;
+  if (L.click && L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
 }
 
 function _dpHit(i) {
@@ -11632,14 +11706,12 @@ function _dpHit(i) {
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const t = audioCtx.currentTime + 0.01; // クオンタイズしない（叩いた瞬間に鳴らす）
   _dpVoice(i, t);
-  /* 録音中なら、いま予約した時刻をそのままループ内の位置に直して記録する */
+  /* 録音中なら、いま予約した時刻を拍位置に直して記録する。丸めない */
   const L = _dp.loop;
-  if ((L.state === 'rec' || L.state === 'over') && L.cur &&
-      _dpLoopEventCount(L) < DP_LOOP_MAX_EV) {
-    const off = L.state === 'rec'
-      ? t - L.recT0
-      : (((t - L.head) % L.dur) + L.dur) % L.dur;
-    if (L.state !== 'rec' || off <= DP_LOOP_MAX_DUR) L.cur.push({ i, off });
+  if (L.rec && L.playing && L.cur && _dpLoopEventCount(L) < DP_LOOP_MAX_EV) {
+    const bp = _dpBeatsPerLoop(L);
+    const b = (t - L.head) / _dpBeatDur(L);
+    L.cur.push({ i, beat: ((b % bp) + bp) % bp });
   }
 }
 
@@ -11652,6 +11724,10 @@ function _drumPadTouch(x, y) {
     if (c.id === 'play')  _dpLoopPlayStop();
     if (c.id === 'undo')  _dpLoopUndo();
     if (c.id === 'clear') _dpLoopClear();
+    if (c.id === 'click') _dpLoopToggleClick();
+    if (c.id === 'bpmUp') _dpLoopSetBpm(+DP_BPM_STEP);
+    if (c.id === 'bpmDn') _dpLoopSetBpm(-DP_BPM_STEP);
+    if (c.id === 'bars')  _dpLoopCycleBars();
     return;
   }
   for (const p of _dp.pads) if (hitTest(p, x, y)) { _dpHit(p.idx); return; }
@@ -11706,8 +11782,7 @@ function drawDrumPad() {
   ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 2;
   roundRect(L.x, L.y, L.w, L.h, 5); ctx.stroke();
   const LP = o.loop;
-  const _lpState = LP.state === 'rec' ? 'REC' : LP.state === 'over' ? 'OVER'
-                 : LP.state === 'play' ? 'PLAY' : (LP.dur > 0 ? 'STOP' : '- -');
+  const _lpState = LP.rec ? 'REC' : LP.playing ? 'PLAY' : 'STOP';
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
@@ -11718,28 +11793,45 @@ function drawDrumPad() {
   /* 右側はループの状態: 状態名／長さ・レイヤー数 */
   ctx.textAlign = 'right';
   ctx.font = `9px sans-serif`;
-  ctx.fillStyle = (LP.state === 'rec' || LP.state === 'over') ? '#ff8a7a' : 'rgba(159,242,168,0.55)';
-  ctx.fillText(`LOOP ${_lpState}`, L.x + L.w - 10, L.y + 17);
+  ctx.fillStyle = LP.rec ? '#ff8a7a' : 'rgba(159,242,168,0.55)';
+  ctx.fillText(_lpState, L.x + L.w - 10, L.y + 17);
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
-  ctx.fillText(LP.dur > 0 ? `${LP.dur.toFixed(1)}s  x${LP.layers.length}` : `HITS ${o.hits}`,
-               L.x + L.w - 10, L.y + L.h - 12);
+  ctx.fillText(`${LP.bpm}BPM  x${LP.layers.length}`, L.x + L.w - 10, L.y + L.h - 12);
 
-  /* ルーパーの操作ボタン。RECだけは状態が分かるよう赤く点く */
-  const _recOn = LP.state === 'rec' || LP.state === 'over';
+  /* 操作ボタン。実機の面ボタンと同じ族に見えるよう、パッドと同じ作り
+     （上が明るく下が暗い縦グラデ＋内側の白ベベル＋外側の影）を小さく作る。
+     角丸は小さめ（楕円のピルにはしない）。
+     REC（録音中）とCLICK（ON）は点いた状態を持つ */
+  const _hasPat = LP.layers.length > 0 || (LP.cur && LP.cur.length > 0);
   for (const c of o.ctls) {
-    const on = (c.id === 'rec' && _recOn);
-    const live = (c.id === 'rec') || (LP.dur > 0);
-    ctx.fillStyle = on ? 'rgba(200,40,30,0.85)' : 'rgba(24,34,28,0.95)';
-    roundRect(c.x, c.y, c.w, c.h, 5); ctx.fill();
-    ctx.strokeStyle = on ? '#ff8a7a' : live ? 'rgba(245,208,32,0.45)' : 'rgba(245,208,32,0.15)';
-    ctx.lineWidth = 1;
-    roundRect(c.x, c.y, c.w, c.h, 5); ctx.stroke();
+    const on  = (c.id === 'rec' && LP.rec) || (c.id === 'click' && LP.click);
+    const red = (c.id === 'rec' && LP.rec);
+    const live = (c.id === 'undo' || c.id === 'clear') ? _hasPat : true;
+    /* ロゴの左右（c.skew）は平行四辺形、LCD直下の編集2つは角丸の長方形 */
+    const g = ctx.createLinearGradient(0, c.y, 0, c.y + c.h);
+    if (red)      { g.addColorStop(0, '#d8564a'); g.addColorStop(0.55, '#b32e22'); g.addColorStop(1, '#7d1d15'); }
+    else if (on)  { g.addColorStop(0, '#d9b23a'); g.addColorStop(0.55, '#b08c14'); g.addColorStop(1, '#7d6205'); }
+    else          { g.addColorStop(0, '#2b3f34'); g.addColorStop(0.55, '#1d2c24'); g.addColorStop(1, '#131e18'); }
+    const face = (dx, dy, dw, dh) => c.skew
+      ? _dpBtnPath(c.x + dx, c.y + dy, c.w - dw, c.h - dh)
+      : roundRect(c.x + dx, c.y + dy, c.w - dw, c.h - dh, 5);
+    ctx.fillStyle = g;
+    face(0, 0, 0, 0); ctx.fill();
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1.5;
+    face(1.5, 1.5, 3, 3); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1;
+    face(0.5, 0.5, 1, 1); ctx.stroke();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 10px sans-serif`;
-    ctx.fillStyle = on ? '#fff' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
-    const label = c.id === 'rec' ? 'REC'
-                : c.id === 'play' ? (LP.state === 'idle' ? 'PLAY' : 'STOP')
-                : c.id === 'undo' ? 'UNDO' : 'CLEAR';
+    ctx.fillStyle = (red || on) ? '#fff8e0' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
+    const label = c.id === 'rec'   ? 'REC'
+                : c.id === 'play'  ? (LP.playing ? 'STOP' : 'PLAY')
+                : c.id === 'click' ? 'CLICK'
+                : c.id === 'bpmUp' ? 'TEMPO +'
+                : c.id === 'bpmDn' ? 'TEMPO −'
+                : c.id === 'bars'  ? `${LP.bars} BAR${LP.bars > 1 ? 'S' : ''}`
+                : c.id === 'undo'  ? 'UNDO' : 'CLEAR';
     ctx.fillText(label, c.x + c.w / 2, c.y + c.h / 2 + 0.5);
   }
 
@@ -11751,19 +11843,21 @@ function drawDrumPad() {
   ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.35)'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
-  if (LP.state === 'rec') {
-    /* 1周目は長さが未定なので、位置ではなく「録っている」ことだけを点滅で示す */
-    const bl = 0.45 + 0.55 * Math.abs(Math.sin(performance.now() / 260));
-    ctx.strokeStyle = `rgba(220,60,45,${bl.toFixed(3)})`;
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
-  } else if (LP.dur > 0 && audioCtx) {
-    const pos = LP.state === 'idle' ? 0
-      : (((audioCtx.currentTime - LP.head) % LP.dur) + LP.dur) % LP.dur;
-    ctx.strokeStyle = LP.state === 'over' ? '#e0483c' : Y;
+  if (LP.playing && audioCtx) {
+    const bp = _dpBeatsPerLoop(LP), pos = _dpLoopBeatPos(LP);
+    /* 小節の区切りを目盛りで出す（何小節のパターンかが一目で分かる） */
+    ctx.strokeStyle = 'rgba(245,208,32,0.30)'; ctx.lineWidth = 1;
+    for (let b = 0; b < LP.bars; b++) {
+      const a = -Math.PI / 2 + Math.PI * 2 * (b / LP.bars);
+      ctx.beginPath();
+      ctx.moveTo(J.x + Math.cos(a) * (J.r + 2), J.y + Math.sin(a) * (J.r + 2));
+      ctx.lineTo(J.x + Math.cos(a) * (J.r + 12), J.y + Math.sin(a) * (J.r + 12));
+      ctx.stroke();
+    }
+    ctx.strokeStyle = LP.rec ? '#e0483c' : Y;
     ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(J.x, J.y, J.r + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / LP.dur));
+    ctx.arc(J.x, J.y, J.r + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / bp));
     ctx.stroke();
   }
   _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
