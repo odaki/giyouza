@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.23';
+const VERSION = 'v7.24';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11644,15 +11644,22 @@ function _dpLoopTick() {
   if (!L || !audioCtx || !L.playing) return;
   const dur = _dpLoopDur(L), beat = _dpBeatDur(L);
   const now = audioCtx.currentTime, until = now + SCHEDULE_AHEAD;
+  /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は
+     先読みぶん最大0.25秒先を指しているので、そちらで判定すると周の変わり目が
+     0.25秒早まり、周の終わり際に叩いたぶんが次の周の記録に落ちる。その1〜2発が
+     次の切り替わりでtakeを置き換えてしまい、「打ち込んだのに1音しか入らない」
+     状態になっていた（実機報告） */
+  if (L.rec) {
+    const kNow = Math.floor((now - L.head) / dur);
+    if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
+    L.lastK = kNow;
+  }
   if (L.schedTo < now) L.schedTo = now; // 中断からの復帰: 過ぎた分は鳴らさない
   let guard = 0;
   while (L.schedTo < until && guard++ < 64) {
     const k = Math.floor((L.schedTo - L.head) / dur);
     const base = L.head + k * dur;            // この周の先頭（絶対時刻）
     const segEnd = Math.min(until, base + dur);
-    /* 周が変わった: 入力のあった周をtakeとして採用し、次の周の記録を空で始める */
-    if (L.rec && L.lastK !== null && k !== L.lastK) _dpLoopPromote(L);
-    if (L.rec) L.lastK = k;
     /* 録音中のtakeも鳴らす（打ち込んだものが次の周から返ってくる）。
        ただしこの周に叩き直しが始まっていたら、古いtakeは引っ込める。
        そうしないと叩き直しの最中に旧シーケンスと二重に聴こえて判断できない */
