@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.24';
+const VERSION = 'v7.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11556,6 +11556,12 @@ function _exitDrumPad() {
    カウンタを積む書き方だとバックグラウンド復帰で位置がずれる。 */
 const DP_LOOP_TICK_MS  = 40;    // スケジューラの起動間隔
 const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
+/* tickが遅れたときに、その間に来るはずだった音をどこまで拾うか（秒）。
+   描画が重いフレームなどでtickが1回飛ぶと、飛んだ区間の音が丸ごと捨てられる。
+   周の頭はちょうど予約の再開位置に当たるため真っ先に落ち、「たまに冒頭の
+   一音が鳴らない」として出る（実機報告）。取りこぼすくらいなら数十ms遅れて
+   鳴らすほうが良い。長い中断のあとに大量の音が一気に鳴らないよう上限を置く */
+const DP_LATE_TOL_SEC  = 0.12;
 const DP_BPM_MIN = 60, DP_BPM_MAX = 200, DP_BPM_STEP = 4;
 const DP_BARS_CHOICES = [1, 2, 4];
 /* クオンタイズの刻み（拍）。0=OFF。1=4分、0.5=8分、0.25=16分。
@@ -11563,6 +11569,16 @@ const DP_BARS_CHOICES = [1, 2, 4];
    遊びの核なので）、ここは演奏の道具として明示的に選ぶ機能なので話が別。
    **記録は生の時刻のまま**で、再生時に丸めるだけの非破壊方式にする。
    OFFに戻せば叩いたままの演奏が戻る */
+/* 周の頭を先取りして叩いたぶんの猶予。人は拍の頭をわずかに早く叩くので、
+   そのままだと「前の周の最後尾」として記録され、直後の周の切り替わりで
+   打ち直し扱いになって消える（実機報告「頭の音が消えることがある」）。
+   この窓に入った打鍵は次の周の0拍として持ち越す。速いテンポで窓が
+   相対的に大きくなりすぎないよう、拍長の1/4で頭打ちにする */
+const DP_PREROLL_SEC = 0.08;
+function _dpPreRollBeats(L) {
+  return Math.min(DP_PREROLL_SEC, _dpBeatDur(L) * 0.25) / _dpBeatDur(L);
+}
+
 const DP_QUANT_CHOICES = [0, 0.25, 0.5, 1];
 const DP_QUANT_LABEL = { 0: 'Q OFF', 0.25: 'Q 1/16', 0.5: 'Q 1/8', 1: 'Q 1/4' };
 const DP_BEATS_PER_BAR = 4;
@@ -11576,7 +11592,7 @@ function _dpLoopNew() {
      打ち込む→次の周で仮再生を聞く→駄目なら叩き直す（takeが差し替わる）→
      良ければRECを終える、という手順になる。RECを終えた時点のtakeが確定する */
   return { playing: false, rec: false, bpm: 152, bars: 2, quant: 0,
-           layers: [], take: null, pass: null, passDirty: false, lastK: null,
+           layers: [], take: null, pass: null, pending: [], passDirty: false, lastK: null,
            head: 0, schedTo: 0, clickTo: 0, sched: null, viz: [], click: false };
 }
 function _dpBeatDur(L) { return 60 / L.bpm; }
@@ -11623,7 +11639,7 @@ function _dpClickVoice(t, accent) {
 }
 
 function _dpLoopEventCount(L) {
-  let n = (L.take ? L.take.length : 0) + (L.pass ? L.pass.length : 0);
+  let n = (L.take ? L.take.length : 0) + (L.pass ? L.pass.length : 0) + L.pending.length;
   for (const layer of L.layers) n += layer.length;
   return n;
 }
@@ -11634,7 +11650,10 @@ function _dpLoopHasPattern(L) {
 /* 録音中の周の切り替わりで、入力があった周を採用する */
 function _dpLoopPromote(L) {
   if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
-  L.pass = []; L.passDirty = false;
+  /* 周の頭を先取りして叩いたぶんを、新しい周の先頭として引き継ぐ */
+  L.pass = L.pending.length ? L.pending : [];
+  L.passDirty = L.pass.length > 0;
+  L.pending = [];
 }
 
 /* パターン再生。schedToまで予約済みとして、先読み窓に入った音を予約する。
@@ -11654,7 +11673,8 @@ function _dpLoopTick() {
     if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
     L.lastK = kNow;
   }
-  if (L.schedTo < now) L.schedTo = now; // 中断からの復帰: 過ぎた分は鳴らさない
+  /* 遅れたぶんは DP_LATE_TOL_SEC までさかのぼって拾う（それ以上は捨てる） */
+  if (L.schedTo < now - DP_LATE_TOL_SEC) L.schedTo = now - DP_LATE_TOL_SEC;
   let guard = 0;
   while (L.schedTo < until && guard++ < 64) {
     const k = Math.floor((L.schedTo - L.head) / dur);
@@ -11668,8 +11688,9 @@ function _dpLoopTick() {
       for (const ev of layer) {
         const t = base + _dpQuantBeat(L, ev.beat) * beat;
         if (t >= L.schedTo && t < segEnd) {
-          _dpVoice(ev.i, t);
-          L.viz.push({ i: ev.i, t }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
+          const at = Math.max(t, now); // 少し遅れていても捨てずに即座に鳴らす
+          _dpVoice(ev.i, at);
+          L.viz.push({ i: ev.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
         }
       }
     }
@@ -11677,7 +11698,7 @@ function _dpLoopTick() {
       const bp = _dpBeatsPerLoop(L);
       for (let b = 0; b < bp; b++) {
         const t = base + b * beat;
-        if (t >= L.schedTo && t < segEnd) _dpClickVoice(t, b % DP_BEATS_PER_BAR === 0);
+        if (t >= L.schedTo && t < segEnd) _dpClickVoice(Math.max(t, now), b % DP_BEATS_PER_BAR === 0);
       }
     }
     L.schedTo = segEnd;
@@ -11709,9 +11730,11 @@ function _dpLoopStart() {
 
 /* 録音を終える。この時点で採用されているtakeを1レイヤーとして確定する */
 function _dpLoopCommit(L) {
+  /* 先取りぶんも取りこぼさない（周の頭で確定した場合） */
+  if (L.pending.length) { L.pass = (L.pass || []).concat(L.pending); L.passDirty = true; }
   if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
   if (L.take && L.take.length) L.layers.push(L.take);
-  L.take = null; L.pass = null; L.passDirty = false; L.lastK = null; L.rec = false;
+  L.take = null; L.pass = null; L.pending = []; L.passDirty = false; L.lastK = null; L.rec = false;
 }
 
 function _dpLoopPlayStop() {
@@ -11730,7 +11753,7 @@ function _dpLoopRec() {
   const L = _dp.loop;
   if (L.rec) { _dpLoopCommit(L); return; }       // 最後に採用されたtakeを確定
   if (!L.playing) _dpLoopStart();
-  L.take = null; L.pass = []; L.passDirty = false;
+  L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
   L.lastK = audioCtx ? Math.floor((audioCtx.currentTime - L.head) / _dpLoopDur(L)) : 0;
   L.rec = true;
 }
@@ -11740,8 +11763,8 @@ function _dpLoopRec() {
    録音していなければ直前に確定したレイヤーを取り消す */
 function _dpLoopUndo() {
   const L = _dp.loop;
-  if (L.rec && ((L.take && L.take.length) || (L.pass && L.pass.length))) {
-    L.take = null; L.pass = []; L.passDirty = false;
+  if (L.rec && ((L.take && L.take.length) || (L.pass && L.pass.length) || L.pending.length)) {
+    L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
     if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
     return;
   }
@@ -11751,7 +11774,7 @@ function _dpLoopUndo() {
 
 function _dpLoopClear() {
   const L = _dp.loop;
-  L.layers = []; L.take = null; L.pass = L.rec ? [] : null;
+  L.layers = []; L.take = null; L.pass = L.rec ? [] : null; L.pending = [];
   L.passDirty = false;
 }
 
@@ -11813,8 +11836,14 @@ function _dpHit(i) {
   if (L.rec && L.playing && L.pass && _dpLoopEventCount(L) < DP_LOOP_MAX_EV) {
     const bp = _dpBeatsPerLoop(L);
     const b = (t - L.head) / _dpBeatDur(L);
-    L.pass.push({ i, beat: ((b % bp) + bp) % bp });
-    L.passDirty = true;
+    const beat = ((b % bp) + bp) % bp;
+    if (beat > bp - _dpPreRollBeats(L)) {
+      /* 周の頭の先取り。次の周の0拍として持ち越す（この周の打ち直し扱いにしない） */
+      L.pending.push({ i, beat: 0 });
+    } else {
+      L.pass.push({ i, beat });
+      L.passDirty = true;
+    }
   }
 }
 
