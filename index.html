@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.32';
+const VERSION = 'v7.33';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11555,7 +11555,16 @@ function _exitDrumPad() {
    再生はrAFではなく音声クロックの先読みスケジューラ（ジングル・キング戦
    シーケンサと同じ作法）。再生位置は毎tick audioCtx.currentTime から計算する。
    カウンタを積む書き方だとバックグラウンド復帰で位置がずれる。 */
-const DP_LOOP_TICK_MS  = 40;    // スケジューラの起動間隔
+const DP_LOOP_TICK_MS  = 25;    // スケジューラの起動間隔
+/* 先読み時間。BGM用のSCHEDULE_AHEAD(0.25秒)をそのまま使っていたが、
+   tickが遅れると「遅れたぶん」ではなく「先読み窓を外れたぶん」が丸ごと落ちる。
+   16パッドとロゴを毎フレーム描く画面なので、重いフレームやタイマーの間引きで
+   簡単に0.25秒を超える（このプロジェクトのプレビューはdocument.hiddenで
+   setIntervalが1秒に間引かれ、実際にパターンが虫食いになった）。
+   刻みを25msに詰めたうえで窓を0.45秒まで広げ、14倍以上の余裕を持たせる。
+   窓を広げると打鍵が次の周に反映されるまでの猶予が減るが、
+   1周は最短でも1.2秒（200BPM・1小節）なので実用上の問題にならない */
+const DP_SCHED_AHEAD   = 0.45;
 const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
 /* tickが遅れたときに、その間に来るはずだった音をどこまで拾うか（秒）。
    描画が重いフレームなどでtickが1回飛ぶと、飛んだ区間の音が丸ごと捨てられる。
@@ -11629,7 +11638,7 @@ function _dpLoopNew() {
      打ち込む→次の周で仮再生を聞く→駄目なら叩き直す（takeが差し替わる）→
      良ければRECを終える、という手順になる。RECを終えた時点のtakeが確定する */
   return { playing: false, rec: false, bpm: 120, bars: 2, quant: 0,
-           layers: [], take: null, pass: null, pending: [], passDirty: false, lastK: null,
+           layers: [], take: null, takeLen: 0, pass: null, pending: [], passDirty: false, lastK: null,
            head: 0, schedTo: 0, clickTo: 0, sched: null, viz: [], click: false };
 }
 function _dpBeatDur(L) { return 60 / L.bpm; }
@@ -11688,12 +11697,18 @@ function _dpLoopHasPattern(L) {
    録音中のtakeは今の長さで録っているので現在の長さを本来の長さとする */
 function _dpLoopSets(L, bpNow) {
   const sets = L.layers.map(l => [l.ev, l.len]);
-  if (L.rec && L.take && !L.passDirty) sets.push([L.take, bpNow]);
+  /* 録音中のtakeも、確定済みのレイヤーと同じく「打ち込んだときの長さ」で扱う。
+     今の小節数で扱うと、録音中に小節数を変えた瞬間に鳴り方が変わってしまう */
+  if (L.rec && L.take && !L.passDirty) sets.push([L.take, L.takeLen || bpNow]);
   return sets;
 }
 /* 録音中の周の切り替わりで、入力があった周を採用する */
 function _dpLoopPromote(L) {
-  if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
+  if (L.passDirty && L.pass && L.pass.length) { L.take = L.pass; L.takeLen = _dpBeatsPerLoop(L); }
+  /* 打ち直しにならなかった周に境目の音だけが入っていた場合、それは
+     いま作っているパターンの一部（頭を先取り／少し遅れて叩いたぶん）なので
+     takeへ足す。捨てると「4発打ったのに3発しか残らない」ことになる */
+  else if (L.take && L.pass && L.pass.length) L.take = L.take.concat(L.pass);
   /* 周の頭を先取りして叩いたぶんを、新しい周の先頭として引き継ぐ。
      takeがある間は境目の音だけで打ち直しとみなさない（窓の外を叩いて初めて
      成立する）。takeがまだ無いなら、その1発も打ち込みとして扱う */
@@ -11708,7 +11723,7 @@ function _dpLoopTick() {
   const L = _dp && _dp.loop;
   if (!L || !audioCtx || !L.playing) return;
   const dur = _dpLoopDur(L), beat = _dpBeatDur(L), bpNow = _dpBeatsPerLoop(L);
-  const now = audioCtx.currentTime, until = now + SCHEDULE_AHEAD;
+  const now = audioCtx.currentTime, until = now + DP_SCHED_AHEAD;
   /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は
      先読みぶん最大0.25秒先を指しているので、そちらで判定すると周の変わり目が
      0.25秒早まり、周の終わり際に叩いたぶんが次の周の記録に落ちる。その1〜2発が
@@ -11789,12 +11804,14 @@ function _dpLoopStart() {
 /* 録音を終える。この時点で採用されているtakeを1レイヤーとして確定する */
 function _dpLoopCommit(L) {
   /* 先取りぶんも取りこぼさない（周の頭で確定した場合） */
-  if (L.pending.length) { L.pass = (L.pass || []).concat(L.pending); L.passDirty = true; }
-  if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
-  /* 打ち込んだときの長さを一緒に持たせる。以後、小節数を変えてもこの長さを
-     基準に繰り返し／切り詰めをする（データは書き換えない） */
-  if (L.take && L.take.length) L.layers.push({ ev: L.take, len: _dpBeatsPerLoop(L) });
-  L.take = null; L.pass = null; L.pending = []; L.passDirty = false; L.lastK = null; L.rec = false;
+  if (L.pending.length) { L.pass = (L.pass || []).concat(L.pending); if (!L.take) L.passDirty = true; }
+  if (L.passDirty && L.pass && L.pass.length) { L.take = L.pass; L.takeLen = _dpBeatsPerLoop(L); }
+  else if (L.take && L.pass && L.pass.length) L.take = L.take.concat(L.pass); // 同上
+  /* 長さは**打ち込んだときの小節数**。確定した瞬間の小節数で決めると、
+     録音のあとに小節数を変えてからRECを切っただけで長さが変わってしまう */
+  if (L.take && L.take.length) L.layers.push({ ev: L.take, len: L.takeLen || _dpBeatsPerLoop(L) });
+  L.take = null; L.takeLen = 0; L.pass = null; L.pending = []; L.passDirty = false;
+  L.lastK = null; L.rec = false;
 }
 
 function _dpLoopPlayStop() {
@@ -11813,7 +11830,7 @@ function _dpLoopRec() {
   const L = _dp.loop;
   if (L.rec) { _dpLoopCommit(L); return; }       // 最後に採用されたtakeを確定
   if (!L.playing) _dpLoopStart();
-  L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
+  L.take = null; L.takeLen = _dpBeatsPerLoop(L); L.pass = []; L.pending = []; L.passDirty = false;
   L.lastK = audioCtx ? Math.floor((audioCtx.currentTime - L.head) / _dpLoopDur(L)) : 0;
   L.rec = true;
 }
@@ -11834,8 +11851,8 @@ function _dpLoopUndo() {
 
 function _dpLoopClear() {
   const L = _dp.loop;
-  L.layers = []; L.take = null; L.pass = L.rec ? [] : null; L.pending = [];
-  L.passDirty = false;
+  L.layers = []; L.take = null; L.takeLen = _dpBeatsPerLoop(L);
+  L.pass = L.rec ? [] : null; L.pending = []; L.passDirty = false;
 }
 
 /* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
