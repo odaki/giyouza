@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.18';
+const VERSION = 'v7.19';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3910,9 +3910,8 @@ function toggleMute() {
      ボス戦なのに通常BGMになる」は、割り込み復帰でbgmSourceがnullの状態でここが
      通り、通常バッファでソースが作られて _bgmIsBoss まで false へ落ちていたのが原因。
      復帰の入口はPAUSE解除（_doResumeBGM）に一本化する */
-  if (!audioMuted && phase !== 'startup' && phase !== 'bossOmen' && !NO_BGM_SOURCE_PHASES.has(phase) &&
-      !_isBossBattlePhase() && audioCtx && !bgmSource && !jingleScheduler) {
-    startBGM(); // 予告中は除外（startBGMはグレースケールを即時解除するため）
+  if (!audioMuted && !_noAutoBgmPhase() && audioCtx && !bgmSource && !jingleScheduler) {
+    startBGM();
   }
 }
 
@@ -7503,6 +7502,23 @@ const KING_DEFEAT_PHASES = new Set(['bossDefeat', 'bossDefeatShrink', 'bossDefea
    テープ加速（tapestart）で世界が動き出す対比を作っている区間なので、
    ポーズ→再開でBGMが鳴り出すと演出が壊れる */
 const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'bossVictoryOutro', 'trueEnding']);
+
+/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の
+   補償経路（bgmSourceが無ければ起動する、という善意の処理）から通常BGMが
+   割り込むのを止めるための述語。内訳:
+     startup            まだ始まっていない
+     bossOmen           予告中（startBGMがグレースケールを即時解除してしまう）
+     soundTest/drumPad  鳴らす音をモード側が完全に握っている
+     NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ
+     キング戦系         テンポ・段階差し替え・テープ停止を戦闘側が一括で持つ
+   除外条件を各ガードにコピーすると、新しいモードを足すたびに片方だけ直す事故が
+   起きる（実際サウンドテスト・ドラムパッドがこの漏れで、ミュート解除すると
+   通常BGMが鳴り出していた）。判定はこの述語に集約すること */
+function _noAutoBgmPhase() {
+  return phase === 'startup' || phase === 'bossOmen' ||
+         phase === 'soundTest' || phase === 'drumPad' ||
+         NO_BGM_SOURCE_PHASES.has(phase) || _isBossBattlePhase();
+}
 
 /* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
 /* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
@@ -14169,7 +14185,10 @@ function togglePause() {
            再生していたため、これらのフェーズ中にポーズ→解除すると
            （直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
            鳴り出してしまっていた（NO_BGM_SOURCE_PHASES参照） */
-        if (NO_BGM_SOURCE_PHASES.has(phase)) return;
+        /* 同じ理由でサウンドテスト・ドラムパッドも除外する。これらはPAUSEの
+           対象外だが、画面回転で入ったPAUSEをフォアグラウンド復帰で自動解除する
+           経路（_autoPauseExempt参照）があり、そこからここへ来られる */
+        if (_noAutoBgmPhase()) return;
         /* ポーズ時に鳴っていたのがボスBGM（暗黒版バッファ）だった場合は、
            再開後もボス用バッファを使い回す（_bgmIsBoss参照）。
            これを省略すると _createBGMSource() のデフォルト引数（通常バッファ）が
