@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.26';
+const VERSION = 'v7.27';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11686,7 +11686,14 @@ function _dpLoopTick() {
   if (L.schedTo < now - DP_LATE_TOL_SEC) L.schedTo = now - DP_LATE_TOL_SEC;
   let guard = 0;
   while (L.schedTo < until && guard++ < 64) {
-    const k = Math.floor((L.schedTo - L.head) / dur);
+    /* 予約済み位置がちょうど周の境目に乗ると、割り算の丸めで (schedTo-head)/dur が
+       整数のわずか手前になり、floorが1つ前の周を指す。するとその周の残り区間は
+       長さ0になり、予約が1歩も進まないまま空回りする。やがて遅延許容の巻き戻しで
+       schedToが境目を飛び越し、**周の頭の音だけが毎回落ちる**。
+       テンポを変えるとschedToを現在時刻に置き直すため、この一致が起きやすくなる
+       （実機報告「120で打ち込んで200で再生すると頭が抜ける」）。
+       極小の下駄を履かせて、境目はその周の先頭として扱う */
+    const k = Math.floor((L.schedTo - L.head) / dur + 1e-9);
     const base = L.head + k * dur;            // この周の先頭（絶対時刻）
     const segEnd = Math.min(until, base + dur);
     /* 録音中のtakeも鳴らす（打ち込んだものが次の周から返ってくる）。
