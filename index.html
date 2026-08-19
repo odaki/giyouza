@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.21';
+const VERSION = 'v7.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11371,8 +11371,10 @@ let _dpPadSprites = null;  // パッド16枚の焼き込み（毎フレームの
      ・3つのうち中央は長方形
      ・角は丸い / 面の質感は16パッドと同じ
    丸いディスプレイを囲む配置なので、円が細くなる上下では内側へ食い込み、
-   円が最も太くなる中央では退がる。その差が上下ボタンの斜辺になる。
-   外側の辺は3つとも垂直で揃う。当たり判定は外接矩形のまま（指の当たりを狭めない） */
+   円が最も太くなる中央では退がる。その差が上下ボタンの傾きになる。
+   **上下のボタンは平行四辺形**で、外側の辺はロゴ側の辺と並行に倒れる
+   （外側だけ垂直の台形ではない）。中央だけが長方形。
+   当たり判定は外接矩形のまま（指の当たりを狭めない） */
 const DP_BTN_SKEW = 14;
 
 /* 角を丸めた多角形のパス（凸多角形向け）。斜辺のある形にも同じ丸めが乗る */
@@ -11399,11 +11401,13 @@ function _dpBtnPoly(c, inset) {
   const k = DP_BTN_SKEW;
   const x = c.x + inset, y = c.y + inset;
   const w = c.w - inset * 2, h = c.h - inset * 2;
+  /* 平行四辺形は2種類だけ。左上と右下、左下と右上がそれぞれ同じ形になる
+     （平行四辺形は左右反転と上下反転が同じ形になるので、鏡像の条件を満たす） */
   switch (c.shape) {
-    case 'topL': return [[x, y], [x + w, y], [x + w - k, y + h], [x, y + h]];
-    case 'botL': return [[x, y], [x + w - k, y], [x + w, y + h], [x, y + h]];
-    case 'topR': return [[x, y], [x + w, y], [x + w, y + h], [x + k, y + h]];
-    case 'botR': return [[x + k, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    case 'topL': case 'botR':
+      return [[x + k, y], [x + w, y], [x + w - k, y + h], [x, y + h]];
+    case 'botL': case 'topR':
+      return [[x, y], [x + w - k, y], [x + w, y + h], [x + k, y + h]];
     case 'midL': return [[x, y], [x + w - k, y], [x + w - k, y + h], [x, y + h]];
     case 'midR': return [[x + k, y], [x + w, y], [x + w, y + h], [x + k, y + h]];
     default:     return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
