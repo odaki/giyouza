@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.27';
+const VERSION = 'v7.28';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11670,7 +11670,7 @@ function _dpLoopPromote(L) {
 function _dpLoopTick() {
   const L = _dp && _dp.loop;
   if (!L || !audioCtx || !L.playing) return;
-  const dur = _dpLoopDur(L), beat = _dpBeatDur(L);
+  const dur = _dpLoopDur(L), beat = _dpBeatDur(L), bpNow = _dpBeatsPerLoop(L);
   const now = audioCtx.currentTime, until = now + SCHEDULE_AHEAD;
   /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は
      先読みぶん最大0.25秒先を指しているので、そちらで判定すると周の変わり目が
@@ -11702,6 +11702,7 @@ function _dpLoopTick() {
     const set = (L.rec && L.take && !L.passDirty) ? L.layers.concat([L.take]) : L.layers;
     for (const layer of set) {
       for (const ev of layer) {
+        if (ev.beat >= bpNow) continue;   // 縮めている間、はみ出したぶんは鳴らさない
         const t = base + _dpQuantBeat(L, ev.beat) * beat;
         if (t >= L.schedTo && t < segEnd) {
           const at = Math.max(t, now); // 少し遅れていても捨てずに即座に鳴らす
@@ -11808,15 +11809,40 @@ function _dpLoopSetBpm(delta) {
   }
 }
 
-/* 小節数の切り替え。増やすと前半にそのまま残り、減らすとはみ出した音は捨てる */
+/* 小節数の切り替え。
+   縮めたとき: **消さない**。再生も記録も先頭のbp拍だけを使い、はみ出したぶんは
+     持ったままにする（元の長さに戻せばそのまま戻ってくる。実機報告
+     「2BARSで録って1BARSにして2BARSに戻すと消えている」への対応）。
+   伸ばしたとき: 新しく現れた区間が空なら、それまでの内容をコピーして敷き詰める
+     （1小節のパターンを2小節にすると同じものが2回鳴る）。いったん縮めて隠して
+     いた内容がある場合はコピーせず、そのまま現す＝元通りになる。 */
 function _dpLoopCycleBars() {
   const L = _dp.loop;
+  const oldBp = _dpBeatsPerLoop(L);
   const i = DP_BARS_CHOICES.indexOf(L.bars);
   L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
   const bp = _dpBeatsPerLoop(L);
-  L.layers = L.layers.map(layer => layer.filter(e => e.beat < bp)).filter(layer => layer.length);
-  if (L.take) L.take = L.take.filter(e => e.beat < bp);
-  if (L.pass) L.pass = L.pass.filter(e => e.beat < bp);
+  if (bp > oldBp) {
+    const all = [L.take, L.pass].concat(L.layers).filter(Boolean);
+    const hidden = all.some(layer => layer.some(e => e.beat >= oldBp));
+    /* 敷き詰めると総数が増えるので、上限を超えるならコピーしない */
+    const grow = all.reduce((n, layer) => n + layer.filter(e => e.beat < oldBp).length, 0)
+                 * (Math.ceil(bp / oldBp) - 1);
+    if (!hidden && _dpLoopEventCount(L) + grow <= DP_LOOP_MAX_EV) {
+      const tile = layer => {
+        const src = layer.filter(e => e.beat < oldBp);
+        if (!src.length) return layer;
+        const out = layer.slice();
+        for (let off = oldBp; off < bp; off += oldBp) {
+          for (const e of src) out.push({ i: e.i, beat: e.beat + off });
+        }
+        return out;
+      };
+      L.layers = L.layers.map(tile);
+      if (L.take) L.take = tile(L.take);
+      if (L.pass) L.pass = tile(L.pass);
+    }
+  }
   if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
 }
 
