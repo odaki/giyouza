@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.20';
+const VERSION = 'v7.21';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11365,18 +11365,49 @@ const DRUM_PADS = [
 let _dp = null;            // { pads, back, size, flash, lastName, jogRot, jogSpin, hits }
 let _dpPadSprites = null;  // パッド16枚の焼き込み（毎フレームのパス＋文字描画を避ける）
 
-/* 平行四辺形のパス。SP-404の面ボタンは長方形でも楕円でもなく、上辺を右へ
-   ずらした斜めの四角。ロゴの左右に並ぶ操作ボタンをこの形にする。
-   当たり判定は外接矩形のまま（指の当たりを狭めない） */
-const DP_BTN_SKEW = 10;
-function _dpBtnPath(x, y, w, h) {
-  const k = DP_BTN_SKEW;
+/* ロゴの左右に並ぶ操作ボタンの形。SP-404の面ボタンに倣う:
+     ・左右の列は互いに鏡像
+     ・片側の上下のボタンは互いに鏡像（上下対称）
+     ・3つのうち中央は長方形
+     ・角は丸い / 面の質感は16パッドと同じ
+   丸いディスプレイを囲む配置なので、円が細くなる上下では内側へ食い込み、
+   円が最も太くなる中央では退がる。その差が上下ボタンの斜辺になる。
+   外側の辺は3つとも垂直で揃う。当たり判定は外接矩形のまま（指の当たりを狭めない） */
+const DP_BTN_SKEW = 14;
+
+/* 角を丸めた多角形のパス（凸多角形向け）。斜辺のある形にも同じ丸めが乗る */
+function _dpRoundPoly(pts, r) {
+  const n = pts.length;
   ctx.beginPath();
-  ctx.moveTo(x + k, y);
-  ctx.lineTo(x + w, y);
-  ctx.lineTo(x + w - k, y + h);
-  ctx.lineTo(x, y + h);
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n];
+    const v1x = p0[0] - p1[0], v1y = p0[1] - p1[1];
+    const v2x = p2[0] - p1[0], v2y = p2[1] - p1[1];
+    const l1 = Math.hypot(v1x, v1y) || 1, l2 = Math.hypot(v2x, v2y) || 1;
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    const ax = p1[0] + v1x / l1 * rr, ay = p1[1] + v1y / l1 * rr;
+    const bx = p1[0] + v2x / l2 * rr, by = p1[1] + v2y / l2 * rr;
+    if (i === 0) ctx.moveTo(ax, ay); else ctx.lineTo(ax, ay);
+    ctx.quadraticCurveTo(p1[0], p1[1], bx, by);
+  }
   ctx.closePath();
+}
+
+/* ボタンの外形。shape: 'rect' / 'topL' / 'botL' / 'topR' / 'botR'
+   L列は左辺が、R列は右辺が外側（垂直）で、内側の辺が斜めになる */
+function _dpBtnPoly(c, inset) {
+  const k = DP_BTN_SKEW;
+  const x = c.x + inset, y = c.y + inset;
+  const w = c.w - inset * 2, h = c.h - inset * 2;
+  switch (c.shape) {
+    case 'topL': return [[x, y], [x + w, y], [x + w - k, y + h], [x, y + h]];
+    case 'botL': return [[x, y], [x + w - k, y], [x + w, y + h], [x, y + h]];
+    case 'topR': return [[x, y], [x + w, y], [x + w, y + h], [x + k, y + h]];
+    case 'botR': return [[x + k, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    case 'midL': return [[x, y], [x + w - k, y], [x + w - k, y + h], [x, y + h]];
+    case 'midR': return [[x + k, y], [x + w, y], [x + w, y + h], [x + k, y + h]];
+    default:     return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+  }
 }
 
 /* 任意のコンテキストへ角丸パスを引く（グローバルのroundRectはctx固定のため） */
@@ -11470,9 +11501,10 @@ function _dpBuildLayout() {
   const sideX0 = panelX + (sideGap - sideW) / 2;
   const sideX1 = panelX + panelW - sideW - (sideGap - sideW) / 2;
   const sideY0 = jog.y - (sideH * 3 + sideSp * 2) / 2;
+  const shapes = [['topL', 'midL', 'botL'], ['topR', 'midR', 'botR']];
   [['rec', 'play', 'click'], ['bpmUp', 'bpmDn', 'bars']].forEach((col, ci) => {
     col.forEach((id, ri) => ctls.push({
-      id, skew: true, w: sideW, h: sideH,
+      id, shape: shapes[ci][ri], w: sideW, h: sideH,
       x: ci === 0 ? sideX0 : sideX1, y: sideY0 + ri * (sideH + sideSp) }));
   });
   /* 筐体は中身をちょうど包む大きさに */
@@ -11807,21 +11839,22 @@ function drawDrumPad() {
     const on  = (c.id === 'rec' && LP.rec) || (c.id === 'click' && LP.click);
     const red = (c.id === 'rec' && LP.rec);
     const live = (c.id === 'undo' || c.id === 'clear') ? _hasPat : true;
-    /* ロゴの左右（c.skew）は平行四辺形、LCD直下の編集2つは角丸の長方形 */
+    /* 面の作りは16パッドと同じ（上が明るく下が暗い縦グラデ＋内側の白ベベル＋
+       外側の影）。形だけがロゴの左右で変わる（_dpBtnPoly参照） */
     const g = ctx.createLinearGradient(0, c.y, 0, c.y + c.h);
     if (red)      { g.addColorStop(0, '#d8564a'); g.addColorStop(0.55, '#b32e22'); g.addColorStop(1, '#7d1d15'); }
     else if (on)  { g.addColorStop(0, '#d9b23a'); g.addColorStop(0.55, '#b08c14'); g.addColorStop(1, '#7d6205'); }
     else          { g.addColorStop(0, '#2b3f34'); g.addColorStop(0.55, '#1d2c24'); g.addColorStop(1, '#131e18'); }
-    const face = (dx, dy, dw, dh) => c.skew
-      ? _dpBtnPath(c.x + dx, c.y + dy, c.w - dw, c.h - dh)
-      : roundRect(c.x + dx, c.y + dy, c.w - dw, c.h - dh, 5);
-    ctx.fillStyle = g;
-    face(0, 0, 0, 0); ctx.fill();
+    const face = inset => c.shape
+      ? _dpRoundPoly(_dpBtnPoly(c, inset), 6)
+      : roundRect(c.x + inset, c.y + inset, c.w - inset * 2, c.h - inset * 2, 5);
     ctx.lineJoin = 'round';
+    ctx.fillStyle = g;
+    face(0); ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1.5;
-    face(1.5, 1.5, 3, 3); ctx.stroke();
+    face(2); ctx.stroke();
     ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1;
-    face(0.5, 0.5, 1, 1); ctx.stroke();
+    face(0.5); ctx.stroke();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 10px sans-serif`;
     ctx.fillStyle = (red || on) ? '#fff8e0' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
@@ -11832,7 +11865,10 @@ function drawDrumPad() {
                 : c.id === 'bpmDn' ? 'TEMPO −'
                 : c.id === 'bars'  ? `${LP.bars} BAR${LP.bars > 1 ? 'S' : ''}`
                 : c.id === 'undo'  ? 'UNDO' : 'CLEAR';
-    ctx.fillText(label, c.x + c.w / 2, c.y + c.h / 2 + 0.5);
+    const lx = c.shape === 'midL' ? c.x + (c.w - DP_BTN_SKEW) / 2
+             : c.shape === 'midR' ? c.x + DP_BTN_SKEW + (c.w - DP_BTN_SKEW) / 2
+             : c.x + c.w / 2;
+    ctx.fillText(label, lx, c.y + c.h / 2 + 0.5);
   }
 
   /* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる。
