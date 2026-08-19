@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.28';
+const VERSION = 'v7.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11563,7 +11563,9 @@ const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジュー
    鳴らすほうが良い。長い中断のあとに大量の音が一気に鳴らないよう上限を置く */
 const DP_LATE_TOL_SEC  = 0.12;
 const DP_BPM_MIN = 60, DP_BPM_MAX = 200, DP_BPM_STEP = 4;
-const DP_BARS_CHOICES = [1, 2, 4];
+/* 4→2→1→4 の順に巡回する。2小節から1小節へ下げるのが1押しで済むように
+   （2で打ち込む→1で半分だけ鳴らす→4で2回鳴らす、という使い方を想定） */
+const DP_BARS_CHOICES = [4, 2, 1];
 /* クオンタイズの刻み（拍）。0=OFF。1=4分、0.5=8分、0.25=16分。
    ゲーム本編の判定では入力の補正を禁止しているが（タイミング精度そのものが
    遊びの核なので）、ここは演奏の道具として明示的に選ぶ機能なので話が別。
@@ -11648,20 +11650,28 @@ function _dpClickVoice(t, accent) {
 
 function _dpLoopEventCount(L) {
   let n = (L.take ? L.take.length : 0) + (L.pass ? L.pass.length : 0) + L.pending.length;
-  for (const layer of L.layers) n += layer.length;
+  for (const layer of L.layers) n += layer.ev.length;
   return n;
 }
 /* 何か入っているか（UNDO/CLEARを効かせてよいか） */
 function _dpLoopHasPattern(L) {
   return L.layers.length > 0 || (L.take && L.take.length > 0) || (L.pass && L.pass.length > 0);
 }
+/* 再生に使う組を返す。各要素は [イベント配列, そのパターンの本来の長さ(拍)]。
+   録音中のtakeは今の長さで録っているので現在の長さを本来の長さとする */
+function _dpLoopSets(L, bpNow) {
+  const sets = L.layers.map(l => [l.ev, l.len]);
+  if (L.rec && L.take && !L.passDirty) sets.push([L.take, bpNow]);
+  return sets;
+}
 /* 録音中の周の切り替わりで、入力があった周を採用する */
 function _dpLoopPromote(L) {
   if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
   /* 周の頭を先取りして叩いたぶんを、新しい周の先頭として引き継ぐ。
-     境目の音だけでは打ち直しとみなさない（窓の外を叩いて初めて成立する） */
+     takeがある間は境目の音だけで打ち直しとみなさない（窓の外を叩いて初めて
+     成立する）。takeがまだ無いなら、その1発も打ち込みとして扱う */
   L.pass = L.pending.length ? L.pending : [];
-  L.passDirty = false;
+  L.passDirty = !L.take && L.pass.length > 0;
   L.pending = [];
 }
 
@@ -11699,15 +11709,19 @@ function _dpLoopTick() {
     /* 録音中のtakeも鳴らす（打ち込んだものが次の周から返ってくる）。
        ただしこの周に叩き直しが始まっていたら、古いtakeは引っ込める。
        そうしないと叩き直しの最中に旧シーケンスと二重に聴こえて判断できない */
-    const set = (L.rec && L.take && !L.passDirty) ? L.layers.concat([L.take]) : L.layers;
-    for (const layer of set) {
-      for (const ev of layer) {
-        if (ev.beat >= bpNow) continue;   // 縮めている間、はみ出したぶんは鳴らさない
-        const t = base + _dpQuantBeat(L, ev.beat) * beat;
-        if (t >= L.schedTo && t < segEnd) {
-          const at = Math.max(t, now); // 少し遅れていても捨てずに即座に鳴らす
-          _dpVoice(ev.i, at);
-          L.viz.push({ i: ev.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
+    /* 小節数を変えても打ち込みには触れない。本来の長さより短くしたときは
+       はみ出したぶんを鳴らさず、長くしたときは本来の長さぶんを繰り返して
+       埋める（2小節のパターンを4小節にすると2回鳴る） */
+    for (const [evs, len] of _dpLoopSets(L, bpNow)) {
+      for (const ev of evs) {
+        for (let off = 0; ev.beat + off < bpNow; off += len) {
+          const t = base + _dpQuantBeat(L, ev.beat + off) * beat;
+          if (t >= L.schedTo && t < segEnd) {
+            const at = Math.max(t, now); // 少し遅れていても捨てずに即座に鳴らす
+            _dpVoice(ev.i, at);
+            L.viz.push({ i: ev.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
+          }
+          if (len <= 0) break;
         }
       }
     }
@@ -11750,7 +11764,9 @@ function _dpLoopCommit(L) {
   /* 先取りぶんも取りこぼさない（周の頭で確定した場合） */
   if (L.pending.length) { L.pass = (L.pass || []).concat(L.pending); L.passDirty = true; }
   if (L.passDirty && L.pass && L.pass.length) L.take = L.pass;
-  if (L.take && L.take.length) L.layers.push(L.take);
+  /* 打ち込んだときの長さを一緒に持たせる。以後、小節数を変えてもこの長さを
+     基準に繰り返し／切り詰めをする（データは書き換えない） */
+  if (L.take && L.take.length) L.layers.push({ ev: L.take, len: _dpBeatsPerLoop(L) });
   L.take = null; L.pass = null; L.pending = []; L.passDirty = false; L.lastK = null; L.rec = false;
 }
 
@@ -11809,48 +11825,15 @@ function _dpLoopSetBpm(delta) {
   }
 }
 
-/* 小節数の切り替え。
-   縮めたとき: **消さない**。再生も記録も先頭のbp拍だけを使い、はみ出したぶんは
-     持ったままにする（元の長さに戻せばそのまま戻ってくる。実機報告
-     「2BARSで録って1BARSにして2BARSに戻すと消えている」への対応）。
-   伸ばしたとき: 新しく現れた区間が空なら、それまでの内容をコピーして敷き詰める
-     （1小節のパターンを2小節にすると同じものが2回鳴る）。いったん縮めて隠して
-     いた内容がある場合はコピーせず、そのまま現す＝元通りになる。 */
+/* 小節数の切り替え。**打ち込みには一切触れない**。
+   再生・記録の長さが変わるだけで、短くすればはみ出したぶんが鳴らなくなり、
+   長くすれば本来の長さぶんが繰り返される（_dpLoopTick参照）。
+   2小節で録る→1小節で前半だけ鳴らす→4小節で2回鳴らす、が行き来できる */
 function _dpLoopCycleBars() {
   const L = _dp.loop;
-  const oldBp = _dpBeatsPerLoop(L);
   const i = DP_BARS_CHOICES.indexOf(L.bars);
   L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
-  const bp = _dpBeatsPerLoop(L);
-  if (bp > oldBp) {
-    const all = [L.take, L.pass].concat(L.layers).filter(Boolean);
-    const hidden = all.some(layer => layer.some(e => e.beat >= oldBp));
-    /* 敷き詰めると総数が増えるので、上限を超えるならコピーしない */
-    const grow = all.reduce((n, layer) => n + layer.filter(e => e.beat < oldBp).length, 0)
-                 * (Math.ceil(bp / oldBp) - 1);
-    if (!hidden && _dpLoopEventCount(L) + grow <= DP_LOOP_MAX_EV) {
-      const tile = layer => {
-        const src = layer.filter(e => e.beat < oldBp);
-        if (!src.length) return layer;
-        const out = layer.slice();
-        for (let off = oldBp; off < bp; off += oldBp) {
-          for (const e of src) out.push({ i: e.i, beat: e.beat + off });
-        }
-        return out;
-      };
-      L.layers = L.layers.map(tile);
-      if (L.take) L.take = tile(L.take);
-      if (L.pass) L.pass = tile(L.pass);
-    }
-  }
   if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
-}
-
-function _dpLoopCycleQuant() {
-  const L = _dp.loop;
-  const i = DP_QUANT_CHOICES.indexOf(L.quant);
-  L.quant = DP_QUANT_CHOICES[(i + 1) % DP_QUANT_CHOICES.length];
-  if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime; // 予約を引き直す
 }
 
 function _dpLoopToggleClick() {
@@ -11884,9 +11867,12 @@ function _dpHit(i) {
       /* 周の頭の先取り。次の周の0拍として持ち越す */
       L.pending.push({ i, beat: 0 });
     } else if (beat < win) {
-      /* 少し遅れて境目に落ちた音。0拍へ補正して入れるが、これ単体では
-         打ち直しとみなさない（直前のパターンを1発で潰さないため） */
+      /* 少し遅れて境目に落ちた音。0拍へ補正して入れる。
+         直前のパターン(take)がある間は、これ単体では打ち直しとみなさない
+         （1発で潰さないため）。まだtakeが無いなら普通の打ち込みとして扱う
+         ——そうしないと「RECを押してすぐ頭だけ叩く」打ち込みが取れない */
       L.pass.push({ i, beat: 0 });
+      if (!L.take) L.passDirty = true;
     } else {
       L.pass.push({ i, beat });
       L.passDirty = true;
