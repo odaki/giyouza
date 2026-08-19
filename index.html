@@ -553,7 +553,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.31';
+const VERSION = 'v7.32';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11533,6 +11533,7 @@ function _startDrumPad() {
 }
 
 function _exitDrumPad() {
+  _dpHoldEnd();
   _dpLoopStopSched(); // ループの予約を畳んでから抜ける（残すと戻った後も鳴り続ける）
   _dp = null;
   _startSoundTest(); // 入ってきたサウンドテストへ戻す
@@ -11563,6 +11564,32 @@ const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジュー
    鳴らすほうが良い。長い中断のあとに大量の音が一気に鳴らないよう上限を置く */
 const DP_LATE_TOL_SEC  = 0.12;
 const DP_BPM_MIN = 40, DP_BPM_MAX = 200, DP_BPM_STEP = 1;
+/* TEMPO±の長押し。1押し1BPMだと40→200に160回かかるので、押しっぱなしで
+   連続変化させる。押した直後は動かさず（単押しと区別）、しばらくすると
+   ゆっくり流れ、さらに押し続けると加速する */
+const DP_HOLD_DELAY_MS = 380;   // 長押しと認めるまで
+const DP_HOLD_SLOW_MS  = 90;    // 連続変化の間隔
+const DP_HOLD_FAST_MS  = 28;    // 加速後の間隔
+const DP_HOLD_ACCEL_MS = 1100;  // これだけ押し続けたら加速
+let _dpHold = null;             // { delta, t0, next, timer }
+
+function _dpHoldEnd() {
+  if (_dpHold && _dpHold.timer) clearInterval(_dpHold.timer);
+  _dpHold = null;
+}
+function _dpHoldTick() {
+  const H = _dpHold;
+  if (!H || !_dp || phase !== 'drumPad') { _dpHoldEnd(); return; }
+  const now = performance.now();
+  if (now < H.next) return;
+  _dpLoopSetBpm(H.delta);
+  H.next = now + (now - H.t0 > DP_HOLD_ACCEL_MS ? DP_HOLD_FAST_MS : DP_HOLD_SLOW_MS);
+}
+function _dpHoldBegin(delta) {
+  _dpHoldEnd();
+  const t0 = performance.now();
+  _dpHold = { delta, t0, next: t0 + DP_HOLD_DELAY_MS, timer: setInterval(_dpHoldTick, 16) };
+}
 /* 4→2→1→4 の順に巡回する。2小節から1小節へ下げるのが1押しで済むように
    （2で打ち込む→1で半分だけ鳴らす→4で2回鳴らす、という使い方を想定） */
 const DP_BARS_CHOICES = [4, 2, 1];
@@ -11821,7 +11848,10 @@ function _dpLoopSetBpm(delta) {
   L.bpm = next;
   if (L.playing && audioCtx) {
     L.head = audioCtx.currentTime - pos * _dpBeatDur(L);
-    L.schedTo = audioCtx.currentTime;
+    /* ここで予約位置(schedTo)を巻き戻さない。巻き戻しても既にWeb Audioへ
+       渡した先読みぶんは取り消せないので、同じ音が二度鳴るだけになる。
+       長押しで毎秒何十回も呼ばれる経路なので、そのまま先へ進ませ、
+       先読みの残り（最大0.25秒）が旧テンポ、その先が新テンポになるようにする */
   }
 }
 
@@ -11834,6 +11864,14 @@ function _dpLoopCycleBars() {
   const i = DP_BARS_CHOICES.indexOf(L.bars);
   L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
   if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
+}
+
+/* クオンタイズの刻みを巡回する（OFF → 1/16 → 1/8 → 1/4 → OFF）。
+   記録は生のままで、再生時に丸めるだけ（_dpQuantBeat参照） */
+function _dpLoopCycleQuant() {
+  const L = _dp.loop;
+  const i = DP_QUANT_CHOICES.indexOf(L.quant);
+  L.quant = DP_QUANT_CHOICES[(i + 1) % DP_QUANT_CHOICES.length];
 }
 
 function _dpLoopToggleClick() {
@@ -11890,8 +11928,8 @@ function _drumPadTouch(x, y) {
     if (c.id === 'undo')  _dpLoopUndo();
     if (c.id === 'clear') _dpLoopClear();
     if (c.id === 'click') _dpLoopToggleClick();
-    if (c.id === 'bpmUp') _dpLoopSetBpm(+DP_BPM_STEP);
-    if (c.id === 'bpmDn') _dpLoopSetBpm(-DP_BPM_STEP);
+    if (c.id === 'bpmUp') { _dpLoopSetBpm(+DP_BPM_STEP); _dpHoldBegin(+DP_BPM_STEP); }
+    if (c.id === 'bpmDn') { _dpLoopSetBpm(-DP_BPM_STEP); _dpHoldBegin(-DP_BPM_STEP); }
     if (c.id === 'bars')  _dpLoopCycleBars();
     if (c.id === 'quant') _dpLoopCycleQuant();
     return;
@@ -14899,6 +14937,13 @@ function _onTouchStart(e) {
    指を離す touchend で initGame() を呼ぶことで、iOS Safari が
    AudioContext を確実に running にしてからジングルを開始できる。
    touchend も iOS ユーザーアクティベーションとして認定される。 */
+/* 指やボタンを離したらTEMPOの長押しを止める。ドラムパッド専用の仕組みなので、
+   ここでは_dpHoldEnd（中でnullチェック）を呼ぶだけにして他の経路に触らない */
+document.addEventListener('touchend',    _dpHoldEnd, { passive: true });
+document.addEventListener('touchcancel', _dpHoldEnd, { passive: true });
+window.addEventListener('mouseup',       _dpHoldEnd, { passive: true });
+window.addEventListener('blur',          _dpHoldEnd);
+
 document.addEventListener('touchend', e => {
   if (_pendingTrueEndingReplay) {
     _pendingTrueEndingReplay = false;
