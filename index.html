@@ -118,12 +118,12 @@ const _dbgNum  = (name, fallback = null) => {
 
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d', { alpha: false }); // 毎フレーム全面を塗るため不透明化（ページとの合成コスト削減）
-/* 背景を別canvasへ分けて重ねる案（レイヤー分割）は実装して実機A/Bまでやったが、
-   効果が無かったので削除した（2026-08-15。?layers として一時的に入れていた）。
+/* 背景を別canvasへ分けて重ねる案（レイヤー分割）は採らない。実装して実機A/Bまで確認した
+   うえでの結論（2026-08-15）。
    理由: 分離すると本体canvasを透明にする必要があり（不透明のままでは背後が見えない）、
-   「全画面のテクスチャ転送1回」を「全画面のクリア＋合成時の全画面ブレンド」に
-   置き換えるだけになる。しかもこのゲームは前景が毎フレーム全画面ぶん変化するので、
-   レイヤー分割本来の利点（変化しない領域を再ラスタライズしない）がそもそも効かない。
+   「全画面のテクスチャ転送1回」を「全画面のクリア＋合成時の全画面ブレンド」に置き換える
+   だけになる。しかもこのゲームは前景が毎フレーム全画面ぶん変化するので、レイヤー分割本来の
+   利点（変化しない領域を再ラスタライズしない）がそもそも効かない。
    実機ではgapが有無どちらも30〜35msで差が出なかった。再挑戦しないこと。
    塗る量を減らしたいなら実解像度側で下げる（_RS_* の自動制御を参照） */
 /* 外付けキーボードのkeydownをページのJSへ届けるための下準備。
@@ -283,8 +283,8 @@ function _perfLogSpike(gapMs) {
   }
   /* 直前のスパイクからの間隔。周期性のある事象は、この値が既知の周期
      （拍=約395ms、ボスBGMの1ループ、1秒など）に一致するかどうかで発生源を絞れる。
-     実機では「BGMの一周と同期して詰まる」という体感報告が出ており、
-     BGMを止めても再現したため、周期の実測値そのものが必要になった */
+     「BGMの一周と同期して詰まる」ように感じられてもBGMを止めると再現する、といった
+     切り分けには周期の実測値そのものが要る */
   _perfSpikes.unshift({
     gap: gapMs,
     phase: phase,
@@ -419,12 +419,12 @@ function drawPerf() {
   _perfElement().textContent = text;
 }
 /* devicePixelRatio対応: バッファを物理ピクセル解像度で確保して高DPI端末でも鮮明に描画。
-   ?dpr=N で上書きできる（1〜3にクランプ）。実機計測で「update()+draw()は5〜7msしか
-   かかっていないのに、フレーム間隔は31〜47ms」という結果が出たため、詰まりが
-   こちらのJSの外側＝キャンバスの塗り直しとGPUへの転送にある可能性を、実機で
-   その場で切り分けられるようにするための手段。縦画面420×820をdpr3で確保すると
-   実ピクセルは1260×2460＝約310万画素あり、dpr2にすれば約45%に減る。
-   本番の既定は従来どおり端末のdevicePixelRatio */
+   ?dpr=N で上書きできる（1〜3にクランプ）。実機計測では「update()+draw()は5〜7msしか
+   かかっていないのに、フレーム間隔は31〜47ms」という結果が出る。詰まりがJSの外側＝
+   キャンバスの塗り直しとGPUへの転送にあるかどうかを、実機でその場で切り分けるための手段。
+   縦画面420×820をdpr3で確保すると実ピクセルは1260×2460＝約310万画素あり、dpr2にすれば
+   約45%に減る。
+   本番の既定は端末のdevicePixelRatio */
 /* 上限を2に定める根拠（iPhone 16・縦画面での実測）:
      dpr3 (1260x2460): frame work 5.0ms / gap 33ms / rAF 60fps
      dpr2 ( 840x1640): frame work 6.0ms / gap 56ms / rAF 59fps
@@ -448,8 +448,8 @@ const _dpr = (() => {
    **キャッシュの焼き込み解像度(_dpr)は動かさない**のが要点。スプライトは論理サイズで
    貼るので、実解像度が下がれば縮小されるだけで破綻しない。焼き直しが要らないので、
    プールの作り直し・戦闘中の再構築といった危険な処理が一切発生しない
-   （_freeResultOCs等のプールは_dpr基準の大きさで貯まっており、焼き込み解像度を
-   動かすと古い大きさのまま再利用されて崩れる。そこを触らない設計にした）。
+   （_freeResultOCs等のプールは_dpr基準の大きさで貯まっており、焼き込み解像度を動かすと
+   古い大きさのまま再利用されて崩れる。ここは触らない）
 
    判定はwall-clock基準のtick間隔（_frameTimes と同じ値）で行う。
    往復（ハンチング）を防ぐため、下げる条件より戻す条件をかなり厳しくし、
@@ -529,7 +529,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.34';
+const VERSION = 'v7.35';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -570,10 +570,9 @@ const GIGIGIGI = ['ギ', 'ギ', 'ギ', 'ギ'];  // 小当たり③
 const ZAZAZAZA = ['ザ', 'ザ', 'ザ', 'ザ'];  // 小当たり④
 
 const WR  = IS_PORTRAIT ? 66  : 95;
-/* KING_WR: こんがりミニリール半径。let なのは縦画面で_initBossBattle実行時に
-   横幅いっぱいへ動的に広げ直すため（実機要望: 「小さすぎる、左右上部の
-   アイコン部を除いた横幅と同程度に」。BTN_RIGHT/BTN_SIZEがこの宣言より
-   後で定義されるため、依存する再計算はここではなく_initBossBattle内で行う）。
+/* KING_WR: こんがりミニリール半径。let なのは縦画面で_initBossBattle実行時に横幅いっぱいへ
+   動的に広げ直すため（左右上部のアイコン部を除いた横幅と同程度まで使う。BTN_RIGHT/BTN_SIZEが
+   この宣言より後で定義されるため、依存する再計算はここではなく_initBossBattle内で行う）。
    ここでの初期値は横画面（常にこのまま）およびBTN_*定義前の暫定値 */
 let KING_WR = IS_PORTRAIT ? 24 : 34; // こんがりミニリール半径（通常ホイールより小さい）
 const KING_REEL_GAP = 10; // 縦画面: 的同士の隙間(px)。BTN_M/BTN_GAPと同じ値で統一
@@ -634,8 +633,8 @@ function _mkCache(w, h) {
 }
 
 /* ── 静的レイヤーキャッシュ ──
-   雲・獅子は毎フレーム同じパスを繰り返し描画していた。
-   OffscreenCanvas に事前描画しておき、drawImage() 1回で済ませる。 */
+   雲・獅子は毎フレーム同じパスを描くことになる。OffscreenCanvas に事前描画しておき、
+   drawImage() 1回で済ませる */
 let _staticLayerCanvas = null; // 雲 + 獅子（PC のみ）を合成した透明オフスクリーン
 
 function _prebuildStaticLayers() {
@@ -865,9 +864,9 @@ const _BEAT_BORDER_COLORS = /* ミュート時枠線: rgba(245,208,32, 0.3〜0.8
 /* BEAT BONUS 虹色LUT: 120段階×3°=360° 起動時1回のみ生成、毎フレームはインデックス参照のみ（GCゼロ） */
 const _RAINBOW_COLORS = Array.from({length:120}, (_,i) => `hsl(${Math.round(i*3)},100%,62%)`);
 const BEAT_BONUS_CHAIN = 100; // BEAT BONUS発動に必要なチェーン数（閾値変更はここだけ）
-const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率（v3.83: 2→4 難易度調整）
-const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率（v3.83: 0.30→0.60 難易度調整）
-const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（v3.84 追加）
+const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率
+const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率
+const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（超大当たりより低い）
 /* ── キングギヨウザ（ボス戦）M1: 蓄積・予兆・出現予告 ── */
 const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
 const KING_OMEN_RATIO      = 0.8;  // 予兆演出（霊の横切り）開始割合
@@ -1082,8 +1081,8 @@ let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニ
 let _arrowProgressAtPause = -1; // ポーズ時に shooting 中だった場合のarrowProgress保存値
 const ARROW_FLIGHT_SEC = 4 / 60; // 矢の飛行時間: 67ms固定（フレームレート非依存）
 /* 入力ブロック系の時間ガードは wall-clock（performance.now）基準にする。
-   フレームカウンタだと rAF 停止中（document.hidden 等）に update() が走らず
-   永久に失効しないため（v3.74 検証時に発覚した凍結の再発防止） */
+   フレームカウンタだと rAF 停止中（document.hidden 等）に update() が走らず永久に失効せず、
+   入力が固まったままになる */
 let shootGuardUntil = 0;    // init直後の誤射防止期限（performance.now() ms）
 let pendingShoot = false; // done/tapestart中の先打ちクリックバッファ
 let slowRampEndTime = 0;   // スローランプ終了のaudioCtx時刻（0=ランプなし）
@@ -1164,11 +1163,11 @@ let coins, bet, betLocked, isGameOver;
    betLockedは「1的目を射ったらBETを変えられない」ためのフラグ。トライ開始で降り、
    1的目の発射で立つ。これだけだと、リズムに乗って連続でトライしている間は
    「トライ開始でBETボタンが点灯 → 数フレーム後の1的目で消灯」を毎トライ繰り返し、
-   ちょうど射撃の瞬間に点滅が重なる（実機プレイでの指摘）。
-   実際にBETを変えたい人はトライ開始からビート2つぶんは待つので、解放自体を
-   遅らせてしまえば、リズムプレイ中はボタンの状態が一度も変わらない。
-   これは「実時間で失効するガード」なのでwall-clock基準（rAFが止まる場面でも
-   正しく失効させる。CLAUDE.mdの時間条件の実装規約）。単位はBGMの拍。 */
+   ちょうど射撃の瞬間に点滅が重なる。
+   実際にBETを変えたい人はトライ開始からビート2つぶんは待つので、解放自体を遅らせて
+   しまえば、リズムプレイ中はボタンの状態が一度も変わらない。
+   これは「実時間で失効するガード」なのでwall-clock基準（rAFが止まる場面でも正しく
+   失効させる。CLAUDE.mdの時間条件の実装規約）。単位はBGMの拍 */
 const BET_UNLOCK_BEATS = 2.25;  // トライ開始から解放までの拍数（2拍と少し）
 let _betUnlockAt = 0;           // 解放時刻（performance.now() ms基準）
 let isMissResult = false;   // ハズレフラグ（自動リセット制御用）
@@ -1263,7 +1262,7 @@ const LS_SCHEMA = 'game_schema';
    - フォーマットバージョン（保存構造を変えたら手動インクリメント）
    - 実績IDリスト（実績追加/削除/ID変更で自動変化）
    どちらか変わると旧データを全消去して初期状態に戻す */
-const SCHEMA_VER  = 2; // 保存フォーマット変更時にインクリメント（v2: 実績の値を解除時刻に変更・統計にbestSyncChain追加）
+const SCHEMA_VER  = 2; // 保存フォーマットを変えたらインクリメントする（値が変わると旧データを全消去）
 const SCHEMA_HASH = `v${SCHEMA_VER}|${ACHIEVEMENTS.map(a => a.id).join(',')}`;
 
 function lsClearAll() {
@@ -1339,9 +1338,9 @@ function _buildResultOC(w) {
   c.font = `bold 44px ${FONT_MIN}`;
   c.textAlign = 'center'; c.textBaseline = 'middle';
   /* ?noresblur: グローを外して焼く調査用フラグ。
-     「1射ごとの30msスパイクはこのぼかしのラスタライズではないか」という仮説の
-     検証用に用意したが、実機A/Bで**否定された**（フラグの有無でgap最大31ms・
-     spike 30ms前後が全く変わらなかった）。ここは犯人ではない。再度疑わないこと。
+     「1射ごとの30msスパイクはこのぼかしのラスタライズではないか」という仮説は実機A/Bで
+     **否定されている**（フラグの有無でgap最大31ms・spike 30ms前後が全く変わらない）。
+     ここは犯人ではないので再度疑わないこと。
      フラグは同種の切り分けに再利用できるので残置する */
   if (!_NO_RES_BLUR) { c.shadowColor = glowC; c.shadowBlur = 10 + w.syncScore * 20; }
   c.fillStyle = fillC;
@@ -1445,10 +1444,9 @@ const BAR_X = 335, BAR_W = 390, BAR_Y = H - 106, BAR_H = 80;
 /* ── BETバーレイアウト定数（縦画面） ── */
 const P_BAR_X = 12, P_BAR_Y = 732, P_BAR_W = W - 24, P_BAR_H = 66;
 /* ── こんがりゲージ（横画面、戦闘中はBETバー位置を差し替えて使用）専用の高さ ──
-   BAR_H(80)はBETバー本来の必要高さで、こんがりゲージには過大（実機要望:
-   「縦幅はもっと狭くて良い」）。底辺（BAR_Y+BAR_H）は据え置きで上端だけ下げる
-   ＝ゲージが縮んだ分、上のリール・ボスの表示領域が広がり「ルーレットが下側に
-   移動」という要望にもつながる（_initBossBattleのpanelTop参照） */
+   BAR_H(80)はBETバー本来の必要高さで、こんがりゲージには過大。底辺（BAR_Y+BAR_H）は据え置きで
+   上端だけ下げる＝ゲージが縮んだ分、上のリール・ボスの表示領域が広がる
+   （_initBossBattleのpanelTop参照） */
 const KING_GAUGE_H = 50;
 const KING_GAUGE_Y = BAR_Y + BAR_H - KING_GAUGE_H;
 
@@ -1512,12 +1510,11 @@ let _ctxStallSec      = 0;    // ctx時計が止まったまま経過した秒�
 let _ctxStallMaxSec   = 0;    // セッション中の最大値（復帰後に振り返れるよう保持）
 let _ctxStallLastCtx  = null;
 let _ctxStallLastWall = 0;
-/* ctx時計が止まっているか（＝stateがrunningでも実体は死んでいるか）。
-   実機で確定した症状: iPad + Bluetoothイヤホンで、別タブを見た後に戻して
-   MUTE→解除→PAUSE解除すると無音のまま。そのとき ?perf は
-   `ctx running` / `stall 7.7s` / `re 0` / `srco` を示していた。
+/* ctx時計が止まっているか（＝stateがrunningでも実体は死んでいるか）を見る。
+   iPad + Bluetoothイヤホンで、別タブを見た後に戻してMUTE→解除→PAUSE解除すると無音のまま
+   になる症状があり、そのとき ?perf は `ctx running` / `stall 7.7s` / `re 0` / `srco` を示す。
    stateが 'running' を返すので _resumeAudioCtx の再作成分岐（interrupted/closed）も、
-   toggleMute の `state !== 'running'` 分岐も一度も通らず、復帰の手段が無かった。 */
+   toggleMute の `state !== 'running'` 分岐も通らない。stateではなく時計の進みで検出する */
 const CTX_STALL_MIN = 0.5;   // これ以上ctx時計が止まっていたら死んだとみなす
 function _ctxLooksStalled() { return !!audioCtx && _ctxStallSec > CTX_STALL_MIN; }
 
@@ -1703,8 +1700,8 @@ function _setBgmRateJS(from, to, startT, durSec, easeType = 'linear') {
   _bgmRateEase  = easeType;
 }
 
-/* ease補間ヘルパー: p∈[0,1] → easeOut/easeIn/linear の補間係数を返す
-   _tapeRateCurve と _getBgmRateJS で同一式が重複していたため共通化 */
+/* ease補間ヘルパー: p∈[0,1] → easeOut/easeIn/linear の補間係数を返す。
+   _tapeRateCurve と _getBgmRateJS が同じ式を使うのでここに集約する */
 function _easeF(p, type) {
   if (type === 'easeOut') return Math.sin(p * Math.PI / 2);
   if (type === 'easeIn')  return 1 - Math.cos(p * Math.PI / 2);
@@ -1781,7 +1778,7 @@ function getBeatPulse() {
    （出力タイムラインとスケジュールタイムラインを混在させると Bluetooth 遅延環境で
     extra が常に0へクランプされ、tick量子化バイアス＋ジッターが判定に乗る）。
    _JUDGE_TRIM（?jlat）は判定グリッドのみを較正する（表示には影響しない）。
-   音声が使えない場合は null（呼び出し側が従来動作へ退避する） */
+   音声が使えない場合は null（呼び出し側が音声なしの動作へ退避する） */
 function _bgmJudgePos(atPerfMs) {
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null) return null;
   const rate    = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo;
@@ -1820,10 +1817,10 @@ function calcSyncScore(atPerfMs) {
   if (rawPos === null || loopDur <= 0) return 0.5;
   const loopN    = Math.floor(rawPos / loopDur);
   const posInLoop = rawPos - loopN * loopDur;
-  /* 評価グリッドを8分音符（BGM_BEAT/2）に変更。
-     メロディは4分・8分音符両方に音符があるため、4分音符グリッドでは
-     8分音符タイミングが常に最悪スコアになっていた。
-     ビートリング表示（getBeatPulse）は4分音符周期のまま維持。 */
+  /* 評価グリッドは8分音符（BGM_BEAT/2）。
+     メロディは4分・8分音符の両方に音符があるため、4分音符グリッドでは8分音符タイミングが
+     常に最悪スコアになる。
+     ビートリング表示（getBeatPulse）は4分音符周期のまま */
   const halfBeat = BGM_BEAT / 2;
   const ph       = ((posInLoop % halfBeat) + halfBeat) % halfBeat; // 0〜halfBeat
   const distSec  = ph < halfBeat / 2 ? ph : halfBeat - ph;        // 最近傍8分音符までの距離
@@ -1913,15 +1910,14 @@ function _updateBgmToneShelf() {
 
 /* ボスBGMの事前レンダリングを、手が空いたときに1本ずつ行う。
 
-   まとめて走らせてはいけない。実測（Mac）で5本同時だと完了まで308ms、
-   ノードのスケジュールだけでメインスレッドを28ms塞ぐ。実機の?perfでも初回タップの
-   unlk が47msになっており、これは音声経路が開く瞬間と重なる。オーディオスレッドの
-   処理落ち（＝ざらついた雑音）とタップの引っかかりの両方の要因になる。
+   まとめて走らせてはいけない。実測（Mac）で5本同時だと完了まで308ms、ノードのスケジュール
+   だけでメインスレッドを28ms塞ぐ。実機の?perfでも初回タップの unlk が47msになり、これは
+   音声経路が開く瞬間と重なる。オーディオスレッドの処理落ち（＝ざらついた雑音）とタップの
+   引っかかりの両方の要因になる。
 
-   ただし「後回し」にしただけでは、king値が閾値近くで保存されている状態でリロード
-   されると、焼き上がる前に突入しうる（ユーザー指摘。未完なら通常BGMで代用される
-   仕様なので無音にはならないが、暗黒BGMも段階切り替えも効かないまま戦うことになる）。
-   そこで2つの保険を置く:
+   ただし「後回し」だけでは、king値が閾値近くで保存されている状態でリロードされると、
+   焼き上がる前に突入しうる（未完なら通常BGMで代用される仕様なので無音にはならないが、
+   暗黒BGMも段階切り替えも効かないまま戦うことになる）。そこで2つの保険を置く:
      ・保存されたking値が予兆割合を超えていれば、最初の1本の待ちを短くする
      ・予兆に入った時点で未完なら、待たずにその場で焼く（_startBossOmenから呼ぶ。
        予兆はテープストップ1.6秒＋演出が続くので、1本ぶんの時間は十分に取れる） */
@@ -1958,7 +1954,7 @@ function _scheduleBossBgmRenders(immediate = false) {
       /* こんがり度が上がるほど合いの手の食い込みを増やす（BGM_TAIKO_PICKUP_TIERS参照） */
       taikoPickupSet: _taikoPickupSetForTier(tier),
       bassDurMul: 0.85, bassDecay: 0.05,
-      useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.10, // 倍量指定(0.64→1.28)から少しだけ戻す（実機評価）
+      useTaiko: true, useRumble: true, melBossBass: true, kickVol: 1.10, // 通常BGMより厚いキック（倍量よりわずかに控えめ）
       useLimiter: true, // ステップ0の同時発音でピークが2.7前後に達するためコンプレッサー必須
       rumbleMellow: tier / (BGM_TIER_COUNT - 1),
     }).then(buf => {
@@ -2005,8 +2001,8 @@ function getAudioCtx() {
        初回タップに間に合わせる必要はまったく無い。キング戦に入るには
        1000ギヨウザ必要で何トライもかかる。
        こんがり度の段階ぶん（BGM_TIER_COUNT個）を用意し、上昇に合わせてループの
-       継ぎ目で差し替える（段階で変わる3要素はBGM_TIER_COUNTの定義部、
-       切り替えの仕組みは_updateBossBgmTierを参照）。tier0は従来のbossBgmBufferと同一内容 */
+       切り替えの仕組みは_updateBossBgmTierを参照）。tier0は素のボスBGM（bossBgmBuffer）と
+       同一内容 */
     bossBgmBuffers = new Array(BGM_TIER_COUNT).fill(null);
     _scheduleBossBgmRenders();
     /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
@@ -2040,8 +2036,8 @@ function _recreateAudioGraph() {
   masterGain.gain.value = audioMuted ? 0 : 1;
   masterGain.connect(_createMasterLimiter(audioCtx));
   _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
-  /* sampleRate依存の初期化は getAudioCtx 側にしか無く、再作成では抜けていた。
-     AirPodsの接続変化や他アプリのセッション変更で新しいContextのsampleRateが変わると、
+  /* sampleRate依存の初期化は再作成側にも必ず置くこと。getAudioCtx 側だけに置くと、
+     AirPodsの接続変化や他アプリのセッション変更で新しいContextのsampleRateが変わったときに、
      ループ長の量子化（拍グリッドの基準）とビート表示の先読みが旧値のまま残る。
      ノイズバッファは playNoise 側が sampleRate 不一致を検出してフォールバックするので
      ここでは作り直さない。BGM/ボスのバッファはAudioBufferなのでContextに束縛されず、
@@ -2090,17 +2086,14 @@ function _resumeAudioCtx(callback) {
    （1回あたり最大57ms＝タップ時の引っかかりの正体）、しかも currentTime が進まず
    ended にもならないので昇格の成否を判定できない（paused は play() を呼んだ瞬間に
    false になるので判定に使えない）。 */
-/* 形式は端末の出力に合わせる（48kHz・16bit・モノラル）。
-   8kHz・8bitで鳴らしていたため出力(48kHz)へのリサンプリングが常に挟まっていた。
-   同じ形式なら変換自体が不要になる。16bit PCMの無音は0なので、
-   確保した時点でゼロ埋め済み＝fill不要。
-   （なお「バックグラウンド復帰時のノイズは無音要素が原因」という見立ては
-   実機で否定された。?noelev でも再現する。原因はパイプラインに残る音声で、
-   対策は _CLOSE_ON_BG を参照）
+/* 形式は端末の出力に合わせる（48kHz・16bit・モノラル）。形式が違うと出力(48kHz)への
+   リサンプリングが常に挟まる。16bit PCMの無音は0なので、確保した時点でゼロ埋め済み＝fill不要。
+   （「バックグラウンド復帰時のノイズは無音要素が原因」という見立ては実機で否定されている。
+   ?noelev でも再現する。原因はパイプラインに残る音声で、対策は _CLOSE_ON_BG を参照）
 
-   長さ: 短いとループ境界の処理が頻繁に来てフレーム間隔の乱れになる（0.5秒だと毎秒2回。
-   v6.34ではこれを避けるために再生を止める＝待避を入れたが、それが上記のノイズを
-   生んだので撤回済み）。10秒あればループ境界は実用上ほぼ無視できる */
+   長さ: 短いとループ境界の処理が頻繁に来てフレーム間隔の乱れになる（0.5秒だと毎秒2回）。
+   ループ境界を避けるために再生を止める（待避する）方式は採らない — 上記のノイズを生む。
+   10秒あればループ境界は実用上ほぼ無視できる */
 const _SILENT_WAV_RATE = 48000;
 const _SILENT_WAV_SEC  = 10;
 const _SILENT_WAV_URI = (() => {
@@ -2338,11 +2331,11 @@ function playNoise(ctx, startT, dur, vol, hpFreq, dest) {
   if (ctx === audioCtx) _disconnectAfter(ctx, stopAt, src, hp, gain);
 }
 
-/* 音符の並びを1本のフレーズとして鳴らす。効果音の多くは「音符を並べて
-   playOscに流す」だけで、その並べ方が7ケースに写経されていた。フレーズを
-   データ（音符の配列）として書けるようにして、効果音を足すときにコードではなく
-   並びだけを書けばよいようにする。playOscの末尾3つ（長さ・音量・減衰）が
-   位置引数で読めなかったのも名前付きにする。
+/* 音符の並びを1本のフレーズとして鳴らす。効果音の多くは「音符を並べてplayOscに流す」だけ
+   なので、フレーズをデータ（音符の配列）として書けるようにして、効果音を足すときにコードでは
+   なく並びだけを書けばよいようにする。playOscの末尾3つ（長さ・音量・減衰）も位置引数ではなく
+   名前付きで渡す。
+     notes  周波数の配列（optsのstep間隔で等間隔に並べる）
      notes  周波数の配列（optsのstep間隔で等間隔に並べる）
             または [周波数, 開始オフセット秒, 長さ秒] の配列（並びを直接指定）
      opts   type   波形
@@ -2459,7 +2452,7 @@ const BGM_BRIGHT_TIER = BGM_TIER_COUNT - 1;
    ため、同じ低音域にベースを重ねると2本が団子になる。特に小節頭は和太鼓・キック・
    地鳴りも同時に来るので、リミッター前のピークが跳ね上がり、**アクセントを付ける
    ために足した和太鼓自身がゲインリダクションを引き起こして自分を潰す**（実測:
-   小節頭のコントラストがリミッター無しで+2.4dB、有りで-3.1dB＝反転していた）。
+   小節頭のコントラストがリミッター無しで+2.4dB、有りで-3.1dB＝符号が反転する）。
 
    そこで表拍（偶数ステップ）はメロディ層に明け渡し、ベースは裏拍だけを打つ
    インターロックにする。ルート(A2)と完全5度(E2)の交互は維持したまま、低音の
@@ -2487,14 +2480,12 @@ const BGM_HAT_BOSS = [
 ];
 /* キックは全拍打ち（16拍すべて）でせき立てる推進力を維持 */
 const BGM_KICK_BOSS = new Set([0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30]);
-/* 和太鼓: 全小節の頭（ステップ0・8・16・24）に強打、各小節の拍3
-   （ステップ4・12・20・28）に合いの手を重ねる。
-   7拍子版は拍1と拍5（4+3の折り返し）で不等間隔だったが、4拍子では
-   等間隔の小節頭に置く。これは音楽的な整理であると同時に**キング戦の
-   コール＆レスポンスの前提**でもある: プレイヤーが小節の枠を耳で取れないと、
-   打ち込みをどの枠に置けばいいか分からず、返ってきたレスポンスが「同じ
-   小節内位置に鳴っている」ことも照合できない。キックが全拍で均等なぶん、
-   小節を示せるのは和太鼓だけになる */
+/* 和太鼓: 全小節の頭（ステップ0・8・16・24）に強打、各小節の拍3（ステップ4・12・20・28）に
+   合いの手を重ねる。
+   小節頭に等間隔で置くことは音楽的な整理であると同時に**キング戦のコール＆レスポンスの前提**
+   でもある: プレイヤーが小節の枠を耳で取れないと、打ち込みをどの枠に置けばいいか分からず、
+   返ってきたレスポンスが「同じ小節内位置に鳴っている」ことも照合できない。キックが全拍で
+   均等なぶん、小節を示せるのは和太鼓だけになる */
 const BGM_TAIKO_STRONG_BOSS   = new Set([0, 8, 16, 24]);
 const BGM_TAIKO_FLOURISH_BOSS = new Set([4, 12, 20, 28]);
 /* こんがり度が上がるほど和太鼓の合いの手を増やす。「狩りの前の鼓舞する踊り」という
@@ -2628,10 +2619,9 @@ function _acidDistortionCurve(amount) {
 
 /* TB-303系音色の共通オーディオグラフ: sawtooth osc → lowpass filter
    (→ ソフトクリップ歪み) → gain → dest を構築してノード束を返す。
-   周波数・Q・包絡線の設定は呼び出し側が行う。現在は地鳴り（_playGroundRumble）
-   専用（キング戦のリール射撃音・メロディ層は後にそれぞれクローズハイハット
-   風ノイズ・低音ベースシンセへ変更済み。playSE('kingMark')・
-   _playBossBassMel参照）。distAmount=null で歪みなし */
+   周波数・Q・包絡線の設定は呼び出し側が行う。使うのは地鳴り（_playGroundRumble）のみ
+   （キング戦のリール射撃音はクローズハイハット風ノイズ、メロディ層は低音ベースシンセ。
+   playSE('kingMark')・_playBossBassMel参照）。distAmount=null で歪みなし */
 function _acidChain(ctx, dest, distAmount) {
   const osc    = ctx.createOscillator();
   const filter = ctx.createBiquadFilter();
@@ -2728,13 +2718,12 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
    反射音のように鳴らす）。convolver等の本格的なリバーブノードは持たないので、
    時間差ノイズの重ね打ちで「残響がある感じ」を近似する。
    通常モードのSEとは共用せず専用に切り出す（互いのバランス調整が干渉しないように） */
-/* 5音目（フレーズ末尾）の爆発音。実機要望「巨大なエネルギーを持つ何かを撃った衝撃と
-   その余韻が続くような音。バジューンみたいな感じ」→ さらに具体化して
-   「映画スターウォーズで X-Wing が攻撃を4発撃って、1拍おいて爆発音、という感じの5拍目」。
+/* 5音目（フレーズ末尾）の爆発音。狙いは「巨大なエネルギーを持つ何かを撃った衝撃とその余韻が
+   続く音」＝4発撃って1拍おいて爆発、というフレーズの締め。
 
-   ここに至るまでに2度外している:
-     1. TR-808のカウベル … 短く硬い終止音で、余韻を持つ発射音ではなかった
-     2. 共鳴掃引（ノコギリ波＋Q=7のローパス掃引）… 音程感が強く、レーザー側の音になった
+   次の2つは狙いから外れるので採らない:
+     1. TR-808のカウベル … 短く硬い終止音で、余韻を持つ発射音にならない
+     2. 共鳴掃引（ノコギリ波＋Q=7のローパス掃引）… 音程感が強く、レーザー側の音になる
    爆発はノイズ主体で、音程を持たず、高域から先に死んでいく。そこを作り分ける。
 
    構成:
@@ -2745,8 +2734,8 @@ function _playBossBassMel(ctx, freq, t, dur, vol, dest) {
      3. 押し出し  … サイン波を A2→A1 へ落とす低音。腹に来る重さを足す
    音程を持つのは3だけで、規約どおり noteHz（A＝BGMの調）を使う。
 
-   ノイズ源は _noiseBuffer を loop=true で使い回す（事前生成は約0.45秒ぶんしか無く、
-   爆発の尾はそれより長いため。毎回生成すると1秒ぶんの乱数ループが走る）。 */
+   ノイズ源は _noiseBuffer を loop=true で使い回す（事前生成は約0.45秒ぶんしか無く、爆発の尾は
+   それより長いため。毎回生成すると1秒ぶんの乱数ループが走る） */
 function _playKingBlast(ctx, t, dest, vol = 1) {
   const d = _seDest(ctx, dest);
   const v = vol;
@@ -2763,8 +2752,8 @@ function _playKingBlast(ctx, t, dest, vol = 1) {
   lp.frequency.exponentialRampToValueAtTime(170, t + 0.90);
   lp.Q.value = 0.6; // 共振させない（付けると音程が出てレーザーになる）
   const g = ctx.createGain();
-  /* 3段の包絡。単純な指数減衰だと0.4秒で聴感上消えてしまい「1拍おいての爆発」の
-     重みが出なかったため、中間点を置いて尾を持ち上げている */
+  /* 3段の包絡。単純な指数減衰だと0.4秒で聴感上消えてしまい「1拍おいての爆発」の重みが
+     出ないため、中間点を置いて尾を持ち上げる */
   g.gain.setValueAtTime(0.78 * v, t);
   g.gain.exponentialRampToValueAtTime(0.34 * v, t + 0.14);
   g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.45);
@@ -2988,7 +2977,7 @@ const _DORA_SHIMMER_BRIDGE_DB = 6;
 const _DORA_SHIMMER_LP0   = 6500;  // 上端: 打撃直後
 const _DORA_SHIMMER_LP1   = 9000;  // 上端: 広がりきった後
 const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭が潰れて音が痩せるため、
-                               // 旧実装と同程度のピーク（約1.3）に戻す値をレンダで実測して決めた
+                               // ピーク約1.3に収まる値をレンダで実測して決めてある
 /* 音量は「合計してもマスターリミッターに潰されない」ことを基準に決めてある。
    部分音を2本組にしたぶん本数が16本あり、素直に重ねると合計振幅が1.5に達して
    リミッターがアタックを削る＝派手にしたつもりが逆に鈍る。各音量を約55%に引いて
@@ -2996,11 +2985,11 @@ const _DORA_OUT_GAIN  = 0.62;  // 歪み後の出力段。歪ませると尖頭�
    目的の音色は失われない */
 const _DORA_BEND = 0.972;     // 打撃直後の下降しなり（低次のみ・元の97.2%まで）
 const _DORA_BEND_SEC = 0.22;  // しなりに掛ける時間
-/* うなりの速さを時間とともに緩める。実物の板は振幅が大きいほどモード周波数が
-   ずれ、減衰するにつれて本来の値へ戻る。したがって「打撃直後は速く揺れ、
-   余韻では揺れがゆっくりになる」。定数のうなりだと機械的なトレモロに聞こえる。
-   これは本体自身の性質なので、撤回したシャリのLFO（本体と無関係な周期で揺れる）
-   とは違い、別音源の手がかりにはならない */
+/* うなりの速さを時間とともに緩める。実物の板は振幅が大きいほどモード周波数がずれ、
+   減衰するにつれて本来の値へ戻る。したがって「打撃直後は速く揺れ、余韻では揺れがゆっくりに
+   なる」。定数のうなりだと機械的なトレモロに聞こえる。
+   これは本体自身の性質なので、本体と無関係な周期で揺れるLFOとは違い、別音源の手がかりには
+   ならない */
 const _DORA_BEAT_SPREAD = 1.3;  // 打撃直後のずらし幅（最終値の何倍か）
 const _DORA_BEAT_SEC    = 1.6;  // 本来のずらし幅へ戻るまでの時間
 /* 減衰を二段にする（ニー）。実物は打撃直後に急に落ちてから長く伸びる。
@@ -3242,11 +3231,10 @@ async function renderBGMBuffer(sampleRate, {
     dest = limiter;
   } else {
     /* 通常BGMはDynamicsCompressorNodeを使わない。
-       ピークは1.07程度の軽微超過（ボスの1.6超とは別次元）なので固定ゲインで足りる上、
-       コンプレッサーには実装依存の内部ルックアヘッド（数ms）があり、ループ冒頭の
-       同時発音（キック+メロディ+ハット）の立ち上がりが遅れて「わずかにフェードイン
-       して聞こえる」不具合の原因になっていた（実測: RMSがms5→ms35にかけて
-       0.10→0.18と一旦上昇してから減衰するいびつな包絡線を確認）。 */
+       ピークは1.07程度の軽微超過（ボスの1.6超とは別次元）なので固定ゲインで足りる。加えて
+       コンプレッサーには実装依存の内部ルックアヘッド（数ms）があり、ループ冒頭の同時発音
+       （キック+メロディ+ハット）の立ち上がりが遅れて「わずかにフェードインして聞こえる」
+       （実測: RMSがms5→ms35にかけて0.10→0.18と一旦上昇してから減衰するいびつな包絡線） */
     const safety = offCtx.createGain();
     safety.gain.value = 0.9;
     safety.connect(offCtx.destination);
@@ -3454,12 +3442,11 @@ function applyMuteGain() {
    ソースがボス用だったか）と地鳴りの段階から選ぶ。startBGM とポーズ解除の両方が
    これを使い、選び方が二箇所で食い違わないようにする。
 
-   実機報告「他アプリで音を鳴らした後にフォアグラウンドへ戻ると、ボス戦なのに通常
-   ゲームのBGMになる」の原因がこれだった。startBGM は _createBGMSource のデフォルト
-   引数（＝通常バッファ）で起動していたため、ボス戦中に呼ばれると通常BGMが鳴り出す。
-   さらに _createBGMSource は _bgmIsBoss = (buffer !== bgmBuffer) で状態を導出するので、
+   **BGMを起動する経路で _createBGMSource のデフォルト引数（＝通常バッファ）に
+   頼ってはいけない。** ボス戦中にそれが呼ばれると通常BGMが鳴り出すうえ、
+   _createBGMSource は _bgmIsBoss = (buffer !== bgmBuffer) で状態を導出するので、
    その瞬間に _bgmIsBoss が false へ落ち、以降ポーズ解除しても通常BGMを選び続けて
-   二度とボスBGMへ戻れなくなっていた。 */
+   二度とボスBGMへ戻れなくなる。 */
 function _currentBgmBuffer() {
   return _bgmIsBoss ? ((bossBgmBuffers && bossBgmBuffers[_bossBgmTier]) || bossBgmBuffer)
                     : bgmBuffer;
@@ -3534,15 +3521,13 @@ function stopBGMTape(durationMs = 1300) {
   grayRateTarget = 0.001; // グレースケールを最大に向かってアニメーション
 }
 
-/* こんがり達成（キング撃破）専用のBGM停止（ユーザー要望: 「BGMはそこで
-   止めて」）。stopBGMTapeを使わない理由: あちらは減速演出とグレースケール
-   演出（grayRateTarget）がセットになっており、「敗北・停滞」の質感になる。
-   勝利の高揚感（花火が上がる）とグレースケールは噛み合わないため、
+/* こんがり達成（キング撃破）専用のBGM停止。
+   stopBGMTapeは使わない: あちらは減速演出とグレースケール演出（grayRateTarget）が
+   セットになっていて「敗北・停滞」の質感になり、勝利の高揚感と噛み合わない。
    bgmGainを短時間でフェードしてからソースを止めるだけの軽い処理にする。
-   fadeMs経過後に停止するが、その時点のbgmSourceが差し替え前のものと
-   同じ場合のみ止める（capturedSrcガード）: _bossVictoryTimer>90経過後の
-   CONTINUEタップで_kingBattleEndが新しいBGMソースを既に作っていた場合に、
-   誤って新ソースを止めてしまう事故を防ぐ */
+   fadeMs経過後に停止するが、その時点のbgmSourceが差し替え前のものと同じ場合のみ
+   止める（capturedSrcガード）: 勝利演出中のCONTINUEタップで_kingBattleEndが
+   新しいBGMソースを既に作っていた場合に、誤って新ソースを止めないため */
 function _stopBossBGMForVictory(fadeMs = 120) {
   if (!audioCtx || !bgmGain) return;
   const t = audioCtx.currentTime;
@@ -3613,8 +3598,7 @@ function startBossBGMTape(durationMs = 1400) {
 }
 
 /* BET操作が今できるかどうか。描画（ボタンの点灯）と入力（当たり判定）の両方が
-   これ1つを見る。以前は同じ条件が描画2箇所・入力3箇所に手書きされており、
-   条件を足すたびに5箇所を揃える必要があった。
+   これ1つを見る（条件を分散させると、足すたびに複数箇所を揃える必要が出る）。
    ・betLocked      : 1的目を射ったらそのトライではもう変えられない
    ・_betUnlockAt   : トライ開始から2拍強は解放しない（BET_UNLOCK_BEATS参照）
    ・phase          : 回転中（idle/reach）のみ
@@ -3674,16 +3658,16 @@ document.addEventListener('mousedown', _onFirstGesture, true);
 /* iOS Safariはバックグラウンド→フォアグラウンド復帰時にaudioCtxをsuspendする。
    visibilitychange でフォアグラウンド復帰を検知し、ミュートでなければ resume する。 */
 /* 「バックグラウンドから復帰した瞬間にノイズが鳴る」は**ページからは直せない**、
-   というのが実機での結論（2026-08-15）。決め手は「BGMがちょうど止むタイミングで
-   移行した場合は鳴らない」という観測で、鳴っているのは移行の時点で既にOSの出力キューへ
-   渡り終えていたBGMそのもの。試して効かなかったもの:
-     ・移行時のフェードアウト（v6.48）→ 渡し終えた分には手が届かない
+   というのが実機での結論（2026-08-15）。決め手は「BGMがちょうど止むタイミングで移行した
+   場合は鳴らない」という観測で、鳴っているのは移行の時点で既にOSの出力キューへ渡り終えていた
+   BGMそのもの。効かないと確認済みの対策:
+     ・移行時のフェードアウト → 渡し終えた分には手が届かない
      ・AudioContext を閉じる（?closebg）→ 閉じてもキューの中身は消えない
      ・無音<audio>要素の有無（?noelev）→ 無関係。出力先(スピーカー/AirPods)にも依らない
    OSの出力キューに渡った音声はこちらのどの操作でも取り消せない。追わないこと */
 /* 自動PAUSEの対象外フェーズ。タイトルは進行中の状態が無く、サウンドテストと
    ドラムパッドは演奏の邪魔になるのでPAUSEボタンを描いていない＝入ってしまうと
-   解除する手段が無くなる（実機報告: ドラムパッドでPAUSEDになると戻せない）。
+   解除する手段が無くなる。
    ゲーム本編を同じように自動解除しないのは意図的で、復帰時のaudioCtx回復
    （interrupted状態の再作成）をPAUSE解除のタップ＝ユーザージェスチャーに
    一本化しているため。ジェスチャー無しで解除するとiOSでその経路が働かない */
@@ -3716,19 +3700,13 @@ function toggleMute() {
     _resumeAudioCtx(applyMuteGain);
   }
   /* ゲーム中にミュート解除した際、BGMソースが未起動なら起動する
-     （MUTEのままゲームを始めた場合に audioCtx 生成が遅延した場合の補償）。
-     実機報告で発覚: bossVictory・trueEndingはbgmSourceを持たない前提の
-     フェーズ（NO_BGM_SOURCE_PHASES参照、togglePause側の同種の不具合を
-     修正した際に導入した集合）だが、ここではphase!=='startup'/'bossOmen'
-     しか除外していなかったため、タイトル画面から真エンディングを再生中に
-     MUTE/解除すると「bgmSourceが無い」がそのまま真になり通常BGMが新規に
-     鳴り出し、テーマ曲と二重に聞こえていた */
-  /* キング戦系フェーズも除外する。あちらのBGMはテンポ（BOSS_BGM_RATE）・地鳴りの
-     段階差し替え・テープ停止まで戦闘側の経路が一括で持っており、ミュート操作から
-     素の startBGM（レート1.0・bgmPhaseRefリセット・グレースケール即時解除）を
-     割り込ませてよい状態が無い。実機報告「他アプリで音を鳴らした後に戻ると
-     ボス戦なのに通常BGMになる」は、割り込み復帰でbgmSourceがnullの状態でここが
-     通り、通常バッファでソースが作られて _bgmIsBoss まで false へ落ちていたのが原因。
+     （MUTEのままゲームを始めて audioCtx 生成が遅延した場合の補償）。
+     除外フェーズの判定は _noAutoBgmPhase に集約する。ここに条件を直接書き足すと、
+     新しい「音を鳴らすだけのモード」を追加したときに追随せず、通常BGMが割り込む
+     （真エンディングのテーマ曲と二重に鳴る、キング戦中に通常BGMへ落ちる、など）。
+     キング戦系のBGMはテンポ（BOSS_BGM_RATE）・地鳴りの段階差し替え・テープ停止まで
+     戦闘側の経路が一括で持っており、ミュート操作から素の startBGM（レート1.0・
+     bgmPhaseRefリセット・グレースケール即時解除）を割り込ませてよい状態が無い。
      復帰の入口はPAUSE解除（_doResumeBGM）に一本化する */
   if (!audioMuted && !_noAutoBgmPhase() && audioCtx && !bgmSource && !jingleScheduler) {
     startBGM();
@@ -3737,17 +3715,15 @@ function toggleMute() {
 
 /* ════════════════ 効果音 ════════════════ */
 /* 効果音の定義表。名前 → 鳴らす関数（ctx: audioCtx / t: 発音時刻）。
-   もとは playSE の中の25ケースのswitchだった。表にすることで
-   (1) ?cheatpanel から全効果音を一覧・試聴できる（音作りの反復が速くなる。
-       その効果音が鳴るゲーム状態まで到達しなくても聴ける）
-   (2) どこからも呼ばれていない効果音を見つけられる。実際 kingBeamAccent が
-       死んでいた（アクセントは _kingSeqAccent が先行スケジュールで直接鳴らす
-       設計に変わっており、playSE側のケースだけが取り残されていた）
-   (3) 未定義の名前を渡したときに黙って無音にならない（switchは素通りしていた）
+   switch文ではなく表にすることで
+   (1) ?cheatpanel から全効果音を一覧・試聴できる（音作りの反復が速くなる。その効果音が鳴る
+       ゲーム状態まで到達しなくても聴ける）
+   (2) どこからも呼ばれていない効果音を見つけられる
+   (3) 未定義の名前を渡したときに黙って無音にならない（switchは素通りする）
    の3点が効く。効果音を足すときはここに1エントリ書けばよい。
    フレーズもの（音符を並べるだけのもの）は _playPhrase を使うと並びだけで書ける。
-   なお sync_just（良タイミング時の効果音）は「視覚表示のみでSEなし」と決めて
-   空ケースとして残っていたものを削除した。呼び出しも無い。 */
+   鳴らさないと決めた効果音は空ケースとして残さず、表から消すこと（sync_just＝良タイミング時の
+   フィードバックは視覚表示のみでSEなし） */
 const SE_TABLE = {
   shoot(ctx, t) {
     /* 弓を放つ音: noise（弦の放つ音）+ Cメジャーアルペジオ
@@ -3844,7 +3820,7 @@ const SE_TABLE = {
       [noteHz('C',7), 0.75, 0.60],
     ];
     _playPhrase(ctx, t, big, { type:'square', vol:0.24, decay:0.08, octave:0.10, octaveType:'sawtooth' });
-    /* 連続コイン音: ペンタトニック上昇走句（旧: 等比5%刻みの半音階的スメアで調外を通過していた） */
+    /* 連続コイン音: ペンタトニック上昇走句（等比刻みの半音階的スメアにすると調外を通過する） */
     _playPhrase(ctx, t, _COIN_RUN,
                 { type:'sine', step:0.07, delay:0.9, dur:0.08, vol:0.22, decay:0.05 });
     playNoise(ctx, t, 0.3, 0.35, 100);
@@ -3907,9 +3883,9 @@ const SE_TABLE = {
   },
 };
 
-/* BGMを一時停止して前に出す効果音と、復帰までのms。stopBGM()と
-   scheduleBGMRestart()を各ケースに手書きで対にしていたが、片方だけ書き忘れると
-   BGMが二度と戻らない。宣言にして書き忘れが起きないようにする */
+/* BGMを一時停止して前に出す効果音と、復帰までのms。stopBGM()とscheduleBGMRestart()を
+   各ケースに手書きで対にしてはいけない: 片方だけ書き忘れるとBGMが二度と戻らない。
+   宣言にして書き忘れが起きないようにする */
 const SE_DUCK_BGM = { reach: 900, jackpot: 2000, reachJackpot: 2500 };
 /* 名前で引く表が2つある以上、改名で片方だけ直す事故が起きる（実際に
    reach_jackpot の改名でBGMの停止・復帰が外れた）。起動時に食い違いを知らせる */
@@ -3941,10 +3917,9 @@ function lsLoadAch() {
     const knownIds = new Set(ACHIEVEMENTS.map(a => a.id));
     unlockedAch = {};
     for (const [k, v] of Object.entries(raw)) {
-      /* v2以降は解除時刻（正の数値）。true は日時を記録していなかった頃の値で、
-         「解除済みだが日時不明」として受け入れる（SCHEMA_VERを上げたので通常は
-         現れないが、判定を数値だけに絞ると1つの取りこぼしで実績が全消えして
-         見えるため許容側に倒す） */
+      /* v2以降は解除時刻（正の数値）。true は日時を持たない古い形式の値で、「解除済みだが
+         日時不明」として受け入れる（SCHEMA_VERを上げたので通常は現れないが、判定を数値だけに
+         絞ると1つの取りこぼしで実績が全消えして見えるため許容側に倒す） */
       if (!knownIds.has(k)) continue;
       if (v === true) unlockedAch[k] = true;
       else if (typeof v === 'number' && v > 0) unlockedAch[k] = v;
@@ -3952,37 +3927,28 @@ function lsLoadAch() {
     medAchieved = m ? JSON.parse(m) : {};
   } catch(e) { unlockedAch = {}; medAchieved = {}; }
 }
-/* ── localStorage書き込みの合流（実機指摘への対応） ──
-   実機指摘: 「まれに1的目がひっかかる。4的目のあとに入力が遅延する感じ。
-   連続してハズレが何十回も続いた後に起きている気がする」（macOS Safari）。
+/* ── localStorage書き込みの合流 ──
+   キーごとに「最新の値」だけを保持してまとめて書く。同じキーへの連続した書き込みは
+   1回に畳まれるので、ハズレが連続してトライが速く回っても書き込み回数がトライ数に
+   比例して増えない。
 
-   原因: 書き込みは _idle() でアイドル時に回してフレーム予算を守る設計だったが、
-   requestIdleCallback が無い環境ではフォールバックが setTimeout(f, 0) であり、
-   「アイドル時」ではなく直後のマクロタスクで同期的に走っていた。
-   macOS Safari は requestIdleCallback を 17.4 まで実装しておらず、まさに
-   このフォールバック経路に入る。つまりこの環境では設計意図が成立していない。
-   さらに書き込みは1射ごとに予約される（lsSaveStatsは1的目だけ2回呼ばれ、
-   結果確定時にlsSaveも走るので1トライ最低5回）。ハズレが連続すると
-   トライが速く回るぶん書き込み頻度も上がり、Safariのストレージ書き込みが
-   詰まったときにメインスレッドが止まって入力の取りこぼしに見える。
-   1的目に集中して見えるのは、そこだけ書き込み予約が2倍あるため。
+   なぜ要るか: 書き込みは1射ごとに予約される（lsSaveStatsは1的目だけ2回呼ばれ、
+   結果確定時にlsSaveも走るので1トライ最低5回）。ストレージ書き込みが詰まると
+   メインスレッドが止まり、入力の取りこぼしに見える。
 
-   対策: キーごとに「最新の値」だけを保持してまとめて書く。同じキーへの
-   連続した書き込みは1回に畳まれるので、ハズレ連続でも書き込み回数が
-   トライ数に比例して増えない。フォールバックも setTimeout(0) をやめて
-   実際に間を空ける（0だと結局同じフレームの直後に走ってしまう）。
-   取りこぼし防止のため、離脱時（pagehide/visibilitychange）に同期フラッシュする。
+   **requestIdleCallback のフォールバックを setTimeout(f, 0) にしてはいけない。**
+   それは「アイドル時」ではなく直後のマクロタスクで同期的に走るので、予算を守る
+   という設計意図が成立しない（macOS Safariは17.4までrequestIdleCallbackを
+   実装しておらず、まさにこの経路に入る）。実際に間を空けること。
 
-   その後の続報（iOS実機、iPhone16/iPad・縦画面）: 合流後も「4的目のあと、次の
-   ゲームの1的目で少し引っかかる」が残っていた。待ち時間400msが、このゲームの
-   1拍（BGM_BEAT＝約395ms）とほぼ一致していたのが原因。ハズレの自動リセットは
-   onBeatGrid()＝拍の境界で走るため（update()のdone分岐参照）、「4的目で予約した
-   書き込みの発火」と「次トライの開始〜1的目のタップ」が構造的に重なっていた。
-   当たりのときは演出を眺めている数秒の間に発火するので体感に出ない＝ハズレ特有
-   という報告とも一致する。
-   そこで、タイマーは取りこぼし用の保険（長め）に格下げし、実際の書き出しは
-   「矢を放った直後」＝次のタップまで約1拍ぶんの余裕がある時点で行う
-   （update()の_LS_FLUSH_SAFE_SEC参照）。拍と同期した固定遅延で殴らない */
+   **拍と同期した固定遅延で殴らないこと。** 待ち時間を400ms程度にすると、このゲームの
+   1拍（BGM_BEAT＝約395ms）とほぼ一致する。ハズレの自動リセットは onBeatGrid()＝拍の
+   境界で走るため（update()のdone分岐参照）、「4的目で予約した書き込みの発火」と
+   「次トライの開始〜1的目のタップ」が構造的に重なる。
+   タイマーは取りこぼし用の保険（長め）に留め、実際の書き出しは「矢を放った直後」＝
+   次のタップまで約1拍ぶんの余裕がある時点で行う（update()の_LS_FLUSH_SAFE_SEC参照）。
+
+   取りこぼし防止のため、離脱時（pagehide/visibilitychange）には同期フラッシュする */
 const _LS_FLUSH_DELAY_MS = 1500;  // 保険のタイマー（拍と一致しない長さ。通常はこれより先に書き出される）
 const _LS_FLUSH_SAFE_SEC = 0.1;   // 発射からこれだけ経った安全な時点で書き出す（次のタップは約1拍先）
 const _lsPending = new Map();     // key → 最新の値
@@ -4043,11 +4009,10 @@ function lsSaveStats() {
      1回に畳むので、ここでの呼び出し頻度がそのまま書き込み回数にはならない */
   _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
 }
-/* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数
-   （既定0=従来通り即時）。cheatpanelのACH一括解除（最大18件）で同じ
-   'ach'音が完全に同時発生して割れる（クリッピングする）という実機報告
-   があり、マスター出力に常時リミッターを挟んだ（_createMasterLimiter
-   参照）だけでなく、発音そのものも少しずつずらして重なりを減らす */
+/* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数（既定0=即時）。
+   同じ'ach'音が完全に同時発生すると割れる（クリッピングする）ので、マスター出力の
+   常時リミッター（_createMasterLimiter参照）だけに頼らず、発音そのものも少しずつ
+   ずらして重なりを減らす */
 function unlockAch(id, seDelay = 0) {
   if (unlockedAch[id]) return;
   /* 値は true ではなく解除時刻（epoch ms）。エンドロールの実績ロールに達成日を
@@ -4067,8 +4032,8 @@ function _updateBestSyncChain() {
   lsSaveStats();
 }
 
-/* 実績の達成日（'2026/8/16'）。未解除、または日時を記録していなかった頃の
-   データ（値が true）なら空文字を返す＝その行には何も出さない */
+/* 実績の達成日（'2026/8/16'）。未解除、または日時を持たない古い形式のデータ（値が true）なら
+   空文字を返す＝その行には何も出さない */
 function _achDateText(id) {
   const v = unlockedAch[id];
   if (typeof v !== 'number' || !(v > 0)) return '';
@@ -4275,9 +4240,8 @@ function playStartJingle(onEnd) {
 /* ════════════════ Init ════════════════ */
 
 /* 先打ちバッファ（pendingShoot）を消費して発射する。
-   射撃ガードの解除と必ずセットで行うため、この2行を別々に書かせない。
-   実際、tapestart→idleの経路だけガード解除が抜けており、無音起動＝テープ加速が
-   初回フレームで完了する条件で、溜めていた1発が黙って消えていた（静的解析で発覚）。
+   射撃ガードの解除と必ずセットで行うため、この2行を別々に書かせない
+   （片方だけ書き忘れると、溜めていた1発が黙って消える）。
    inputPerfMs: undefined のときは onShoot が performance.now() で代替する */
 function _consumePendingShoot(inputPerfMs) {
   if (!pendingShoot) return false;
@@ -4289,8 +4253,8 @@ function _consumePendingShoot(inputPerfMs) {
 
 /* 次のトライを開始する共通処理。
    ハズレ自動送り・フィーバー大当たり自動送り・クリックでの即時送りが全てここを通る。
-   以前は呼び出し側それぞれが init() → ガード解除 → 先打ち消費を手書きしており、
-   4箇所で書き方が違っていた（1箇所はガード解除が欠けていた） */
+   呼び出し側それぞれが init() → ガード解除 → 先打ち消費を書くと、どれかでガード解除が
+   抜ける（実際に起こる欠陥なので、この関数を通すこと） */
 function _beginNextTrial(inputPerfMs) {
   init();
   shootGuardUntil = 0; // 操作または自動送りで始まったトライなので誤射ガードは不要
@@ -4335,28 +4299,24 @@ function initGame() {
    - interrupted状態はresume()では復帰できないため必ず_resumeAudioCtx()経由
      （feedback_ios_safari_audio memory参照） */
 /* bgmSourceがまだ無い間、的を止めたまま待つ上限時刻（performance.now()基準）。
-   実機指摘「こんがり達成で通常モードへ戻るとき、いきなりルーレットがスピンして
-   いる。失敗後と同じようにスピンアップさせたい」への対応。
-   原因: tapestartの回転係数は tapeRate = bgmSource ? _getBgmRateJS() : 1 で、
-   ソースが無い場合は1（全速）にフォールバックする。失敗側はstopBGMTapeが
-   ソースを極低速で生かしたまま保持するので該当しないが、達成側は
-   NO_BGM_SOURCE_PHASES（bossVictory等）でソースを破棄済みのため該当していた。
-   さらに startBGMTape は _resumeAudioCtx 経由で必ず非同期に走るので、その前に
-   update()が動くと1フレーム目でtapeRate=1になり、的が全速で回ったうえ
-   即座にidleへ移行してスピンアップが丸ごと飛んでいた（実測で確認）。
-   対策として「audioCtxはあるがソース生成待ち」の間だけ回転係数を0に held する。
-   ただし bgmBuffer 未完成などで startBGMTape がソースを作らずに return する
-   経路があるため、待ちには必ず上限を設けて永久に止まらないようにする。
-   フレームカウンタではなくwall-clockで書くのはCLAUDE.mdの時間条件の規約どおり
-   （実時間で失効すべきガードであり、rAFが止まると永久に失効しないため） */
+   tapestartの回転係数は tapeRate = bgmSource ? _getBgmRateJS() : 1 で、ソースが
+   無い場合は1（全速）にフォールバックする。こんがり達成の復帰は
+   NO_BGM_SOURCE_PHASES（bossVictory等）でソースを破棄済みなので、何もしないと
+   1フレーム目でtapeRate=1になり、的が全速で回ったうえ即座にidleへ移行して
+   スピンアップが丸ごと飛ぶ（startBGMTape は _resumeAudioCtx 経由で必ず非同期に走る）。
+   そこで「audioCtxはあるがソース生成待ち」の間だけ回転係数を0に held する。
+   ただし bgmBuffer 未完成などで startBGMTape がソースを作らずに return する経路が
+   あるため、待ちには必ず上限を設けて永久に止まらないようにする。
+   フレームカウンタではなくwall-clockで書くのは、実時間で失効すべきガードだから
+   （rAFが止まると永久に失効しない） */
 const TAPESTART_SRC_WAIT_MS = 1500;
 let _tapestartSrcWaitUntil = 0;
 
 function _restartToTapestart() {
   init(false, true); // fromGameOver=true: BGMランプはtapestart→idle移行時に処理
   phase = 'tapestart';
-  /* audioCtxがある場合のみ待つ。無音起動（audioCtxなし）ではソースが永久に
-     生成されないので、従来どおり即座に回り出す（待つと固まってしまう） */
+  /* audioCtxがある場合のみ待つ。無音起動（audioCtxなし）ではソースが永久に生成されないので、
+     待たずに即座に回り出す（待つと固まってしまう） */
   _tapestartSrcWaitUntil = audioCtx ? performance.now() + TAPESTART_SRC_WAIT_MS : 0;
   /* グレースケール解除。startBGMTape側でも設定されるが非同期（_resumeAudioCtx
      のコールバック）のため、無音起動（audioCtxなし）でも確実に解除されるよう
@@ -4382,27 +4342,26 @@ function gameOverReset() {
 }
 
 /* ════════════════ 中当たりエフェクトの退場（アウトロ） ════════════════
-   ユーザー要望: 中当たりの演出から通常ゲームへ戻るとき、これまではトライの
-   切り替わりでギヨウザが一瞬で消えていた。次のゲームが始まるのと並行して、
-   それぞれが画面外へ抜けていくところまで見せる。
+   中当たりの演出から通常ゲームへ戻るとき、ギヨウザを一瞬で消さず、次のゲームが
+   始まるのと並行してそれぞれが画面外へ抜けていくところまで見せる。
    実現方法: トライ切り替え（init）でエフェクトの中身を捨てず、この_fxOutroへ
    所有権ごと移す（元の配列は空にするので、_clearTrialFxStateのプール返却
    ループとは競合しない）。以降はphaseに関係なく_updateFxOutro/_drawFxOutroが
    面倒を見て、画面外に出たものからプールへ返す。
-   退場の方向は演出ごとに変える（ユーザー指定）:
+   退場の方向は演出ごとに変える:
      ウヨウヨ = そのままの進行方向へ／ヨヨヨヨ = 上へ引き上げられて飛んでいく
      ウウウウ = 上へ／ギョギョ = そのままの進行方向へ（壁で跳ね返らせない）
    次のトライで当たりが出たらrushを立てて加速させ、新しい演出と混ざり続ける
-   時間を短くする（ユーザー要望）。
-   ギウギウは対象外: 落下ギヨウザ（items）を使う演出で、もともとトライを
-   またいで物理で転がり画面外へ抜けていくため、この仕組みを通す必要がない */
+   時間を短くする。
+   ギウギウは対象外: 落下ギヨウザ（items）を使う演出で、もともとトライをまたいで
+   物理で転がり画面外へ抜けていくため、この仕組みを通す必要がない */
 const _fxOutro = { worms: [], yoyos: [], ghosts: [], fish: [], rush: false, timer: 0 };
 const _FX_OUTRO_RUSH_MULT    = 3;     // 次トライで当たりが出たときの加速倍率
 const _FX_OUTRO_WORM_ACCEL   = 0.06;  // ウヨウヨ: 進行方向への加速(px/frame²)
 const _FX_OUTRO_WORM_SPD_MAX = 14;    // ウヨウヨ: 速度上限（速すぎるとワープして見える）
-const _FX_OUTRO_YOYO_ACCEL   = 0.18;  // ヨヨヨヨ: 上方向への加速（0.35は速すぎるとの実機評価で半減）
+const _FX_OUTRO_YOYO_ACCEL   = 0.18;  // ヨヨヨヨ: 上方向への加速（0.35では速すぎる）
 const _FX_OUTRO_YOYO_SPD0    = -1.5;  // ヨヨヨヨ: 退場開始時の上向き初速
-const _FX_OUTRO_GHOST_ACCEL  = 0.02;  // ウウウウ: 上昇の加速（もっとゆっくりでよいとの実機評価で1/3に）
+const _FX_OUTRO_GHOST_ACCEL  = 0.02;  // ウウウウ: 上昇の加速（ヨヨヨヨよりゆっくり漂わせる）
 const _FX_OUTRO_FISH_ACCEL   = 0.08;  // ギョギョ: 進行方向への加速
 /* 画面外判定（毎フレームのクロージャ生成を避けてモジュールスコープに置く）。
    余白はそれぞれの見た目の大きさに合わせる */
@@ -4412,10 +4371,9 @@ const _predFxGhost = g => g.y > -g.r * 3;
 const _predFxFish  = f => f.x > -f.size * 2.5 && f.x < W + f.size * 2.5;
 
 /* トライ切り替えの直前に呼ぶ。生きているエフェクトを退場モードへ移す */
-/* 退場させる中当たり演出の一覧。1種類ぶんの「取り込み方・進め方・生存判定・返却・描き方」を
-   1エントリにまとめる。以前は_startFxOutro/_updateFxOutro/_drawFxOutro/_clearFxOutroの
-   4関数それぞれに種類ごとの分岐が並んでおり、演出を1つ足すと4箇所を揃える必要があった。
-   ここに1エントリ足せば全部に反映される。
+/* 退場させる中当たり演出の一覧。1種類ぶんの「取り込み方・進め方・生存判定・返却・
+   描き方」を1エントリにまとめる。演出を1つ足すときにここへ1エントリ書けば、
+   開始・更新・描画・後始末の全部に反映される（種類ごとの分岐を4つの関数に散らさない）。
    src/clear が関数なのは、対象がモジュールスコープのlet変数（配列そのものを差し替える）
    ため。step は1体ぶんの前進で、rush（次トライで当たりが出たときの加速倍率）を受ける。
    draw は通常描画と同じ関数を使う（シグネチャは (list, outroTimer) で統一済み） */
@@ -4538,18 +4496,13 @@ function _clearCrossTrialOverlays() {
   syncJustTimer = 0; syncJustLabel = '';
 }
 
-/* トライ終了時のエフェクト系状態を一括で後始末する（init()と_startBossOmen
-   の共通処理として抽出）。以前は_startBossOmenが一部（items/missPopups/
-   payoutPopups/ghost）しかクリアしておらず、hitType別の演出（ギヨギヨの
-   gyogyoFish等）やparticlesがキングギヨウザ突入後も透けて残る不具合があった
-   （実機指摘: 「ギヨギヨ当たり中にキングギヨウザが発動すると、発動後も
-   ギヨギヨの表示が残っていた。過去にも直前の通常モードの表示が残っていた
-   ことがあった」）。draw()内のエフェクト描画（_activeEffect.draw()、
+/* トライ終了時のエフェクト系状態を一括で後始末する。
+   通常のトライ切り替え(init)とキングギヨウザ突入(_startBossOmen)の両方から
+   同じ後始末を呼ぶこと。draw()内のエフェクト描画（_activeEffect.draw()、
    particles、drawUzaFlash等）はいずれもphaseを問わず常時実行される設計
-   （トライ横断フェードアウトのため意図的）なので、状態を消さない限り
-   キングギヨウザ画面の下に残り続けてしまう。通常のトライ切り替え(init)と
-   キングギヨウザ突入(_startBossOmen)の両方から同じ後始末を呼ぶことで、
-   片方だけ直して水平展開が漏れる事態を防ぐ */
+   （トライ横断のフェードアウトのため意図的）なので、状態を消さない限り
+   キングギヨウザ画面の下に前の演出が透けて残る。
+   片方だけで後始末すると、hitType別の演出（ギョギョの魚など）が消し漏れる */
 function _clearTrialFxState() {
   for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
   particles = [];
@@ -4594,20 +4547,17 @@ function init(fromStartup, fromGameOver) {
     applyMuteGain();
     _resumeAudioCtx(() => { playStartJingle(() => startBGM()); });
   } else {
-    /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）
+    /* リプレイ: BGM が止まっていれば再開（鳴っていれば継続）。
        ジングル再生中は開始しない（jingleのonEndコールバックがstartBGMを呼ぶ）。
-       fromGameOver（=_restartToTapestart経由の復帰）では開始しない: そちらは
-       BGMをテープ加速（startBGMTape）で入れるのが演出の本体で、ここでstartBGM()を
-       呼ぶと即時フルテンポで鳴り出してテープ加速が丸ごと飛ぶ。
-       実機指摘「こんがり達成で通常モードへ戻るとき、いきなりルーレットがスピン
-       している。失敗後と同じようにスピンアップさせたい」の直接原因がこれだった。
-       失敗側は stopBGMTape がソースを極低速で生かしたまま保持するので !bgmSource が
-       偽になりここを通らず、達成側だけが NO_BGM_SOURCE_PHASES（bossVictory等）で
-       ソースを破棄済みのため発火していた。
-       この関数の上のコメント（_restartToTapestart）が「init()内の即時フルテンポ再生が
-       誤発動するとテープ加速演出をスキップする」と警告していた事故そのもので、
-       呼び出し順という別の経路だけを塞いでいたため達成側で再発した。
-       条件ではなく引数で明示的に抑制することで、どの経路から来ても再発しない */
+
+       **fromGameOver（=_restartToTapestart経由の復帰）では開始しない。**
+       そちらはBGMをテープ加速（startBGMTape）で入れるのが演出の本体で、ここで
+       startBGM()を呼ぶと即時フルテンポで鳴り出してテープ加速が丸ごと飛ぶ
+       （的も回転係数1で全速スピンになる）。
+       条件（!bgmSource 等）ではなく引数で明示的に抑制する: こんがり達成の復帰は
+       NO_BGM_SOURCE_PHASES でソースを破棄済み、失敗の復帰は stopBGMTape がソースを
+       極低速で生かしたまま保持、と経路ごとに状態が違うため、状態を見る書き方では
+       片方だけ通ってしまう */
     if (audioCtx && !bgmSource && !jingleScheduler && !fromGameOver) startBGM();
   }
   /* feverPending を isSlowSpin より先に処理（isFever=true になることでスローハンド抽選を正しく抑制） */
@@ -4640,8 +4590,8 @@ function init(fromStartup, fromGameOver) {
   _pendingWheels = null;
   wheels = WXS.map((x, i) => {
     if (_ready && _ready[i]) return _ready[i];
-    /* 同期生成ぶんも計測に含める。以前はチェーン側にしかプローブが無く、
-       「間に合わずここで4個作った」ときのコストが?perfから見えなかった */
+    /* 同期生成ぶんも計測に含める（「間に合わずここで4個作った」ときのコストが
+       ?perfから見えるように） */
     const _t0 = PERF_ON ? performance.now() : 0;
     const w = createWheel(x, WYS[i], isFever ? TARGET[i] : null);
     if (PERF_ON) _perfMark('pre', _t0);
@@ -4651,9 +4601,9 @@ function init(fromStartup, fromGameOver) {
   for (const w of wheels) {
     w.speed = (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1);
   }
-  /* 次トライぶんの収集を開始する。実際に作るのは矢が着弾するたび1個ずつで、
-     4射する間に4個そろう（_preBuildStepIfDue参照）。間に合わなかったぶんは
-     次のinit()が同期生成するので、足りなくても壊れない */
+  /* 次トライぶんの収集を開始する。実際に作るのは矢が着弾するたび1個ずつで、4射する間に
+     4個そろう（_preBuildStepIfDue参照）。間に合わない場合は次のinit()が同期生成するので、
+     足りなくても壊れない */
   _pendingWheels = [];
   _preBuiltForShot = -1;
   curIdx     = 0;
@@ -4701,7 +4651,7 @@ function clampBet() {
 
 /* 数値整形: NumberFormat を1回だけ生成してキャッシュ。
    toLocaleString は呼ぶたびに内部で NumberFormat を生成するため遅く（実測41倍差）、
-   コインカウントアニメ中は毎フレーム呼ばれるためフレーム落ちの一因になっていた */
+   コインカウントアニメ中は毎フレーム呼ばれるのでフレーム落ちの原因になる */
 const _NUM_FMT = (typeof Intl !== 'undefined' && Intl.NumberFormat)
   ? new Intl.NumberFormat('ja-JP') : null;
 function fmt(n) { return _NUM_FMT ? _NUM_FMT.format(n) : n.toLocaleString('ja-JP'); }
@@ -4764,7 +4714,7 @@ function _buildSegWheelOC(w, opt) {
   const oc = opt.pool.pop() || _mkCache(sz, sz);
   if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
   const c = oc.getContext('2d');
-  /* 再利用時に前回の transform と内容をクリア */
+  /* 再利用時に残っている transform と内容をクリア */
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, sz, sz);
   c.scale(_dpr, _dpr);
@@ -4876,15 +4826,13 @@ function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面�
    同じ「1本ずつ順番にタップして止める」操作感にする（OffscreenCanvas必須環境限定のため
    フォールバック描画は持たない：ボス戦自体が非対応環境では発生しない） */
 function _createKingReel(x, y, weights) {
-  /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。
-     実機指摘: 以前はここで毎回シャッフルしていたため、的ごと・再スピンごとに
-     並び順が変わって「こんがり」と読めなかった。角度は0から昇順に積むので、
-     canvasの座標系（y下向き＝正の角度が時計回り）では時計回りに
+  /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。シャッフルすると
+     的ごと・再スピンごとに並びが変わって「こんがり」と読めない。角度は0から昇順に
+     積むので、canvasの座標系（y下向き＝正の角度が時計回り）では時計回りに
      こ→ん→が→りと並ぶ。
-     並びを固定してもゲーム性は落ちない: どの文字がポインタに来るかは的の初期
-     回転（rot）と回転速度で決まるため、ランダム性は並び順ではなく回転が担う。
-     文字ごとの当たりやすさの偏り（_adjustKingCharWeight）もspanで表現するので
-     並び順とは独立に機能する */
+     並びを固定してもゲーム性は落ちない: どの文字がポインタに来るかは的の初期回転(rot)と
+     回転速度で決まるため、ランダム性は並び順ではなく回転が担う。文字ごとの当たりやすさの
+     偏り（_adjustKingCharWeight）もspanで表現するので並び順とは独立に機能する */
   const chars = KING_CHARS;
   /* weights（%、KING_CHARS各文字→数値）が渡されればその配分で角度を割る
      （的ごとの命中履歴で偏らせる。_king.charWeights・_adjustKingCharWeight参照）。
@@ -4910,15 +4858,12 @@ function _createKingReel(x, y, weights) {
   return w;
 }
 
-/* ひびの位置を的の絵柄に固定するための基準となる文字。的の segs は再スピンの
-   たびにシャッフルされ、開始角も w.rot も作り直されるため、ひびを「ワールド角
-   −そのときのw.rot」で保存すると次のトライで別の場所へ移動してしまう
-   （ユーザー指摘: 「トライごとにヒビが回転移動しているかのように見える」）。
+/* ひびの位置を的の絵柄に固定するための基準となる文字。
+   的の segs は再スピンのたびにシャッフルされ、開始角も w.rot も作り直されるため、
+   ひびを「ワールド角 − そのときのw.rot」で保存すると次のトライで別の場所へ移動する。
    セグメント配置そのものを基準にすれば絵柄に対する相対位置が保たれるので、
-   この文字のエリアの開始角を原点としてひびの角度を保存・復元する
-   （ユーザー要望: 「『こ』のエリアの始まり部分を基準として、ヒビは同じ相対
-   位置にあるようにしたい」）。どこにひびが入るかの仕様は従来どおり
-   「文字が当たったところ」で変えていない */
+   この文字のエリアの開始角を原点としてひびの角度を保存・復元する。
+   どこにひびが入るかは「文字が当たったところ」 */
 const KING_CRACK_ANCHOR_CHAR = 'こ';
 
 /* 的ローカル座標系（w.rotを含まない、segs.startと同じ系）における
@@ -4932,22 +4877,17 @@ function _kingReelAnchorAngle(w) {
 }
 
 /* 的のひび割れ（破壊演出）用の先細りウェッジ（扇形の破片）ポリゴンを1個生成する。
-   ユーザー要望: 「ヒビが入るのは、飛んできた文字が的に当たった場所を起点に
-   したい。的の、文字が当たった縁部分から、的の中心方向に向かって割れる。
-   中心まで全部割れるのもおかしいので、途中（中心から半径の多くても1/2くらい）
-   まで。当たった向きを勘案して割れる方向が物理法則的に自然だとなお良い。
-   クラックの幅も端が大きく隙間が開いて、中心方向に向かうに従って割れている
-   幅が狭くなる」。さらに「的とクラック表示が独立してしまっている。回転する
-   的の文字衝突部分にクラックが入るのだから、クラックごと的が回転するはず」
-   という指摘を受け、ポリゴンは的の回転(w.rot)に追従するローカル座標系
-   （drawKingReelのctx.rotate(w.rot)の内側）で組むように変更した。
-   引数baseAngleは呼び出し側（_kingReelShoot）で「文字が実際に当たったワールド
-   座標上の角度（常に真上=-PI/2＋ボス位置に応じた傾き）」からその時点の
-   w.rotを差し引いて渡された、的自身から見たローカル角度。的が生きている
-   （ロック中〜再スピン後の回転中）間はこの値を使い続けるため、着弾直後は
-   実際の衝突位置と一致し、以後は的の回転にそのまま追従する（以前の
-   _generateKingReelCracksと同じ「的のローカル座標に固定してctx.rotateで
-   一緒に回す」方式に、着弾位置ベースの生成を組み合わせた形） */
+   ひびは「飛んできた文字が的に当たった場所」を起点に、的の縁から中心方向へ割れる。
+   中心までは割らず、半径の1/2程度までに留める。幅は縁で広く、中心へ向かうほど狭い。
+   割れる向きは当たった向きを勘案する。
+
+   ポリゴンは**的の回転(w.rot)に追従するローカル座標系**（drawKingReelの
+   ctx.rotate(w.rot)の内側）で組む。ワールド座標で固定すると、回転する的の上を
+   ひびだけが滑って見える。
+   引数baseAngleは呼び出し側（_kingReelShoot）で「文字が実際に当たったワールド座標上の
+   角度」からその時点のw.rotを差し引いて渡された、的自身から見たローカル角度。
+   的が生きている（ロック中〜再スピン後の回転中）間はこの値を使い続けるため、着弾直後は
+   実際の衝突位置と一致し、以後は的の回転にそのまま追従する */
 function _createKingCrackWedge(baseAngle) {
   const outerR = KING_WR;                                    // 起点＝的の縁
   const innerR = KING_WR * (0.15 + Math.random() * 0.35);    // 終点＝中心からの距離（最大でも半径の約半分）
@@ -5015,12 +4955,11 @@ function _kingReelPointerPos(w) {
   return { x: w.x + Math.cos(pointer) * (KING_WR + 12), y: w.y + Math.sin(pointer) * (KING_WR + 12) };
 }
 
-/* 発射待ち（マーク済みだが未発射）の的の三角ポインタに帯電演出を描く
-   （ユーザー要望: 「4つマークした状態で次のアクションが必要だとわかりにくい。
-   的を射るとその的の三角がビリビリとエネルギーを帯びる感じにしたい」）。
-   時間ベースのバケツ値を擬似乱数シードにして数十msごとにジグザグの向きを
-   切り替えることで静電気のような点滅を表現する（パーティクル・プール化は
-   的4本ぶんの極小描画のため不要、プロジェクト規約の描画最適化対象外） */
+/* マーク済みの的の三角ポインタに帯電演出を描く。4つマークした状態で次のアクションが
+   必要だと分かるようにするための表示。
+   時間ベースのバケツ値を擬似乱数シードにして数十msごとにジグザグの向きを切り替え、
+   静電気のような点滅を表現する（的4本ぶんの極小描画なので、パーティクル化・
+   プール化の対象外） */
 function _drawKingReelCharge(px, py, idx) {
   /* 帯電の勢いをバッテリー残量に連動させる（副表示）。プレイヤーの視線は的に
      釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
@@ -5029,11 +4968,10 @@ function _drawKingReelCharge(px, py, idx) {
   const vigor = 0.35 + 0.65 * pw;
   let seed = Math.floor(performance.now() / 45) + idx * 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-  /* 大きさは的の半径基準にする。実機評価「スパークエフェクトが小さすぎてよく見えない。
-     もっと派手に（大きめに）帯電している感じを表現できますか」で、固定6〜12pxから
-     的の半径基準へ引き上げた。縦横でKING_WRが変わるので比で持つ。
-     一度0.55〜1.15倍まで広げたが「長さを7割くらいに」という追加評価で0.39〜0.81倍へ。
-     本数・線幅・グローはそのままなので密度と輝きは保ったまま、広がりだけを抑えている */
+  /* 大きさは的の半径基準にする（縦横でKING_WRが変わるので比で持つ）。固定pxだと
+     画面サイズによって見え方が変わり、小さすぎて気付かれない。
+     広がりは0.39〜0.81倍。本数・線幅・グローはそのままなので、密度と輝きを保ったまま
+     長さだけを抑えている */
   const R = KING_WR;
   const flick = 0.55 + rnd() * 0.45; // 明滅
   ctx.save();
@@ -5057,8 +4995,8 @@ function _drawKingReelCharge(px, py, idx) {
       ctx.lineTo(Math.cos(a) * len * t, Math.sin(a) * len * t);
     }
   }
-  /* 線幅は実機評価で一度細くしている（グロー 0.22R → 0.15R、芯 0.075R → 0.045R）。
-     長さ・本数は変えていないので、density はそのままで線だけが締まる */
+  /* 線幅はグロー 0.15R・芯 0.045R。細めに締めることで、長さ・本数（density）は
+     そのままに、密度感を保ったまま線を締めて見せる */
   ctx.globalAlpha = 0.40 * flick * vigor;
   ctx.strokeStyle = '#ffd34d';
   ctx.lineWidth = Math.max(3.5, R * 0.15);
@@ -5153,12 +5091,12 @@ function _drawKingChargeTether(x0, y0, x1, y1, idx) {
    溜まっている、という見え方にする。座標変換は _kingFlightTargetPos および
    アクセントの発光と同じ（ボスの表示位置・呼吸・のけぞりに追従）。
 
-   描き方は的の三角の帯電（_drawKingReelCharge）とそのまま揃える: 時間バケツを
-   疑似乱数シードにして数十msごとに形を切り替え、根元ほど大きく振れて先端へ
-   収束する3折れの稲妻を、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の
-   2回ストロークで光らせる。一度うねる曲線（プラズマボール風）にしてみたが、
-   同じ画面にある的側の帯電と別物に見えて統一感が崩れるという実機評価で戻した。
-   違いは発生点だけ（的は中心から、こちらは文字の縁から外へ）。
+   描き方は的の三角の帯電（_drawKingReelCharge）と揃える: 時間バケツを疑似乱数
+   シードにして数十msごとに形を切り替え、根元ほど大きく振れて先端へ収束する
+   3折れの稲妻を、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
+   ストロークで光らせる。うねる曲線（プラズマボール風）にはしない: 同じ画面にある
+   的側の帯電と別物に見えて統一感が崩れる。違いは発生点だけ（的は中心から、
+   こちらは文字の縁から外へ）。
 
    充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
    的の帯電がバッテリー残量で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
@@ -5223,17 +5161,15 @@ function drawKingReel(w, active, idx) {
   ctx.translate(w.x, w.y);
   ctx.rotate(w.rot);
   ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
-  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ
-     向けて先細りに割れる（_createKingCrackWedge参照）。この ctx.rotate(w.rot)
-     の内側で描くことで、的が回転する（再スピン後の回転中も含む）とひびも
-     一緒に回転する（ユーザー指摘: 「的とクラック表示が独立してしまっている。
-     クラックごと的が回転するはず」に対応）。
-     さらにここで基準文字エリアの開始角ぶんを回す。ポリゴンはその開始角を原点
-     とした相対角で保存されているため（_addKingReelCrackAtCollision参照）、
-     現在の的の開始角を足し戻すことで絵柄に対する位置が一定になる。
-     的は再スピンのたびに新しいrot・新しいセグメント配置で作り直されるが、
-     ひびは_king.reelCracks[idx]にスロット単位で蓄積して残るため、この
-     足し戻しが無いとトライごとにひびが絵柄の上を回転移動してしまう */
+  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ向けて先細りに
+     割れる（_createKingCrackWedge参照）。この ctx.rotate(w.rot) の内側で描くことで、的が
+     回転する（再スピン後の回転中も含む）とひびも一緒に回転する＝ひびごと的が回る。
+     さらにここで基準文字エリアの開始角ぶんを回す。ポリゴンはその開始角を原点とした相対角で
+     保存されているため（_addKingReelCrackAtCollision参照）、現在の的の開始角を足し戻すことで
+     絵柄に対する位置が一定になる。
+     的は再スピンのたびに新しいrot・新しいセグメント配置で作り直されるが、ひびは
+     _king.reelCracks[idx]にスロット単位で蓄積して残るため、この足し戻しが無いとトライごとに
+     ひびが絵柄の上を回転移動してしまう */
   if (_king && _king.reelCracks && idx != null) {
     const cracks = _king.reelCracks[idx];
     if (cracks && cracks.length) {
@@ -5253,10 +5189,9 @@ function drawKingReel(w, active, idx) {
   }
   ctx.restore();
   /* ビートリング: これから射つ的の外側に、拍ごとに広がって消える輪を出す。
-     実機評価「こんがり的にも通常ゲームモードの的と同じビートリング（に似た物）が欲しい。
-     バッテリーの減り方だけではタイミングがとりにくい」への対応。
-     ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、拍の手掛かりが
-     一つも無かった（全タップが calcSyncScore で採点されているにも関わらず）。
+     ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、これが
+     無いと拍の手掛かりが一つも無くなる（全タップが calcSyncScore で採点されるのに、
+     バッテリーの減り方しか手掛かりが無い状態になる）。
      通常モードはプリレンダのグロースプライト（WR基準）を使うが、KING_WRは縦画面で
      動的に変わるので流用できない。shadowBlurも規約で使えないため、広がる輪＋減衰する
      線幅で表現する（ミュート時の画面枠と同じ考え方）。 */
@@ -5279,18 +5214,16 @@ function drawKingReel(w, active, idx) {
   ctx.stroke();
   /* ポインタ三角形は画面の向きによらず常に的の真上（当たり位置は hitResult 呼び出し側で
      常に -PI/2 を渡して揃える）。台座半径は「リング外縁（最大 KING_WR+4.5）に接するが
-     重ならない」よう先端が KING_WR+5 に来る値に調整済み（+7 のままだと先端がリングの
-     内側まで食い込んでいた。実機指摘で発覚） */
+     重ならない」よう、先端が KING_WR+5 に来る値にしてある */
   const pointer = -Math.PI/2;
   const { x: px, y: py } = _kingReelPointerPos(w);
   ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
   ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
   ctx.fillStyle = Y; ctx.fill();
   ctx.restore();
-  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）が必要な
-     ことを視覚的に伝える。消えるのは「その的のビームが実際にマークへ飛んだ瞬間」
-     （実機要望: 発射タイミングで一斉に消えていたが、本当にビームが飛ぶまで維持したい）。
-     再生では的ごとに撃つ時刻がずれるので、順に消えていく */
+  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）が必要なことを
+     視覚的に伝える。消えるのは「その的のビームが実際にマークへ飛んだ瞬間」で、発射タイミングで
+     一斉に消すのではない。再生では的ごとに撃つ時刻がずれるので、順に消えていく */
   if (w.locked && _king && !_king.reelBeamed[idx]) _drawKingReelCharge(px, py, idx);
   /* 発射タップの瞬間の放電はそのまま重ねて出す（帯電の有無とは独立） */
   if (w.locked && _kingFireFlash > 0) _drawKingReelDischarge(px, py, idx);
@@ -5402,8 +5335,8 @@ function _resolveTrialResult() {
     lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
   }
   /* 前トライのエフェクトがまだ退場しきっていないうちに次の当たりが出た場合は、
-     退場を加速して早く画面から抜けさせる（ユーザー要望: 新しい当たり演出と
-     混ざり続けないように）。ハズレでは加速しない＝そのままの速度で流れていく */
+     退場を加速して早く画面から抜けさせる（新しい当たり演出と混ざり続けないように）。
+     ハズレでは加速しない＝そのままの速度で流れていく */
   if (hitType !== 'none') _fxOutro.rush = true;
   /* 配当計算 */
   const payout = calcPayout();
@@ -5420,13 +5353,11 @@ function _resolveTrialResult() {
   }
   /* ハズレ判定 */
   if (!_isJackpot && !_isMedium) {
-    /* 通常モードのハズレでは効果音を鳴らさない（ユーザー要望「4的目を打った後、
-       文字列が揃わずにハズレたときの効果音が耳障り」）。'miss'SE（ズコーという
-       ノコギリ波の下降スライド）は通常プレイで最も頻繁に鳴るSEであり、
-       ハズレのたびに毎回鳴ると耳につく。ハズレ自体はポップアップ（missPopups）
-       と画面演出で十分伝わるため、音は落とす。
-       ※'miss'SE自体はキングギヨウザ戦の失敗時（頻度が低く演出上の意味がある）
-         で引き続き使うので、playSEのcaseは残す */
+    /* 通常モードのハズレでは効果音を鳴らさない。'miss'SE（ズコーというノコギリ波の
+       下降スライド）は通常プレイで最も頻繁に鳴る位置にあり、ハズレのたびに鳴ると
+       耳につく。ハズレ自体はポップアップ（missPopups）と画面演出で十分伝わる。
+       ※'miss'SE自体はキングギヨウザ戦の失敗時（頻度が低く演出上の意味がある）で
+         引き続き使うので、SE_TABLEのエントリは残す */
     isMissResult = true;
     missPopups.push({ amt: bet, timer: 120 }); // 配列に追加（複数同時OK）
   }
@@ -5446,13 +5377,11 @@ function _resolveTrialResult() {
    新しく「phaseに関係なく進める必要があるもの」を足すときは、update()本体では
    なくこの関数に入れること。 */
 function _updateAlways() {
-  /* 画面全体フェード: 関数先頭で最優先に更新する。boss系の各phase分岐は末尾で
-     早期returnするため（bossDefeatOutro等）、後方の「phaseをまたいで常時更新
-     すべきもの」セクションに置くとその早期returnで一切実行されず、フェードが
-     永久に止まってしまう不具合があった（実機指摘: フェードアウト後CONTINUEが
-     表示されたまま入力が効かない＝_screenFade.timerが一度も進まずonMidが
-     呼ばれずphaseが切り替わらなかったのが原因）。関数の最初に置くことで
-     どのphase分岐が早期returnしても必ず1回だけ実行されるようにする。 */
+  /* 画面全体フェードは関数先頭で最優先に更新する。
+     boss系の各phase分岐は末尾で早期returnするため、後方の「phaseをまたいで常時更新
+     すべきもの」セクションに置くと、その早期returnで一切実行されずフェードが永久に
+     止まる（フェードアウト後に画面が固まり、onMidが呼ばれずphaseも切り替わらない）。
+     関数の最初に置くことで、どのphase分岐が早期returnしても必ず1回だけ実行される。 */
   if (_screenFade) _updateScreenFade();
   /* BGMのハイシェルフ（こんがり度連動の音色変化）。ボス戦以外では0dBへ戻す役目も
      兼ねているため、boss系phase分岐の早期returnに巻き込まれない位置＝ここに置く
@@ -5461,17 +5390,14 @@ function _updateAlways() {
   _updateBgmToneShelf();
   /* ────────────────────────────────────────────────
      大ゲームスコープ: phaseをまたいで常時更新すべきもの
-     （↑の_screenFadeと同じ理由でここに置く。以前は関数末尾寄りに置いていたが、
-     bossOmen/boss/bossVictory/bossDefeat/bossDefeatOutro/tapestart/startupの
-     各phase分岐がいずれも早期returnする構造のため、そこに置くと実際には
-     「phaseをまたいで」更新されず、それらのphase中は完全に凍結していた
-     （実機指摘: FEVER終了バナーの枠やlaunchFireworksの花火の破片が、
-     キングギヨウザ演出の画面にそのまま残り続ける不具合。原因は花火パーティクル
-     の物理更新(swapRemoveによる寿命切れ削除を含む)とフィーバー終了バナー
-     タイマーの減算がどちらもここにあり、boss系phaseの早期returnで一度も
-     実行されなくなっていたため、寿命が尽きて消えるはずの物が永久に描画され
-     続けていた。_screenFadeで一度発覚した不具合と同一クラスのため、
-     このセクション全体を関数先頭へ移動した＝水平展開） */
+     （↑の_screenFadeと同じ理由でここに置く）
+
+     **このセクションを関数の後方へ移動してはいけない。**
+     bossOmen/boss/bossVictory/bossDefeat/bossDefeatOutro/tapestart/startupの各phase
+     分岐はいずれも早期returnするので、後方に置くとそれらのphase中は完全に凍結する。
+     ここには花火パーティクルの物理更新（swapRemoveによる寿命切れ削除を含む）や
+     フィーバー終了バナーのタイマー減算が入っており、凍結すると寿命が尽きて消える
+     はずのものがキングギヨウザ演出の画面に残り続ける。 */
   /* particles: 花火・命中インパクト等の共通パーティクル物理 */
   for (const p of particles) {
     p.x += p.vx; p.y += p.vy;
@@ -5590,15 +5516,13 @@ function _updateAlways() {
   if (coinsDisp !== coins && phase !== 'startup') {
     const _cd   = coins - coinsDisp;
     /* 決着後（ゲームオーバー／キング戦の敗北）はテープが止まってレートが0.001まで
-       落ちるため、表示が実値へ追いつけずゆっくり減り続ける。実機指摘「こんがり失敗の
-       後、グレースケールになった裏で所持ギヨウザ数がゆっくり減り続ける」の正体。
-       没収の大部分は stopBGMTape の0.7秒のランプ中に消化される（所持15000＝没収7500で
-       5931枚）が、残り（同1569枚）が敗北シーケンスの間ずっと這うことになる。
+       落ちるため、表示が実値へ追いつけずゆっくり減り続ける（没収の大部分は
+       stopBGMTape の0.7秒のランプ中に消化されるが、残りが敗北シーケンスの間ずっと
+       這うことになる）。
        レートに連動させるのはプレイ中のスロー演出（スローハンド等）を世界の時間の
        流れに合わせるためのものなので、決着後は下限を与えて必ず収束させる
-       （下限0.5なら500枚でも約1.4秒）。プレイ中・tapestartの加速中は従来どおり
-       生のレートを使うので、「tapestart中はコイン表示が0で止まる」等の既存の
-       見え方は変わらない */
+       （下限0.5なら500枚でも約1.4秒）。プレイ中・tapestartの加速中は生のレートを
+       使うので、「tapestart中はコイン表示が0で止まる」等の見え方は変わらない */
     const _rateRaw = audioCtx ? _getBgmRateJS() : 1;
     const _rate = (isGameOver || KING_DEFEAT_PHASES.has(phase))
       ? Math.max(_rateRaw, COIN_DISP_MIN_RATE) : _rateRaw;
@@ -5630,9 +5554,8 @@ function update() {
   if (phase === 'tapestart') {
     /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期
        .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算。
-       ソースがまだ無い場合は、生成待ち（startBGMTapeが非同期で走る）の間だけ0で
-       止めて待ち、上限を過ぎたら従来どおり1で即座に回り出す
-       （_tapestartSrcWaitUntil の定義部コメント参照） */
+       ソースがまだ無い場合は、生成待ち（startBGMTapeが非同期で走る）の間だけ0で止めて待ち、
+       上限を過ぎたら1で即座に回り出す（_tapestartSrcWaitUntil の定義部コメント参照） */
     const tapeRate = bgmSource ? Math.max(0, Math.min(1, _getBgmRateJS()))
       : (performance.now() < _tapestartSrcWaitUntil ? 0 : 1);
     for (const w of wheels) w.rot += w.speed * tapeRate;
@@ -5702,8 +5625,7 @@ function update() {
       wheels[curIdx].hasArrow = true;
       /* 着弾では音を鳴らさない。矢の到着は spawnImpact の映像だけが担い、音は
          プレイヤーが打った瞬間の発射音（'shoot'）だけになる。
-         かつてここで鳴らしていた着弾音を廃止した経緯と実測値、および安易に
-         復活させないための指針は _SHOOT_ARPEGIO の定義部コメントに集約してある */
+         着弾音を足したくなったときの指針は _SHOOT_ARPEGIO の定義部コメントを参照 */
       curIdx++;
       if (curIdx >= 4) {
         _resolveTrialResult();
@@ -5909,12 +5831,12 @@ function drawWorms(list) {
 /* ════════════════ 落下アイテム ════════════════ */
 
 /* ── ギヨウザ外観バリアントスプライト ──
-   drawOneItem は1個あたり約10パス+グラデーションのベクタ描画で、
-   大当たり/フィーバー時（最大240個）の描画が idle の約20倍のコストを占めていた。
-   起動時に皮色×具配置のバリアントを OC へ焼き込み、毎フレームは
-   回転付き drawImage 1回に置換する（実測 約2.5倍高速）。
+   drawOneItem は1個あたり約10パス+グラデーションのベクタ描画で、大当たり/フィーバー時
+   （最大240個）の描画が idle の約20倍のコストを占める。
+   起動時に皮色×具配置のバリアントを OC へ焼き込み、毎フレームは回転付き drawImage 1回に
+   置換する（実測 約2.5倍高速）。
    個体差は _ITEM_VARIANT_N 種に量子化されるが落下群では知覚できない。
-   OffscreenCanvas 未対応時は null → 従来のパス描画へフォールバック。 */
+   OffscreenCanvas 未対応時は null → パス描画へフォールバック */
 const _ITEM_VARIANT_N   = 12;
 const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
 const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
@@ -6020,10 +5942,9 @@ const RMAX_ITEM_R  = 42 * 0.52;
    ・支えを失ったアイテムは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
 /* 円衝突の解決1パス（yソート済みスイープ → 位置補正 → 法線インパルス → 接線摩擦）。
-   落下アイテム（updateItems）とギウギウ（updateGiugiu）がまったく同じソルバを
-   それぞれ持っていた。同じ物理を2箇所に写経していると片方だけ直して他方が
-   取り残される（実際、同じ役割の定数が RESTITUTION 0.06/0.50、G_FRICTION2/FRICTION2
-   と別名・別値で並存し、grepでの水平展開が効かない状態だった）。
+   落下アイテム（updateItems）とギウギウ（updateGiugiu）は同じソルバを使う。片方に写して
+   持たせてはいけない: 同じ物理が2箇所にあると片方だけ直して他方が取り残され、同じ役割の
+   定数が別名・別値で並存して grep での水平展開も効かなくなる。
    差分はオプションで注入する:
      restitution 反発係数（法線方向の速度保持率）
      friction2   アイテム間摩擦（接線方向の減衰）
@@ -7042,9 +6963,9 @@ let _omenGhost = null; // 予兆の霊 { x, y, vx, wobble, oc, sz, cy }
 let _bossOC = null, _BOSS_S = 0; // キングギヨウザ本体スプライト（初回出現時に生成）
 
 /* こんがりしっぱい（ルーレット破壊・全損には至らない敗北）後、通常モードへ
-   戻る前のつなぎ演出（ユーザー要望）。誕生演出（バラバラのギヨウザが収束して
-   キングギヨウザになる）を逆再生するイメージで、キングの姿がふつうのギヨウザ群へ
-   弾け散り、そのあと誕生演出と同じ台詞スタイルでメッセージを出してから復帰する */
+   戻る前のつなぎ演出。誕生演出（バラバラのギヨウザが収束してキングギヨウザになる）を
+   逆再生するイメージで、キングの姿がふつうのギヨウザ群へ弾け散り、そのあと誕生演出と
+   同じ台詞スタイルでメッセージを出してから復帰する */
 const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
 /* 締めメッセージ（達成側・失敗側で共通の書式）のフォント。
    折り返しの計測（_wrapOutroLines）と実描画（_drawOutroMsg）で必ず同じ書式を
@@ -7053,10 +6974,9 @@ const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていっ
 function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
 function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px ${FONT_MIN}`; }
 /* 締めメッセージを画面幅に収まるよう折り返す。
-   実機指摘: 縦画面（W=420）で「ギヨウザは また あつまりはじめる……」が横から
-   はみ出していた。文言は後から調整する前提なので、固定の行配列をそのまま
-   描かず必ずここを通して、どんな文言でも収まるようにする。
-   区切りは既存のエンドロールと同じく空白（半角・全角）位置。
+   縦画面（W=420）は横画面よりずっと狭いので、固定の行配列をそのまま描くと文字が
+   はみ出す。文言は後から調整する前提なので、必ずここを通してどんな文言でも収まる
+   ようにする。区切りはエンドロールと同じく空白（半角・全角）位置。
    ctx.measureTextを使うので演出の開始時に1度だけ実行し、結果を状態に持たせる
    （毎フレーム計測しない） */
 function _wrapOutroLines(lines) {
@@ -7092,10 +7012,9 @@ const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
 
 /* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
    上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
-   実機指摘「表情の変化と地鳴りがマッチしていない」への対応で、地鳴りの
-   マイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
+   地鳴りのマイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
    動かす。口の定数から導いているので、口の形を変えれば地鳴りも自動で追従する
-   （別々のしきい値を持たせるとまた食い違うため） */
+   （別々のしきい値を持たせると表情と音が食い違う） */
 function _kingGentleness(pct01) {
   const ctrl = KING_MOUTH_CTRL_Y0 + (KING_MOUTH_CTRL_Y1 - KING_MOUTH_CTRL_Y0) * pct01;
   return Math.max(0, Math.min(1, (ctrl - KING_MOUTH_END_Y) / (KING_MOUTH_CTRL_Y1 - KING_MOUTH_END_Y)));
@@ -7117,12 +7036,11 @@ function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
   /* 瞳の上寄せ量。白目の縦半径(er)からはみ出さないよう0.5erまでに留める */
   const pupilDy = -er * 0.5 * gazeUp;
   /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.2er 〜 眉尻=ex+1.2er,ey-2.4er）を、
-     黒目とほぼ同じX座標（瞳=ex-0.25er、ユーザー指定）にあるピボットを中心に
-     回転させる。ピボットYは元の眉ライン上（そのX位置での直線上の点）に置くため
-     pct=0では回転量0＝元の見た目と完全一致する。pct→1でangle1（ほぼ水平・
-     少し眉尻が下がる程度に緩和）まで回転し、眉頭・眉尻の両方が滑らかに動く
-     （旧実装は眉頭を固定して眉尻だけ動かしていたが、ピボットを目寄りにしたことで
-     線分全体が目から自然に離れ、上下移動に見えない自然な回転になる） */
+     黒目とほぼ同じX座標（瞳=ex-0.25er）にあるピボットを中心に回転させる。
+     ピボットYは元の眉ライン上（そのX位置での直線上の点）に置くため、pct=0では
+     回転量0＝素の見た目と完全に一致する。pct→1でangle1（ほぼ水平・少し眉尻が
+     下がる程度）まで回転し、眉頭・眉尻の両方が滑らかに動く。
+     眉頭を固定して眉尻だけ動かす形にはしない: 上下移動に見えて回転に見えない */
   const innerX0 = ex - er*1.2, innerY0 = ey - er*1.2;
   const outerX0 = ex + er*1.2, outerY0 = ey - er*2.4;
   const pivotX = ex - er*0.25;
@@ -7166,12 +7084,12 @@ function _buildBossOC() {
   const half = Math.ceil(s * 0.75);
   const REF = 42, kk = s / REF;
   const mkOC = () => _mkCache(half * 2 * _dpr, half * 2 * _dpr);
-  /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する
-     （目鼻口眉はトーンの影響を受けさせず、白目の白さで焦げ色とのコントラストを
-     出したいというユーザー要望に基づく。_renderKingBody 参照）。
-     本体は通常サイズ(42)で組んで scale 変換で拡大する。
-     _drawGyozaBody の線幅は小サイズ用の絶対値のため、直接 s=300 で描くと
-     ひだ・輪郭が細すぎて「白い卵」に見える（scale なら線幅も比例して太る） */
+  /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
+     目鼻口眉はトーンの影響を受けさせず、白目の白さで焦げ色とのコントラストを出す
+     （_renderKingBody 参照）。
+     本体は通常サイズ(42)で組んで scale 変換で拡大する。_drawGyozaBody の線幅は
+     小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
+     見える（scale なら線幅も比例して太る） */
   const bodyOC = mkOC();
   const bc = bodyOC.getContext('2d');
   bc.scale(_dpr, _dpr);
@@ -7189,22 +7107,21 @@ function _buildBossOC() {
   fc.scale(_dpr, _dpr);
   fc.translate(half, half);
   _drawKingFace(fc, s);
-  /* 通常表示（予告演出など）用に body+face を1枚に合成したもの（従来どおり） */
+  /* 通常表示（予告演出など）用に body+face を1枚に合成したもの */
   const oc = mkOC();
   const c = oc.getContext('2d');
   c.drawImage(bodyOC, 0, 0);
   c.drawImage(faceOC, 0, 0);
-  /* 合成用のliveOCもここで確保しておく。以前は_initBossBattle（戦闘開始）で
-     確保しており、1140x1140＝約130万画素の確保が、的が回り始めるフレームに
-     ぶつかって回転の速度ムラになっていた（実機指摘）。予兆は演出だけの区間なので、
-     ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
+  /* 合成用のliveOCもここで確保しておく。1140x1140＝約130万画素の確保を戦闘開始時に
+     行うと、的が回り始めるフレームにぶつかって回転の速度ムラになる。予兆は演出だけの
+     区間なので、ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
   const liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   _bossOC = { oc, bodyOC, faceOC, half, liveOC };
 }
 
-/* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部。
-   ユーザー要望: king値の蓄積だけでなく、他の実績を全て達成していることも
-   条件に足す。これにより「こんがり」は必然的に最後に解除される実績になる） */
+/* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部）。
+   king値の蓄積だけでなく他の実績を全て達成していることも条件にすることで、
+   「こんがり」は必然的に最後に解除される実績になる */
 function _allAchExceptKongariDone() {
   return ACHIEVEMENTS.every(a => a.id === KONGARI_ACH_ID || unlockedAch[a.id]);
 }
@@ -7228,18 +7145,16 @@ function _startBossOmen() {
      phaseを見ずに描かれるため、暗転下に透けたりキング画面に重なったりする。
      寿命の分類は_clearCrossTrialOverlaysのコメント参照 */
   _clearCrossTrialOverlays();
-  /* 直前の通常モードのエフェクト状態（ギヨギヨ等のhitType別演出、particles等）を
-     init()と同じ後始末で完全にクリアする（_clearTrialFxState参照。実機指摘で発覚:
-     ここが手薄だったため、当たり演出の途中でキングギヨウザが発動すると
-     その演出がキングギヨウザ画面の下に透けて残っていた） */
+  /* 直前の通常モードのエフェクト状態（hitType別の演出、particles等）を init()と同じ
+     後始末で完全にクリアする（_clearTrialFxState参照）。ここが手薄だと、当たり演出の
+     途中でキングギヨウザが発動したときにその演出がキングギヨウザ画面の下に透けて残る */
   _clearTrialFxState();
   /* 退場中のエフェクトも同じ理由で消す（トライを越えて生き残る仕組みなので、
      クリアし忘れるとキングギヨウザ画面の上をギヨウザが飛んでいくことになる） */
   _clearFxOutro();
-  /* isSlowSpin等はトライ限定の演出だが_clearTrialFxStateの対象外だったため、
-     スローハンド中にキング戦へ突入すると発動状態・ランプ終了時刻が戦闘中
-     ずっと残留していた（実機報告の調査で発覚した水平展開漏れ。他のトライ
-     限定演出と同じ扱いにする） */
+  /* isSlowSpin等のトライ限定の演出状態も落とす。残すと、スローハンド中にキング戦へ
+     突入した場合に発動状態・ランプ終了時刻が戦闘中ずっと残留する
+     （他のトライ限定演出と同じ扱いにすること） */
   isSlowSpin = false;
   slowRampEndTime = 0;
   slowHandLockUntil = 0;
@@ -7289,7 +7204,7 @@ function _updateBossOmen() {
       for (const g of o.items) g._dead = true;
       o.items = [];
       grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
-      playSE('kingAppear'); // バーン+ドラの派手な一撃（ユーザー要望、_playDoraHit参照）
+      playSE('kingAppear'); // バーン+ドラの派手な一撃（_playDoraHit参照）
     }
   } else if (o.step === 6) {
     /* 誕生フラッシュ+タイトル */
@@ -7298,11 +7213,10 @@ function _updateBossOmen() {
   /* step7: ボス鎮座（handleGameClick がタップで _initBossBattle を呼び戦闘開始） */
 }
 
-/* ボス戦闘系フェーズ（bossOmenは含まない: 予兆中はホイール等の通常UIをまだ
-   表示するため）。通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは
-   必ずこの述語を使うこと。以前は6項目のphase比較チェーンを各ガードにコピー
-   していたため、新フェーズ追加時（bossShatter等）の広げ忘れが実バグになった
-   （drawSlowHandBadgeのコメント参照）。一元化により全ガードへ同時反映される */
+/* ボス戦闘系フェーズ（bossOmenは含まない: 予兆中はホイール等の通常UIをまだ表示する）。
+   通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは必ずこの述語を使うこと。
+   phase比較のチェーンを各ガードにコピーすると、フェーズを追加したとき（bossShatter等）に
+   広げ忘れが実バグになる。一元化により全ガードへ同時反映される */
 const BOSS_BATTLE_PHASES = new Set(
   ['boss', 'bossShatter', 'bossVictory', 'bossVictoryOutro', 'trueEnding',
    'bossDefeat', 'bossDefeatShrink', 'bossDefeatOutro']);
@@ -7323,17 +7237,16 @@ const KING_DEFEAT_PHASES = new Set(['bossDefeat', 'bossDefeatShrink', 'bossDefea
    ポーズ→再開でBGMが鳴り出すと演出が壊れる */
 const NO_BGM_SOURCE_PHASES = new Set(['bossVictory', 'bossVictoryOutro', 'trueEnding']);
 
-/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の
-   補償経路（bgmSourceが無ければ起動する、という善意の処理）から通常BGMが
-   割り込むのを止めるための述語。内訳:
+/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の補償経路
+   （bgmSourceが無ければ起動する、という善意の処理）から通常BGMが割り込むのを止めるための述語。
+   内訳:
      startup            まだ始まっていない
      bossOmen           予告中（startBGMがグレースケールを即時解除してしまう）
      soundTest/drumPad  鳴らす音をモード側が完全に握っている
      NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ
      キング戦系         テンポ・段階差し替え・テープ停止を戦闘側が一括で持つ
-   除外条件を各ガードにコピーすると、新しいモードを足すたびに片方だけ直す事故が
-   起きる（実際サウンドテスト・ドラムパッドがこの漏れで、ミュート解除すると
-   通常BGMが鳴り出していた）。判定はこの述語に集約すること */
+   判定は必ずこの述語に集約すること。除外条件を各ガードにコピーすると、新しいモードを足す
+   たびに片方だけ直す事故が起き、そのモードでミュート解除すると通常BGMが鳴り出す */
 function _noAutoBgmPhase() {
   return phase === 'startup' || phase === 'bossOmen' ||
          phase === 'soundTest' || phase === 'drumPad' ||
@@ -7372,16 +7285,14 @@ function _cleanupKingBattleState() {
 
 function _kingBattleEnd() {
   _cleanupKingBattleState();
-  /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と
-     同じゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップで
-     gameOverReset）を経由させる（ユーザー要望: 「所持ギヨウザが0になる場合、
-     キングギヨウザが戻って飛んでいく演出を優先してください。その後、
-     所持ギヨウザ0のゲームオーバー演出に進んでください」）。ここで即座に
-     gameOverReset()を呼ぶと画面を見せないまま再スタートしてしまうため、
-     通常モードのisGameOver検出と同じ状態（phase='done'、endTimerから
-     canRestartが45フレーム後に立ち上がる、drawEndScreen参照）を作って
-     引き継ぐ。実際のリセット（gameOverReset）はそのCONTINUEタップ時に
-     handleGameClickのphase==='done'分岐から呼ばれる（通常モードと共通）。
+  /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と同じ
+     ゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップでgameOverReset）を
+     経由させる。所持ギヨウザが0になる場合でも、まずキングが戻って飛んでいく演出を
+     見せてから、そのゲームオーバー演出へ進む。
+     ここで即座にgameOverReset()を呼ぶと画面を見せないまま再スタートしてしまうため、
+     通常モードのisGameOver検出と同じ状態（phase='done'、endTimerからcanRestartが
+     45フレーム後に立ち上がる、drawEndScreen参照）を作って引き継ぐ。実際のリセットは
+     そのCONTINUEタップ時にhandleGameClickのphase==='done'分岐から呼ばれる（通常モードと共通）。
      勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
   if (coins <= 0) {
     isGameOver = true;
@@ -7392,14 +7303,11 @@ function _kingBattleEnd() {
     return;
   }
   _restartToTapestart();
-  /* 実機報告で発覚: _restartToTapestart→init(fromGameOver=true)は通常の
-     ゲームオーバー復帰と同じ経路を共有しており、そちらの仕様（"ゲームオーバー
-     リカバリー後もBET対応速度へ"）に従って無条件でスローハンドの抽選を行う。
-     このためキング戦からの復帰（勝敗問わず）直後に、無関係な抽選で
-     スローハンドが発動しバッジが表示されることがあった。キングギヨウザ戦
-     という特別な文脈からの復帰直後に、無関係な確率イベントで割り込まれるのは
-     不適切なため、キング戦復帰では常に通常速度で始まるよう明示的に抑制する
-     （通常のgameOverResetにはこの抑制を入れない＝既存仕様を維持） */
+  /* _restartToTapestart→init(fromGameOver=true)は通常のゲームオーバー復帰と同じ経路を
+     共有しており、そちらの仕様（ゲームオーバー復帰後もBET対応速度へ）に従って無条件で
+     スローハンドの抽選を行う。キング戦という特別な文脈からの復帰直後に無関係な確率
+     イベントで割り込まれるのは不適切なので、キング戦復帰（勝敗問わず）では常に通常速度で
+     始まるよう明示的に抑制する。通常のgameOverResetにはこの抑制を入れない */
   isSlowSpin = false;
   _slowSpinPending = null;
 }
@@ -7407,53 +7315,46 @@ function _kingBattleEnd() {
 /* こんがりしっぱい（全損には至らない敗北）から通常モードへ戻る前のつなぎ演出。
    誕生演出（ギヨウザが収束してキングになる）の逆再生イメージで、キングの姿が
    ふつうのギヨウザ群へ弾け散り、そのあと誕生演出と同じ台詞スタイルで
-   メッセージを出してから復帰する（ユーザー要望） */
-/* 誕生演出（_updateBossOmen step5: バラバラのギヨウザが中心へ収束してキングになる）
-   の「純粋な逆回し」（ユーザー要望: 重力落下ではなく、渦を巻きながら中心から
-   外へ拡散していく、収束演出そのものの巻き戻しにしたい）。
-   同じ中心・同じ半径・同じ収束係数・同じフレーム数を使い、1フレームごとの
-   更新式を厳密に逆算する:
+   メッセージを出してから復帰する */
+/* 誕生演出（_updateBossOmen step5: バラバラのギヨウザが中心へ収束してキングになる）の
+   純粋な逆回し。重力落下ではなく、渦を巻きながら中心から外へ拡散する＝収束演出そのものの
+   巻き戻しとして見せる。
+   同じ中心・同じ半径・同じ収束係数・同じフレーム数を使い、1フレームごとの更新式を
+   厳密に逆算する:
      収束(forward): pos = c + (pos-c)*(1-K)  ⇔  拡散(reverse): pos = c + (pos-c)/(1-K)
-   これを110フレーム続けると、収束後に残るごく小さな半径(startR)から
-   出現時の半径R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する。 */
+   これを110フレーム続けると、収束後に残るごく小さな半径(startR)から出現時の半径
+   R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する */
 const _DEFEAT_OUTRO_K = 0.06;      // _updateBossOmen step5 の収束係数と同値
 const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
-/* 締めのメッセージ（_DEFEAT_OUTRO_LINES）の見せ方。ユーザー要望により
-   「ちからが とけて……／かえっていった……」を1行ずつ順に出すのをやめ、
-   2行まとめて1つのメッセージとして扱う。フェードイン・フェードアウトも
-   行ごとではなく全体で1回ずつ（誕生予告drawBossOmenの「過去行を薄く残して
-   積んでいく」見せ方とは意図的に別物にする）。
+/* 締めメッセージ（_DEFEAT_OUTRO_LINES）の見せ方。全行を1つのメッセージとして
+   同時に出し、フェードイン・フェードアウトも全体で1回ずつ行う（誕生予告drawBossOmenの
+   「過去行を薄く残して積んでいく」見せ方とは意図的に別物）。
    HOLDは全文を表示したまま保持する長さ。
-   フェードアウトはイン側と同じ長さでは短すぎて余韻が残らないという指摘を
-   受け、イン側と分離して3倍の長さでゆっくり消えるようにした。さらに
-   easeOutカーブ（_easeF参照）を掛けることで、消え際の薄い状態が長く尾を
-   引くようにしている（線形だと最後まで一定速度で消えて余韻が出にくい） */
+   フェードアウトはイン側と分離して3倍の長さを取る（同じ長さでは消えるのが速すぎて
+   余韻が残らない）。さらに easeOut カーブ（_easeF参照）を掛け、消え際の薄い状態が
+   長く尾を引くようにする。線形だと最後まで一定速度で消えて余韻が出ない */
 /* ── 締めメッセージの尺は「目標の表示秒数」を直接持つ ──
-   ここは変遷が長いので経緯を残す。もともと失敗側の固定値（保持96フレーム等）を
-   達成側がそのまま共有していたため、文章量が1.7倍ある達成側が読み終わらない
-   という実機指摘があった（失敗18文字・縦画面2行／達成31文字・縦画面4行）。
-   そこで一度は「文字数と行数から読解時間を算出する」モデルに変えたが、その後
-   「失敗はおよそ3秒、達成はおよそ6秒」という目標尺の指定を重ねて受けた結果、
-   2つの目標を2つの係数で通すために1文字186ms・下駄-125という意味を持たない
-   値になり、モデルとして破綻した（文字数比1.72倍に対して時間が2倍という関係を
-   直線で通そうとしたため）。
-   そこで係数による間接的な調整をやめ、目標の表示秒数そのものを定数として持つ形に
-   組み替えた。保持時間は
+   失敗側はおよそ3秒、達成側はおよそ6秒を目標とする。文章量が違う（失敗18文字・
+   縦画面2行／達成31文字・縦画面4行）ので、両者で同じ固定フレーム数を共有させると
+   達成側が読み終わらない。
+   一方で「1文字あたり◯ms」のような係数モデルにもしない: 文字数比1.72倍に対して
+   目標時間比が2倍なので、2つの目標を1本の直線で通そうとすると意味を持たない
+   係数と下駄になり、モデルとして破綻する。
+   よって目標の表示秒数そのものを定数として持ち、保持時間は
      保持 = 目標フレーム数 - フェードイン - フェードアウト
    の引き算で求める。利点:
-   - 定数がそのまま仕様（「達成は6秒」）を表すので、次に尺を変えたいときは
-     この秒数だけ触ればよく、係数を連立で解き直す必要がない。
+   - 定数がそのまま仕様（達成は6秒）を表すので、尺を変えたいときはこの秒数だけ触ればよい。
    - 文言を差し替えても目標秒数は変わらない＝尺が勝手にずれない。
-     （文字数に応じて動くのはフェードアウトの長さだけになり、その分だけ保持が
-      自動的に詰まって合計は目標どおりに保たれる） */
+     文字数に応じて動くのはフェードアウトの長さだけで、その分だけ保持が自動的に詰まり
+     合計は目標どおりに保たれる */
 const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
 /* 目標の表示秒数（フェードイン開始からフェードアウト終了まで）。ユーザー指定。
    ここが仕様の本体なので、尺を変えたいときはこの2つだけを触る */
 const _OUTRO_MSG_TARGET_SEC_DEFEAT  = 3.0; // こんがり失敗の締め
 const _OUTRO_MSG_TARGET_SEC_VICTORY = 6.0; // こんがり達成（キングクリア）の締め
-/* 保持時間の下限。フェードだけで目標秒数を食い潰すほど極端に長い文言に
-   差し替えた場合の保険（引き算の結果が0以下になりうる）。その場合だけは
-   合計が目標秒数を超える＝読ませることを優先する */
+/* 保持時間の下限。フェードだけで目標秒数を食い潰すほど長い文言になった場合の保険
+   （引き算の結果が0以下になりうる）。その場合だけは合計が目標秒数を超える＝読ませることを
+   優先する */
 const _OUTRO_MSG_HOLD_MIN      = 40;
 /* フェードアウト（余韻）の長さは文章量で伸ばす。長い文なら締めもゆったりする
    のが自然なため。合計は目標秒数に固定されるので、ここが伸びたぶんは保持から
@@ -7482,14 +7383,13 @@ function _makeOutroMsgTiming(msgLines, targetSec) {
     hold: Math.max(_OUTRO_MSG_HOLD_MIN, total - fadeIn - fadeOut),
   };
 }
-/* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、
-   o.msgAlpha を確定させる（update で状態を決めて draw は読むだけ、という
-   このプロジェクトの分離方針）。戻り値=消えきったか。
-   達成側・失敗側で同一の式だったものを一本化した。以前は同じ式を2箇所へ
-   コピーしていたため、達成側が失敗側の尺をそのまま引き継いでいることに
-   気づきにくく、実際に今回の「読む時間が足りない」不具合につながった。
-   消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で
-   消えてしまい余韻が出ない） */
+/* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、o.msgAlpha を
+   確定させる（update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針）。
+   戻り値=消えきったか。
+   達成側・失敗側で式は同一なので必ずここに集約する。同じ式を2箇所へコピーすると、
+   片側だけ尺を変えたときにもう片側が古い尺のまま取り残される。
+   消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で消えて
+   余韻が出ない） */
 function _advanceOutroMsg(o) {
   const T = o.msgTiming;
   const fadeOutStart = T.fadeIn + T.hold;
@@ -7506,19 +7406,14 @@ function _advanceOutroMsg(o) {
 
 /* 締めメッセージを描く（達成側・失敗側で共通）。色だけが呼び出し側の指定で、
    フォント・行間・中央揃えの基準・透明度の扱いはすべて共通。
-   一本化した理由: 以前はdrawBossDefeatOutroとdrawBossVictoryOutroに色以外
-   まったく同一のブロックが複製されていた。update側（_advanceOutroMsg）は
-   一本化済みだったが描画側が残っており、実際にこの重複が原因の不具合を
-   一度出している（達成側の文言が縦画面で横からはみ出た＝片側しか折り返しを
-   考慮していなかった）。配置やフォントを変えるときに片側だけ直す事故を
-   構造的に防ぐ。
-   誕生予告（drawBossOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、
-   こちらは全行を1つのメッセージとして同時に出す（ユーザー要望）。
-   位置も誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から始めるが、
-   こちらは行数が少なく同じ開始位置だと画面上寄りに偏って見える（実機指摘）。
-   画面に固定のボスが居ないぶん余裕があるため、全行の中心が画面中央(H/2)に
-   来るよう配置し、行数が少ない分フォントも大きくする。
-   行数は文言と画面幅で変わるので、中央揃えの基準は実際の行数から求める */
+   描画側もupdate側（_advanceOutroMsg）と同様に必ず一本化する: 色以外が同一のブロックを
+   複製すると、折り返しや配置を変えたときに片側だけ直す事故が起きる。
+   誕生予告（drawBossOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、こちらは
+   全行を1つのメッセージとして同時に出す。
+   位置も誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から始めるが、こちらは
+   行数が少なく同じ開始位置だと画面上寄りに偏って見える。画面に固定のボスが居ないぶん
+   余裕があるため、全行の中心が画面中央(H/2)に来るよう配置し、行数が少ない分フォントも
+   大きくする。行数は文言と画面幅で変わるので、中央揃えの基準は実際の行数から求める */
 function _drawOutroMsg(o, fillColor, shadowColor) {
   if (!(o.msgAlpha > 0)) return;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -7534,10 +7429,9 @@ function _drawOutroMsg(o, fillColor, shadowColor) {
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
    KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
    （makeItem の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
-   横画面380*0.75*2=570px）から逆算した約0.075。0.02のような極端な値にすると
-   ギヨウザの集合体より先に見えなくなってしまい「小さくなりすぎている」という
-   実機指摘の原因になっていた（クロスフェード前提でも、フェード開始時点で
-   両者のサイズ感が合っていないと違和感が残る）。
+   横画面380*0.75*2=570px）から逆算した約0.075。これより極端に小さくすると、続けて
+   出るギヨウザの集合体より先に見えなくなり、クロスフェードしてもサイズ感の食い違いが
+   違和感として残る。
    KING_DEFEAT_XFADE_START_DSCALE: このdscaleまで縮んだらクロスフェード開始。
    KING_DEFEAT_XFADE_FRAMES: クロスフェードの長さ（フレーム数）。 */
 const KING_DEFEAT_SHRINK_SCALE = 0.075;
@@ -7546,10 +7440,9 @@ const KING_DEFEAT_XFADE_FRAMES = 20;
 let _bossDefeatXfade = 0; // 0=キングのみ表示 〜 1=ギヨウザ群のみ表示
 
 /* 画面全体フェード（汎用）: phase切り替えの継ぎ目を暗転でつなぐ演出。
-   ユーザー要望: 「かえっていった……」のあと通常モードへ戻る画面をフェードアウト・
-   フェードインでつなぎ、余韻を残したい。暗転が最大になった瞬間にonMidを呼んで
-   実際のphase切り替え（_kingBattleEnd等の重い処理）を行い、その後フェードインする
-   ことで、切り替えの瞬間を暗闇の中に隠す（どのphaseから呼んでも使える汎用実装） */
+   暗転が最大になった瞬間にonMidを呼んで実際のphase切り替え（_kingBattleEnd等の重い処理）
+   を行い、その後フェードインすることで、切り替えの瞬間を暗闇の中に隠す。
+   どのphaseから呼んでも使える汎用実装 */
 const _SCREEN_FADE_FRAMES = 35;
 let _screenFade = null; // { stage:'out'|'in', timer, alpha, onMid }
 function _startScreenFade(onMid, frames = _SCREEN_FADE_FRAMES) {
@@ -7601,16 +7494,15 @@ function _makeDefeatOutroItems() {
            msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
 }
 
-/* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への
-   弾け散り演出（bossDefeatOutro）へ切り替える前段。当初は縮小しきったところで
-   瞬時にphaseを切り替えるだけだったが、「紙芝居のめくりのように感じる」
-   「キングギヨウザが小さくなりすぎている」という実機指摘を受けて、
+/* こんがりしっぱい画面（bossDefeat, CONTINUEタップ後）から、ギヨウザ群への弾け散り演出
+   （bossDefeatOutro）へ切り替える前段。
+   縮みきった瞬間にphaseを差し替えるだけだと紙芝居のめくりのように見えるため、
    (1) 縮小目標スケールをアイテム1個ぶんの見た目サイズに合わせ、
-   (2) 縮小の終盤でキング（フェードアウト）とギヨウザ群（フェードイン）を
-   一定フレームだけ重ねて描く、の2点で滑らかな切り替えに変更した。
-   誕生演出・戦闘位置移行・勝利拡大と同じ_easeKingXformの指数収束はそのまま
-   再利用し、キングギヨウザを等倍から弾け散り開始位置（中心=_defeatOutroの
-   cx,cy）へ縮小・移動させる */
+   (2) 縮小の終盤でキング（フェードアウト）とギヨウザ群（フェードイン）を一定フレームだけ
+       重ねて描く、
+   の2点で滑らかにつなぐ。
+   誕生演出・戦闘位置移行・勝利拡大と同じ_easeKingXformの指数収束をそのまま再利用し、
+   キングギヨウザを等倍から弾け散り開始位置（中心=_defeatOutroのcx,cy）へ縮小・移動させる */
 function _startBossDefeatShrink() {
   phase = 'bossDefeatShrink';
   _bossDefeatShrinkTimer = 0;
@@ -7685,10 +7577,9 @@ function _updateBossDefeatOutro() {
     /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
        行ごとの出し分けはしない。尺は目標秒数から逆算済み（_makeOutroMsgTiming参照） */
     const done = _advanceOutroMsg(o);
-    /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ
-       戻る（ユーザー要望: CONTINUE待ちは不要、時間で進んで良い）。
-       _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレーム
-       この条件を満たし続けて構わない */
+    /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ戻る。
+       _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレームこの条件を
+       満たし続けて構わない */
     if (done) _startScreenFade(() => _kingBattleEnd());
   }
 }
@@ -7743,53 +7634,48 @@ function drawBossOmen() {
 }
 
 /* ════════════════ キングギヨウザ 戦闘（M2） ════════════════
-   操作はタイミングのみ（自動照準）。的（文字）1本ずつのタップ精度で
-   こんがり%が直接決まる（JUST=+1.0%・GOOD=+0.5%・OK以下=+0%、4本平均ではなく
-   個別判定）。「こ・ん・が・り」全一致（当たり）確定時のみ、その4タップぶんの
-   焦げ跡候補が正式に登録される。cookPctが100%でこんがり100%＝勝利。
-   個々の焼き目は命中直後は局所的な焦げ跡として見え、実時間で少しずつ薄くなりながら
-   消える。その代わりに全身の色トーンが焦げ色方向へ寄っていき（pct=cookPct/100
-   に連動、ゲージ%と常に同期）、100%到達と同時に全身が焦茶色になる。
-   焼き目を liveOC へ永続焼き込みしていた旧実装（source-atop 1回焼き込み）から、
-   「焦げ跡フェード＋全身トーン」を毎フレーム _renderKingBody() で合成する方式に変更
-   （フェード中の焦げ跡がある間のみ再合成。フェード完了後は再合成をスキップして
-   前回の合成結果を使い回す＝焦げ跡が無い期間の毎フレームコストはゼロ）。
-   ボスからの攻撃・被弾・敗北は M3 で実装する。 */
+   操作はタイミングのみ（自動照準）。的（文字）1本ずつのタップ精度でこんがり%が直接決まる
+   （JUST=+1.0%・GOOD=+0.5%・OK以下=+0%、4本平均ではなく個別判定）。
+   「こ・ん・が・り」全一致（当たり）確定時のみ、その4タップぶんの焦げ跡候補が正式に
+   登録される。cookPctが100%でこんがり100%＝勝利。
+   個々の焼き目は命中直後は局所的な焦げ跡として見え、実時間で少しずつ薄くなりながら消える。
+   その代わりに全身の色トーンが焦げ色方向へ寄っていき（pct=cookPct/100 に連動、ゲージ%と
+   常に同期）、100%到達と同時に全身が焦茶色になる。
+   焼き目は liveOC へ永続焼き込みするのではなく、「焦げ跡フェード＋全身トーン」を
+   毎フレーム _renderKingBody() で合成する。フェード中の焦げ跡がある間のみ再合成し、
+   フェード完了後は直前の合成結果を使い回す＝焦げ跡が無い期間の毎フレームコストはゼロ */
 const KING_MARK_FADE_SEC = 2.2;   // 個々の焦げ跡が薄くなって消えるまでの実時間（wall-clock）
-/* こんがり%はタップごとの精度で直接積算する方式（ユーザー承認済み）:
-   JUST=+1.0%・GOOD=+0.5%・OK以下=0%（焦げ跡も作らない）。的は4本1組だが、
-   スコアは4本の平均ではなく1本ずつ個別に判定する。焦げ跡は「当たり
-   （こ・ん・が・り全一致）」が確定して初めて正式に生成・カウントする
-   （不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
+/* こんがり%はタップごとの精度で直接積算する:
+   JUST=+1.0%・GOOD=+0.5%・OK以下=0%（焦げ跡も作らない）。的は4本1組だが、スコアは4本の
+   平均ではなく1本ずつ個別に判定する。焦げ跡は「当たり（こ・ん・が・り全一致）」が確定して
+   初めて正式に生成・カウントする（不一致なら個々のタップがJUST/GOODでも焦げは残らない） */
 const KING_GOOD_PCT = 0.5;
 const KING_JUST_PCT = 1.0;
 /* ビームが三角から着地先マークまで到達するのにかける時間（フレーム数）。
-   距離に関わらず全ビーム共通のこの値で進行度(age/KING_LASER_TRAVEL_FRAMES)を
-   計算するため、的とマークの距離が違っても4本とも同時に着弾する
-   （ユーザー要望: 「距離によらず、４つ同時にマークにビームが到着するように
-   したい。1/60×3フレーム程度の高速なアニメーションで」） */
+   距離に関わらず全ビーム共通のこの値で進行度(age/KING_LASER_TRAVEL_FRAMES)を計算する。
+   これにより的とマークの距離が違っても4本とも同時に着弾する。3フレーム程度の高速な
+   アニメーションにして、タップから結果までの間を詰める */
 const KING_LASER_TRAVEL_FRAMES = 3;
-/* こんがり攻撃失敗（4文字不一致）のペナルティとルーレット破壊演出（ユーザー要望）:
+/* こんがり攻撃失敗（4文字不一致）のペナルティとルーレット破壊演出:
    失敗のたびにこんがり%を少し後退させ、ルーレットにひびを1本ずつ増やす。
    KING_MAX_FAILS回失敗するとルーレット完全破壊＝敗北（_startBossDefeat） */
 const KING_MISS_PCT_PENALTY = 1.0;
 const KING_MAX_FAILS = 6;
-/* KING_CHAR_JUST_FONT_SCALE: マークされる文字（グリフ）自体の大きさをJUSTで
-   拡大する倍率（面積4倍=辺2倍、GOOD基準）。焦げ跡（スコーチブロット）の
-   面積とは別物（ユーザー指摘: 焦げのサイズを勝手に変えるな、文字の大きさを
-   変えてほしいと言っている、の2点は別々の要素）。焦げ跡側のサイズは常に
-   一定（_createKingMark参照） */
+/* KING_CHAR_JUST_FONT_SCALE: マークされる文字（グリフ）自体の大きさをJUSTで拡大する倍率
+   （面積4倍=辺2倍、GOOD基準）。
+   変えるのは文字の大きさだけで、焦げ跡（スコーチブロット）の面積は精度によらず常に一定
+   （_createKingMark参照）。両者は別の要素として扱うこと */
 const KING_CHAR_JUST_FONT_SCALE = 2;
 /* 飛翔文字のグリフサイズ。描画（drawKingCharFlights）と帯電スパークの大きさ
    （_stickKingChar が m.chargeR として保存）の両方で使うので関数にしてある。
-   スパーク側が焦げ跡の半径基準だと文字よりはるかに大きくなり「文字の外で
-   帯電している」に見えなかった（焦げ跡は文字の数倍の面積で描かれる） */
+   スパーク側を焦げ跡の半径基準にしてはいけない: 焦げ跡は文字の数倍の面積で描かれるので、
+   スパークが文字よりはるかに大きくなり「文字の外で帯電している」ように見える */
 const _kingCharFontSize = f => f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_JUST_FONT_SCALE : KING_RESULT_FONT;
-/* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に
-   残る焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
-   以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別途重ねていたが、
-   文字が飛んでいった先（＝実際の焦げ跡）と模様の位置が一致しないという
-   実機指摘で廃止し、焦げ跡自身が薄れながら痕を残す方式に統一した */
+/* KING_MARK_RESIDUAL_ALPHA: フェード完了後も消え切らず、ごくごく薄く永続的に残る
+   焦げ跡の下限アルファ比率（1=フェード開始直後と同じ濃さ）。
+   焦げ跡は必ず「文字が飛んでいった先」に紐づけ、位置と無関係な固定の焼き目模様を
+   別途重ねてはいけない。模様と実際の着弾位置がずれると、当てた場所が焦げていないように
+   見える */
 const KING_MARK_RESIDUAL_ALPHA = 0.14;
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
@@ -7807,38 +7693,32 @@ const KING_VISUAL_TOP_RATIO = 0.40, KING_VISUAL_BOTTOM_RATIO = 0.56;
    ジャンプをなくすための指数収束レート（1フレームあたりの残差縮小率）。
    アニメーション進行に紐づく演出のためフレームカウンタ基準（wall-clockにしない）。 */
 const KING_XFORM_EASE = 0.12;
-/* 決定文字の飛翔演出（矢を射る／リールを確定させる操作とは独立のバックグラウンド
-   演出。通常モードの missPopups/payoutPopups と同じ「配列に積んで毎フレーム
-   自走・自然消滅」方式）。的が確定するたび(1本ロックごと)にキャラを1体スポーンし、
-   ボス付近まで飛ばして待機、4本目の判定が出た時点で未解決分すべてに結果
-   （こんがり=吸い込まれて消える／ハズレ=飛んできた的へ戻って衝突・反発・
-   落下し、画面外へ消える）を伝える。
-   着地先は結果が判明する前（1〜3本目）から、そのタップ自体の精度（JUST/GOOD）で
-   位置・サイズを確定した焦げ跡候補（_createKingMark）を最初から使う（OK以下は
-   焦げ跡候補なし＝ボス中心へ向かうだけ）。4本目で「こ・ん・が・り」全一致が
-   確定した時点で、各文字の焦げ跡候補を正式に _king.marks へ登録して%を加算する。
-   不一致（ハズレ）ならどのタップも登録されず、そのまま的へ戻って物理的に
-   跳ね返り落下するだけ（ユーザー要望: マークした文字が的に飛んできて
-   ぶつかり、物理エミュレーションで衝突・反発・落下を表現し、最終的に画面外へ
-   落ちていくようにしたい。的側のひび演出はfailCount連動の既存演出をそのまま
-   使うため、この飛翔演出側では何も生成しない） */
+/* 決定文字の飛翔演出（矢を射る／リールを確定させる操作とは独立のバックグラウンド演出。
+   通常モードの missPopups/payoutPopups と同じ「配列に積んで毎フレーム自走・自然消滅」方式）。
+   的が確定するたび(1本ロックごと)にキャラを1体スポーンし、ボス付近まで飛ばして待機、
+   4本目の判定が出た時点で未解決分すべてに結果（こんがり=吸い込まれて消える／ハズレ=
+   飛んできた的へ戻って衝突・反発・落下し、画面外へ消える）を伝える。
+   着地先は結果が判明する前（1〜3本目）から、そのタップ自体の精度（JUST/GOOD）で位置・
+   サイズを確定した焦げ跡候補（_createKingMark）を最初から使う（OK以下は焦げ跡候補なし＝
+   ボス中心へ向かうだけ）。4本目で「こ・ん・が・り」全一致が確定した時点で、各文字の
+   焦げ跡候補を正式に _king.marks へ登録して%を加算する。
+   不一致（ハズレ）ならどのタップも登録されず、そのまま的へ戻って物理的に跳ね返り落下し、
+   最終的に画面外へ落ちていく。的側のひび演出はfailCount連動の既存演出が担うので、
+   この飛翔演出側では何も生成しない */
 const KING_CHAR_FLY_FRAMES = 16;        // 往路（キングへの接近）にかかるフレーム数。復路はKING_CHAR_RETURN_FRAMES
 const KING_CHAR_STICK_FADE_FRAMES = 10; // こんがり: 命中後に消えるまで
-/* ハズレは的に衝突後、反発して画面外に出るまでフェードせず表示し続ける
-   （ユーザー指摘: 途中でフェードアウトするのは違う、画面外に消えるまで
-   見えていてほしい）。MAX_FRAMESは万一画面外に出ない角度になった場合の
-   保険上限（通常は発火しない） */
+/* ハズレは的に衝突後、反発して画面外に出るまでフェードせず表示し続ける（途中でフェード
+   アウトさせず、画面外に消えるまで見えている）。MAX_FRAMESは万一画面外に出ない角度になった
+   場合の保険上限（通常は発火しない） */
 const KING_CHAR_FALL_MAX_FRAMES = 180;
 const KING_CHAR_OFFSCREEN_MARGIN = 60;
-/* 的への衝突反発の物理係数（ユーザー要望: 「運動エネルギーがほぼ全て的を
-   割るために使われ、その結果、的にあたった文字はほぼ下に自由落下する動作に
-   近くしたい」）。衝突点の法線は常に真上固定（着弾点=的の縁の真上、
-   _startKingCharBounce参照）なので、bvyがそのまま法線方向、bvxがそのまま
-   接線方向の速度成分になる。RESTITUTION（反発係数）は法線方向の速度保持率、
-   FRICTIONは接線方向の速度保持率。ほぼゼロに近い値にして「衝突でほとんど
-   静止し、そこから重力だけで落ちる」動きにする（以前は逆に「はね返りが
-   弱すぎて単なる自由落下に見える」という指摘で強めていたが、今回はその
-   逆方向の要望のため差し替え） */
+/* 的への衝突反発の物理係数。狙いは「運動エネルギーがほぼ全て的を割るために使われ、
+   衝突した文字はほぼ真下への自由落下に近い動きになる」こと。
+   衝突点の法線は常に真上固定（着弾点=的の縁の真上、_startKingCharBounce参照）なので、
+   bvyがそのまま法線方向、bvxがそのまま接線方向の速度成分になる。
+   RESTITUTION（反発係数）は法線方向の速度保持率、FRICTIONは接線方向の速度保持率。
+   どちらもほぼゼロに近い値にして「衝突でほとんど静止し、そこから重力だけで落ちる」動きに
+   する */
 const KING_CHAR_BOUNCE_RESTITUTION = 0.08;
 const KING_CHAR_BOUNCE_FRICTION    = 0.15;
 /* 衝突時にキング側から加える能動的な「弾き飛ばし」インパルス。上記と同じ
@@ -7848,15 +7728,14 @@ const KING_CHAR_BOUNCE_FRICTION    = 0.15;
 const KING_CHAR_KNOCK_SPEED_X = 0.6;
 const KING_CHAR_KNOCK_SPEED_Y = 0.8;
 const KING_CHAR_KNOCK_ROT_SPD = 0.06;
-/* ── こんがり不一致時の「篩い落とし」演出（ユーザー要望: 「マークした文字が
-   向かい始める時に、キングギヨウザが文字を下に向かって篩い落とすようなアクションを
-   追加したい」） ──
-   タメ（わずかに上へ引く）→ 振り下ろし（底で文字が離れる）→ 減衰する残振動。
-   発動タイミングは「4文字すべてがキングに到着してから」（ユーザー選択の案(b)。
-   最速発射でも常に『到着→振り下ろす→落ちる』の順になり見え方が一定になる）。
-   キング本体の変位は描画時オフセットとして持ち、dby等の状態は汚さない
-   （_easeKingXformが毎フレームdby→byへ収束させるため綱引きになる。呼吸の拡縮
-   breathと同じ「描画時だけ掛ける」方式に揃える。_kingSiftOffsetY参照） */
+/* ── こんがり不一致時の「篩い落とし」演出 ──
+   キングが文字を下に向かって篩い落とす動き。タメ（わずかに上へ引く）→ 振り下ろし
+   （底で文字が離れる）→ 減衰する残振動。
+   発動は「4文字すべてがキングに到着してから」。最速で発射しても常に『到着→振り下ろす→
+   落ちる』の順になり、見え方が一定になる。
+   キング本体の変位は描画時オフセットとして持ち、dby等の状態は汚さないこと
+   （_easeKingXformが毎フレームdby→byへ収束させるため綱引きになる）。呼吸の拡縮breathと
+   同じ「描画時だけ掛ける」方式に揃える（_kingSiftOffsetY参照） */
 const KING_SIFT_WINDUP_FRAMES = 4;   // タメ
 const KING_SIFT_DROP_FRAMES   = 6;   // 振り下ろし
 const KING_SIFT_SETTLE_FRAMES = 22;  // 残振動（減衰）
@@ -7865,31 +7744,26 @@ const KING_SIFT_AMP    = 14;         // 振り下ろしの最大変位(px)
 const KING_SIFT_SQUASH = 0.08;       // 底でのスカッシュ量（縦を潰し横を広げる）
 const KING_SIFT_GAZE   = -0.6;       // 振り下ろし中の視線（負＝下を見る。_drawKingFace参照）
 /* 復路（篩い落とされて的へ向かう）のフレーム数。
-   当初は往路KING_CHAR_FLY_FRAMES(16)から振り下ろし待ち(KING_SIFT_RELEASE_FRAME=10)を
-   差し引いた6フレームにして、発射タップ〜衝突までの総時間を演出追加前と同じ16
-   フレームに保っていた（「帳尻合わせて」）。しかし総時間の一致より、篩い落とされた
-   文字が落ちていく過程が見えることのほうが演出として重要だったため、総時間の制約を
-   外して10フレームに広げる（総時間は16→20フレーム）。KING_SIFT_RELEASE_FRAMEとの
-   差し引き関係は無くなったので、往路・復路それぞれ独立に調整してよい */
+   往路KING_CHAR_FLY_FRAMES・振り下ろし待ちKING_SIFT_RELEASE_FRAMEとは独立に決めてよい
+   （発射タップ〜衝突までの総時間を一定に保つ制約は置かない）。総時間を切り詰めるより、
+   篩い落とされた文字が落ちていく過程がはっきり見えることを優先する */
 const KING_CHAR_RETURN_FRAMES = 10;
 /* 振り下ろしに合わせた画面の微揺れ（既存のdraw()冒頭のshake機構に加算する）。
    打撃感の補強なので短く小さく。フレームカウンタで良い（映像の進行に紐づく演出） */
 const KING_SIFT_SHAKE_FRAMES = 8;
 let _kingSiftShake = 0;
-/* 文字が的に当たった衝撃で、その的だけが小さく揺れる（ユーザー要望）。
-   減衰する上下振動を主体にし、横はごくわずかに添えるだけ（衝突点は常に的の
-   真上なので、縦に叩かれた揺れ方が自然）。的スロット単位で持つのはひび
-   （_king.reelCracks）と同じ理由で、再スピンで的オブジェクトが作り直されても
-   スロットに紐づけておけば取り違えないため。
-   実機指摘「衝撃があまり的に伝わっていないように見える／タイミングが早い気が
-   する」を受けて、初版から以下を変更した:
-   - 初版は sin(経過フレーム) だったため、セットした瞬間（経過0）の変位が
-     sin(0)=0 で、一番鋭いはずの衝突フレームに的が全く動いていなかった。
-     cosベースにして衝突フレームで最大変位になるようにする
-   - BIASぶん下方向へ偏らせる。衝突は真上からなので「まず沈んで、小さく戻る」
-     方が自然（上下等分に揺れると単なる振動に見える）
-   - 振幅を3.5→6pxへ。的の直径に対して控えめすぎた（最大変位も設定値の84%
-     しか出ていなかった） */
+/* 文字が的に当たった衝撃で、その的だけが小さく揺れる。
+   減衰する上下振動を主体にし、横はごくわずかに添えるだけ（衝突点は常に的の真上なので、
+   縦に叩かれた揺れ方が自然）。的スロット単位で持つのはひび（_king.reelCracks）と同じ理由で、
+   再スピンで的オブジェクトが作り直されてもスロットに紐づけておけば取り違えない。
+   衝撃が伝わって見えるために必要な3点:
+   - cosベースにして、セットした瞬間（経過0）＝一番鋭いはずの衝突フレームで最大変位に
+     なるようにする。sinベースだと衝突フレームの変位が0になり、的が全く動いていないように
+     見える
+   - BIASぶん下方向へ偏らせる。衝突は真上からなので「まず沈んで、小さく戻る」方が自然
+     （上下等分に揺れると単なる振動に見える）
+   - 振幅は的の直径に対して十分な大きさを取る（減衰と位相の関係で最大変位は設定値どおりには
+     出ないので、控えめな値だとほとんど動いて見えない） */
 const KING_REEL_SHAKE_FRAMES = 12;
 const KING_REEL_SHAKE_AMP    = 6;
 const KING_REEL_SHAKE_FREQ   = 1.05; // 約6フレーム周期
@@ -7914,24 +7788,24 @@ let _kingCrackKinLastMs = -Infinity;
 
    打ち込み: 5タップは生・即時。マーク4回はクローズハイハット(kingShoot)、発射は
      オープンハイハット(kingFire)で撃った合図を音でも立てる。
-     入力を補正しないという原則（発射SEのビートスナップが2度否定された経緯）は
-     ここで守られる。各タップの時刻は _bgmJudgePos → スロットへ量子化して記録。
+     プレイヤーの入力そのものは決して補正しない（発射SEをビートへスナップさせない）。
+     各タップの時刻は _bgmJudgePos → スロットへ量子化して記録する。
    再生: 記録した相対オフセットの「長い隙間だけ」を詰めて、スネア(kingBeam)で鳴らす。
-     こんがりが揃った時だけ発生し、ミス時は従来どおり（篩い落とし→衝突→ひび）。
+     こんがりが揃った時だけ発生し、ミス時は篩い落とし→衝突→ひびの流れになる。
      音は audioCtx の時刻で先行スケジュールする。update() から毎フレーム発火させると
-     16.7msのジッタが乗り、16分=82msに対して約20%のヨレとして聴こえるため。
-   量子化はプレイヤーの入力そのものを書き換えるのではなく「後から鳴らす別の演奏」に
-   掛かる（実機のMPC等と同じ、録音中は生・再生はクオンタイズ）。採点（こんがり%）は
-   生のタイミングのままなので報酬構造は変わらない。 */
-/* 1拍の分割数＝量子化の細かさ。4で16分音符（ユーザー要望）。
-   スロット数で表す各定数（KING_SEQ_GAP_MAX 等）と「拍境界かどうか」の判定は
-   すべてここから導出する。直接2や4で判定を書くと、この値を変えたときに
-   拍の境界がずれて静かに壊れる（8分→16分にした際に実際に踏んだ）。
+     16.7msのジッタが乗り、16分=82msに対して約20%のヨレとして聴こえる。
+   量子化はプレイヤーの入力そのものを書き換えるのではなく「後から鳴らす別の演奏」に掛かる
+   （実機のMPC等と同じ、録音中は生・再生はクオンタイズ）。採点（こんがり%）は生のタイミングの
+   ままなので報酬構造は変わらない */
+/* 1拍の分割数＝量子化の細かさ。4で16分音符。
+   スロット数で表す各定数（KING_SEQ_GAP_MAX 等）と「拍境界かどうか」の判定はすべて
+   ここから導出すること。直接2や4で判定を書くと、この値を変えたときに拍の境界がずれて
+   静かに壊れる。
 
-   採点グリッド（calcSyncScore）は8分のままである点に注意。8分の位置は16分の
-   位置でもあるので「JUSTを取ったタップは必ずスロット境界に乗る」という不変条件は
-   保たれる。一方GOODの許容幅（±55.6ms）は16分の半分（±41ms）より広いので、
-   遅れ気味のGOODは隣の16分＝裏に置かれるようになる＝より忠実に再現される。 */
+   採点グリッド（calcSyncScore）は8分である点に注意。8分の位置は16分の位置でもあるので
+   「JUSTを取ったタップは必ずスロット境界に乗る」という不変条件は保たれる。一方GOODの
+   許容幅（±55.6ms）は16分の半分（±41ms）より広いので、遅れ気味のGOODは隣の16分＝裏に
+   置かれる＝より忠実に再現される */
 const KING_SEQ_DIV = 4;
 const KING_SEQ_QUANT = BGM_BEAT / KING_SEQ_DIV; // 量子化の刻み（16分音符 ≈ 82ms）
 /* 1小節のスロット数（BGMは4/4。BGM_MEL_BOSSの定義部参照）と、小節境界への切り上げ。
@@ -7940,68 +7814,58 @@ const KING_BAR_BEATS = 4;
 const KING_SEQ_BAR_SLOTS = KING_BAR_BEATS * KING_SEQ_DIV;
 const _kingSeqBarUp = s => Math.ceil(s / KING_SEQ_BAR_SLOTS) * KING_SEQ_BAR_SLOTS;
 const KING_BAR_DUR = () => BGM_BEAT * KING_BAR_BEATS;
-/* 打ち込みの持ち時間（拍）＝バッテリーのセル数。実機評価「全然間に合わない」で
-   7拍（2.30秒）から4倍にした（当時は7拍子で28拍＝4小節）。4拍子化に伴い32拍へ。
-   32拍＝10.53秒＝8小節＝BGMループちょうど2周（1ループ16拍）という関係は
-   7拍子版（28拍＝2周）から引き継いでいる。表示は1小節＝4セルごとに区切る
-   （drawKingCookGauge参照） */
+/* 打ち込みの持ち時間（拍）＝バッテリーのセル数。
+   32拍＝10.53秒＝8小節＝BGMループちょうど2周（1ループ16拍）。BGMループの整数倍で
+   あることが要件で、拍数だけを単独で動かしてはいけない。
+   表示は1小節＝4セルごとに区切る（drawKingCookGauge参照） */
 const KING_BATTERY_BEATS = 32;
 const KING_BATTERY_GROUP = 4;          // 表示の区切り（1小節）
-/* 隙間の上限＝2拍。実機評価「再生側が長く感じる」への対応。
-   打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」で
-   あってリズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ
-   切り詰める。実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分が
-   ある形（例: 隙間 2,56,4,6 → 2,4,4,4）は保たれる。
+/* 隙間の上限＝4拍。
+   打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」であって
+   リズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ切り詰める。
+   実際に叩いている短い隙間はそのまま残るので、速い部分と遅い部分がある形
+   （例: 隙間 2,56,4,6 → 2,4,4,4）は保たれる。
 
-   2拍→1拍→4拍と動かした。1拍まで下げていたのは「再生が始まったと分かるまでが長い」
-   という評価への対応だったが、それが致命的だった。
-
-   実機評価「バスドラムのビートにだけのって打ち込んでいるのに、そのビートが後半
-   再現されずストレス」で判明: ボス戦のキック（BGM_KICK_BOSS）は全拍に入っているので、
-   キックに乗せて叩くと間隔は必ず拍の整数倍（1拍・2拍・3拍…）になる。ところが
-   正解文字が来るまで見送るぶん、実際の間隔は2拍・3拍が普通に出る。上限が1拍だと
-   それが全部1拍へ潰れ、叩いたキックのパターンが均等な4分打ちに化けていた。
-   これが「打った通りに再生されない」「勝手なリズムパターンに置き換えられる」の正体。
-
-   4拍あれば、キックを1つ〜3つ見送ったパターンまでそのまま表現できる。長い待ちを
-   詰める役目は残り、4拍を超える放置だけが頭打ちになる。
-   4拍子化により、この4拍はちょうど1小節と一致するようになった（KING_SEQ_BAR_SLOTS）。
-   同様に KING_SEQ_SPAN_SLOTS（8拍）はレスポンスの上限2小節にあたる。 */
+   4拍という値は下げてはいけない。ボス戦のキック（BGM_KICK_BOSS）は全拍に入っているので、
+   キックに乗せて叩くと間隔は必ず拍の整数倍になり、正解文字を見送るぶん2拍・3拍の間隔が
+   普通に出る。上限を1拍にするとそれが全部1拍へ潰れ、叩いたキックのパターンが均等な
+   4分打ちに化ける＝「打った通りに再生されない」。
+   4拍あれば、キックを1つ〜3つ見送ったパターンまでそのまま表現できる。長い待ちを詰める
+   役目は残り、4拍を超える放置だけが頭打ちになる。
+   4拍子なのでこの4拍はちょうど1小節と一致する（KING_SEQ_BAR_SLOTS）。同様に
+   KING_SEQ_SPAN_SLOTS（8拍）はレスポンスの上限2小節にあたる */
 const KING_SEQ_GAP_MAX = 4 * KING_SEQ_DIV;
 /* 再生スパン（全長）の上限＝32スロット＝8拍＝2.63秒。
-   隙間の上限を4拍へ広げた結果、序盤（正解文字を待つので隙間が長い）の再生が最長
-   16拍＝5.3秒まで伸び、実機評価「序盤が間延びしている」となった。全長にも上限を置く。
+   隙間の上限が4拍あるため、序盤（正解文字を待つので隙間が長い）の再生は放っておくと
+   16拍＝5.3秒まで伸びて間延びする。全長にも上限を置く。
    実際の当てはめは _kingSeqFitGaps が「倍率を1段下げる」形でこれを満たすので、比は
    整数のまま完全に保たれる（例: 3:2:4:2拍 → 1.5:1:2:1拍。長さは半分、形はそのまま）。
    終盤のキックに乗せた打ち込み（1〜3拍の間隔）はこの範囲に収まるので影響しない。
-   下の scale による比率圧縮は、倍率を1まで下げても収まらない病的なケースだけの保険。 */
+   下の scale による比率圧縮は、倍率を1まで下げても収まらない病的なケースだけの保険 */
 const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 2;
-/* 打ち込みハイハットの音量（_playKingHat）。実機評価「もっと大きく」で 0.28→0.44。
-   KING_HAT_ACCENT は発射（オープン）への上乗せで、実機評価「発射の時は少し強めて
-   アクセントをつけてほしい」に対応する。TRのACCENTと同じくレベルだけを動かし、
-   音色（フィルタ・長さ）は変えない。 */
+/* 打ち込みハイハットの音量（_playKingHat）。
+   KING_HAT_ACCENT は発射（オープン）への上乗せで、撃った瞬間にアクセントを立てる。
+   TRのACCENTと同じくレベルだけを動かし、音色（フィルタ・長さ）は変えない */
 const KING_HAT_VOL    = 0.44;
 const KING_HAT_ACCENT = 1.3;
-/* コール→レスポンスの切り替えを知らせるクラップ（実機要望「打ち込み→再生の
-   切り替えの合図のような音がほしい。打ち込み側の音の最後に、再生側の爆発音と
-   同じタイミングで」→ 実機で「小さい。音色もクラップのような音に」）。
-   鳴る位置はコールを閉じる小節境界＝レスポンス開始の瞬間で、爆発（レスポンスを
-   閉じる小節境界）とはちょうど1フレーム（枠1つ）離れる。つまり
+/* コール→レスポンスの切り替えを知らせるクラップ。
+   鳴る位置はコールを閉じる小節境界＝レスポンス開始の瞬間で、爆発（レスポンスを閉じる小節
+   境界）とはちょうど枠1つ離れる。つまり
      タタタタ [パン] タンタンタンタン [ドン] タタタタ …
-   と、枠の切れ目が必ず手拍子で示される。切り上げの待ち（最大1小節）が無音の
-   まま放置されるのを埋める役目も兼ねる。
-   音色はリズムマシンのハンドクラップに倣う。ノイズ系である点は打ち込み側の
-   ハイハットと同じ族だが、ハットが素のハイパスで最上域まで抜けるのに対し、
-   クラップは下を切って中高域の塊にするので聴き分けられる。
-   値が他の *_VOL と桁が違うのはフィルタの損失を補う後段ゲインだから。
-   他の音量定数と直接比較できる数値ではない点に注意（実測ピークは約1.2〜1.5で
-   着弾スネア1.38・爆発1.43と同水準。ノイズが乱数なので焼くたびに振れる） */
+   と、枠の切れ目が必ず手拍子で示される。切り上げの待ち（最大1小節）が無音のまま放置される
+   のを埋める役目も兼ねる。
+   音色はリズムマシンのハンドクラップに倣う。ノイズ系である点は打ち込み側のハイハットと
+   同じ族だが、ハットが素のハイパスで最上域まで抜けるのに対し、クラップは下を切って中高域の
+   塊にするので聴き分けられる。
+   値が他の *_VOL と桁が違うのはフィルタの損失を補う後段ゲインだから。他の音量定数と直接
+   比較できる数値ではない点に注意（実測ピークは約1.2〜1.5で着弾スネア1.38・爆発1.43と同水準。
+   ノイズが乱数なので焼くたびに振れる） */
 const KING_CUE_VOL = 2.8;
 /* 再生開始までの最低リード（秒）。コールを閉じた瞬間が小節境界の直前だった場合、
    そのまま次の小節境界をレスポンス開始にすると予約が間に合わない。足りなければ
    1小節ずつ後ろへ送る（_kingBuildSequence参照）。
-   かつては「発射タップの1拍後の16分スロット」を固定アンカーにしていたが、
-   コール＆レスポンス化で「コールが占めた小節数のぶん後ろの小節境界」へ変わった。 */
+   レスポンスの開始点は「コールが占めた小節数のぶん後ろの小節境界」であり、
+   発射タップからの相対位置ではない */
 const KING_SEQ_RESPONSE_MIN_LEAD = 0.12;
 /* スネアのチョーク（_playKingBeamHit の decay 引数）。
    減衰倍率 = 次の音までの間隔 ÷ KING_BEAM_CHOKE_REF（上限1）。
@@ -8014,15 +7878,13 @@ const KING_SEQ_RESPONSE_MIN_LEAD = 0.12;
    KING_BEAM_MIN_DECAY は詰まりすぎたときの下限。 */
 const KING_BEAM_CHOKE_REF  = 0.42;
 /* 再生時のベロシティ。飛翔する文字の大きさ（drawKingCharFlights: JUSTだけ
-   KING_CHAR_JUST_FONT_SCALE=2倍）と対応させる。実機要望「文字の大きさに合わせて
-   スネアの音量やらアクセントやら変えられませんか」。見た目の大きさと音の強さが
-   揃うので、タイミング精度の差が目でも耳でも同じ形で返る。
+   KING_CHAR_JUST_FONT_SCALE=2倍）と対応させる。見た目の大きさと音の強さが揃うので、
+   タイミング精度の差が目でも耳でも同じ形で返る。
    文字は面積比で4倍になるが、音量をその比にするとGOODが埋もれるので差は穏やかに取る。
-   また5音目のアクセント（1.35倍）は超えないようにして、フレーズの終止が常に一番強い
-   状態を保つ。
-   OK以下（グレー）は加点も焦げ跡も無い扱いのまま、叩いた拍が無音で抜けないための
-   音だけを残す（実機要望「グレーOKのはずれでも何か音は鳴らしてフィードバックしたい。
-   ごく小さくスネアを鳴らすとか」）。 */
+   また5音目のアクセント（1.35倍）は超えないようにして、フレーズの終止が常に一番強い状態を
+   保つ。
+   OK以下（グレー）は加点も焦げ跡も無い扱いのまま、叩いた拍が無音で抜けないための音だけを
+   ごく小さく残す */
 /* JUSTの上限は1.15。1.25まで上げるとサンプルピークが1.47となり、5音目のアクセント
    （1.38）を超えて常時リミッターに当たる。アクセントを最大に保つ意味でもここで頭打ち */
 /* 5音目のアクセントの配合。_playKingBlast が音色の主張、スネアは着弾の打点。
@@ -8048,13 +7910,12 @@ function _kingBeamVol(tier) {
 const KING_BEAM_MIN_DECAY  = 0.25;
 /* 再生タイミングの倍率＝1（打ち込んだ間隔をそのまま鳴らす）。
 
-   一度 0.5（1/2に詰める）を試して撤回した。実機評価「後半、かなり別のリズムに
-   なっている感が強かった」。原因: 終盤は的が狙いやすく隙間が短いので隙間クランプに
-   一度も掛からず、全体倍率だけが効く。8分で叩いたものが16分で、16分が32分で返る
+   ここを1以外にしてはいけない。終盤は的が狙いやすく隙間が短いので隙間クランプに一度も
+   掛からず、全体倍率だけが効く。0.5にすると8分で叩いたものが16分で、16分が32分で返る
    ため、同じ形でも別のリズムに聞こえる。
-   長さを詰めたい場合にここを触ってはいけない。隙間クランプ（KING_SEQ_GAP_MAX）は
-   上限未満の隙間をそのまま通すので形を壊さないが、全体倍率は打ったものすべてを
-   別の音価へ移してしまう。長さの調整は KING_SEQ_GAP_MAX 側で行うこと。 */
+   長さを詰めたい場合も、隙間クランプ（KING_SEQ_GAP_MAX）側で行うこと。クランプは上限
+   未満の隙間をそのまま通すので形を壊さないが、全体倍率は打ったものすべてを別の音価へ
+   移してしまう */
 const KING_SEQ_PLAY_SCALE = 1;
 /* 次トライ開始までの最低リード（秒）。ハズレ後など再生シーケンスが無い経路で
    使う（当たりのレスポンス開始は _kingBuildSequence が小節境界から決める）。 */
@@ -8064,26 +7925,26 @@ const KING_SEQ_MIN_LEAD = 0.18;
    16分=82msに対して約61%＝確実に聴こえるズレになるため、着弾がスロットに
    合うよう発射側を前へずらす（飛翔時間が距離によらず一定という性質は不変） */
 const KING_SEQ_BEAM_LEAD = KING_LASER_TRAVEL_FRAMES / 60;
-/* 5音目（アクセント）の全身リアクション。的4つは焦げ跡を点で刻み、5音目で
-   ダメージが確定する（こんがり%の加算＝全身の焼き色とゲージの伸びをここへ集約）。
-   従来キングは被弾しても無反応だったので、その穴もここで埋まる */
+/* 5音目（アクセント）の全身リアクション。的4つは焦げ跡を点で刻み、5音目でダメージが確定
+   する（こんがり%の加算＝全身の焼き色とゲージの伸びをここへ集約）。キングが被弾に反応する
+   のもこの1回に集約する */
 const KING_ACCENT_FLASH_FRAMES  = 10;  // 全身フラッシュ＋焦げ跡の発光
 const KING_ACCENT_RECOIL_FRAMES = 14;  // のけぞり
 const KING_ACCENT_RECOIL_PX     = 10;
-/* 発射（5打目）の放電。実機評価「発射操作をした時のフィードバックがない」への対応。
-   従来は attemptFired が立って帯電演出が「消える」だけで、増えるものが何も無かった
-   ため変化として気づきにくかった。撃った瞬間に4つの三角から放電が弾けるようにする */
+/* 発射（5打目）の放電。撃った瞬間に4つの三角から放電が弾ける。
+   発射操作では帯電演出が「消える」だけなので、増えるものを1つ足さないと撃った変化に
+   気づけない */
 const KING_FIRE_FLASH_FRAMES = 12;
-/* 発射から5音目までを「充電 → 焼き込み」として繋ぐ演出（ユーザー要望）。
+/* 発射から5音目までを「充電 → 焼き込み」として繋ぐ演出。
    ・発射直後: 4つの三角マークとそれぞれの結果文字が稲妻で接続される
-   ・各文字が撃ち込まれた瞬間（従来ここで焦げが付いていた）: その接続が切れ、
-     スパークが文字側へ移る＝その位置が帯電したまま待つ
+   ・各文字が撃ち込まれた瞬間: その接続が切れ、スパークが文字側へ移る＝その位置が
+     帯電したまま待つ
    ・5音目の爆発: 帯電していた4箇所が一斉に焦げへ変わる
-   焦げの出現タイミングを着弾からアクセントへ遅らせるのがこの演出の本体で、
-   ダメージ確定（こんがり%・全身の焼き色）が既に5音目へ集約されているのと
-   辻褄が合う＝「4回撃ち込んで溜め、5発目で焼く」が画面上で一本に繋がる。
-   接続の有無は的の帯電と同じ _king.reelBeamed で判定するので、三角の帯電が
-   消える瞬間と線が切れる瞬間は構造的に一致する */
+   焦げの出現タイミングを着弾からアクセントへ遅らせるのがこの演出の本体で、ダメージ確定
+   （こんがり%・全身の焼き色）が5音目へ集約されているのと辻褄が合う＝「4回撃ち込んで溜め、
+   5発目で焼く」が画面上で一本に繋がる。
+   接続の有無は的の帯電と同じ _king.reelBeamed で判定するので、三角の帯電が消える瞬間と
+   線が切れる瞬間は構造的に一致する */
 const KING_TETHER_SEG   = 7;    // 稲妻の折れ数
 const KING_TETHER_AMP   = 0.13; // 横揺れ幅（両端間の距離に対する比・中央で最大）
 const KING_CHARGE_BOLTS = 7;    // 文字側の帯電の本数（的側 _drawKingReelCharge と同数）
@@ -8098,19 +7959,15 @@ let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
 let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
 let _kingShatter = null; // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
 const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
-/* こんがり達成時の湯気（蒸したての湯気、_spawnVictorySteamWisp参照）専用の
-   独立した配列。共有particles配列（花火・命中インパクト用の重力+収縮物理が
-   update()冒頭で全phase共通に適用される）には登録しない。実機確認で発覚:
-   以前spawnParticleで共有particlesに登録していたところ、update()冒頭の
-   汎用物理（重力+0.22・収縮×0.97）と_updateBossVictory独自の物理
-   （浮力-0.01）が毎フレーム二重適用され、正味+0.21/frameの下向き加速度に
-   なって「上昇する湯気」ではなく「跳ねてすぐ落ちる火の粉」の動きになって
-   いた（約13フレームで上昇が失速し落下に転じることを実測で確認）。 */
+/* こんがり達成時の湯気（蒸したての湯気、_spawnVictorySteamWisp参照）専用の独立した配列。
+   共有particles配列には登録しないこと。共有particlesにはupdate()冒頭で全phase共通の
+   汎用物理（重力+0.22・収縮×0.97）が掛かり、_updateBossVictory独自の浮力(-0.01)と
+   二重適用されて正味+0.21/frameの下向き加速度になる。結果、約13フレームで上昇が失速し、
+   「上昇する湯気」ではなく「跳ねてすぐ落ちる火の粉」の動きになる */
 let _victorySteam = [];
 let _steamSprite = null; // 湯気用の柔らかい放射状グラデーションスプライト（初回使用時に生成）
-/* 今回のこんがり達成が初回か（_startBossVictoryで確定）。trueを引き継いで
-   bossVictoryのCONTINUEタップ時に真エンディングへ進むかどうかを決める
-   （_startTrueEnding参照） */
+/* このこんがり達成が初回か（_startBossVictoryで確定）。trueを引き継いでbossVictoryの
+   CONTINUEタップ時に真エンディングへ進むかどうかを決める（_startTrueEnding参照） */
 let _pendingTrueEnding = false;
 let _bossVictoryTimer = 0;
 let _bossVictoryWonCoins = 0; // こんがり達成で返却したギヨウザ数（勝利画面の表示用、_startBossVictory参照）
@@ -8125,19 +7982,16 @@ function _buildScorchBlotSprite() {
   const oc = _mkCache(sz, sz);
   const c = oc.getContext('2d');
   c.translate(half, half);
-  /* 色・アルファは以前より濃く（コントラスト不足でGOOD/JUSTのサイズ差が
-     ほぼ見えないという実機指摘で強化。フルサイズ書き出しで確認したところ
-     位置・サイズ自体は正しかったが、地の色に対して薄すぎて肉眼でほぼ判別
-     できなかったのが真因だった） */
+  /* 色・アルファは地の色に対して十分濃く取る。位置・サイズが正しくても、薄いと
+     GOOD/JUSTのサイズ差が肉眼でほぼ判別できない */
   const layers = [
     { r: 26, a: 0.85, col: '75,42,14' },
     { r: 19, a: 0.90, col: '50,25,6'  },
     { r: 11, a: 0.85, col: '25,10,2'  },
   ];
-  /* 各点を直線でつなぐと8角形の角が立って見える（実機指摘: 「四角いパッチ
-     のように見える、もっと丸に近かったはず」）ため、点数を増やしたうえで
-     隣接点の中点同士を二次ベジェで結ぶ標準的な「丸めたブロブ」の手法で
-     輪郭を滑らかにする。半径の乱数幅（不定形さ）自体は変更しない */
+  /* 各点を直線でつなぐと8角形の角が立ち、四角いパッチのように見える。点数を増やした
+     うえで隣接点の中点同士を二次ベジェで結ぶ「丸めたブロブ」の手法で輪郭を滑らかにする。
+     半径の乱数幅（不定形さ）自体は変えない */
   const N = 14;
   for (const ly of layers) {
     const pts = [];
@@ -8163,26 +8017,23 @@ function _buildScorchBlotSprite() {
 /* 誕生直後（bossOmen step7 のタップ）に呼ばれ、実戦闘フェーズへ移行する */
 function _initBossBattle() {
   /* 蓄積メーターは戦闘開始時点でリセット（ボスは蓄積そのものが実体化したもの）。
-     ここでリセットしないと勝敗に関わらず次のトライ終了直後に即再発動する
-     （リネーム時にリセット処理の移し忘れで実際に発生したバグ・M2検証で発覚）。
-     OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットする。
-     リセット前の値は_kingMeterAtBattleStartへ退避する。こんがり達成時に
-     「このキングに取り込まれていたギヨウザ」として所持数へ返すため
-     （ユーザー要望、_startBossVictory参照）。ボスは閾値到達で出現するので
-     必ずKING_GYOZA_THRESHOLD以上＝1000+アルファになる */
+     ここでリセットしないと勝敗に関わらず次のトライ終了直後に即再発動する。
+     OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットすること。
+     リセット前の値は_kingMeterAtBattleStartへ退避する。こんがり達成時に「このキングに
+     取り込まれていたギヨウザ」として所持数へ返すため（_startBossVictory参照）。
+     ボスは閾値到達で出現するので必ずKING_GYOZA_THRESHOLD以上＝1000+アルファになる */
   _kingMeterAtBattleStart = kingGyozaMeter;
   kingGyozaMeter = 0;
   lsSaveStats();
   if (!_CACHE_OK || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
   _buildScorchBlotSprite();
   _buildKingFlashSprite(); // 5音目アクセントの焦げ跡発光（戦闘中に初回生成しないよう先に確保）
-  /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/
-     ポーズ・ミュート/全画面）を除いた横幅いっぱいに広がるよう動的に決め直す
-     （実機要望: 「小さすぎる、アイコン部を除いた横幅と同程度に」）。
-     直径4個＋隙間3個（KING_REEL_GAP）で埋まる半径を逆算する。
-     KING_RESULT_FONT/Hも半径に比例するため合わせて再計算する
-     （このタイミングでのみ行う理由: BTN_RIGHT/BTN_SIZEがKING_WRの元の
-     宣言より後で定義されるため、モジュールトップレベルでは計算できない） */
+  /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/ポーズ・
+     ミュート/全画面）を除いた横幅いっぱいに広がるよう動的に決め直す。
+     直径4個＋隙間3個（KING_REEL_GAP）で埋まる半径を逆算する。KING_RESULT_FONT/Hも半径に
+     比例するため合わせて再計算する。
+     ここで行う理由: BTN_RIGHT/BTN_SIZEがKING_WRの宣言より後で定義されるため、モジュール
+     トップレベルでは計算できない */
   if (IS_PORTRAIT) {
     const iconZone = BTN_RIGHT + BTN_SIZE; // 左右上部アイコンが占める帯
     const availReelW = W - iconZone * 2;
@@ -8193,19 +8044,18 @@ function _initBossBattle() {
   const half = _bossOC.half, s = _BOSS_S;
   /* _bossOC.oc の物理ピクセルサイズは half*2*_dpr（_buildBossOC 参照）。
      liveOC も同じ物理サイズで確保しないと合成時に左上1/4しか転写されない
-     （DPR>1 環境で実際に発生したバグ：右・下が切れて見える）。
-     内容は _renderKingBody() が命中の都度・素のスプライトから再構成するため、
-     ここでは領域確保のみ行う（初期状態は _renderKingBody 側で _bossOC.oc を
-     そのまま返す高速経路があるため、初期描画は不要）。
-     _bossOCにキャッシュして戦闘をまたいで再利用する（以前は毎戦闘で新規生成し
-     旧canvasがGC待ちで滞留していた＝キング的OCと同じリーククラスの水平展開。
-     合成状態のキャッシュキー（_toneRenderedPct等）は_king側に持つため、
-     canvasを使い回しても前戦闘の内容が誤って再利用されることはない） */
+     （DPR>1 環境で右・下が切れる）。
+     内容は _renderKingBody() が命中の都度・素のスプライトから再構成するため、ここでは
+     領域確保のみ行う（初期状態は _renderKingBody 側で _bossOC.oc をそのまま返す高速経路が
+     あるため、初期描画は不要）。
+     _bossOCにキャッシュして戦闘をまたいで再利用する。戦闘ごとに新規生成すると、旧canvasが
+     GC待ちで滞留する（キング的OCと同じリーククラス）。合成状態のキャッシュキー
+     （_toneRenderedPct等）は_king側に持つため、canvasを使い回しても過去の戦闘の内容が
+     誤って再利用されることはない */
   /* liveOCは_buildBossOC（予兆の入口）で確保済み。ここでの確保は保険
      （OffscreenCanvas未対応環境は上で復帰するので通常は通らない）。
-     実機指摘「キング戦開始直後、的の回転に速度ムラがある」の対策: 1140x1140＝
-     約130万画素の確保が、まさに的が回り始めるフレームに来ていた。確保回数を
-     数えて確認したところ、戦闘開始時の6回のうち1回がこれだった */
+     1140x1140＝約130万画素の確保を戦闘開始のフレームで行うと、的が回り始める瞬間に
+     ぶつかって回転の速度ムラになる。確保は必ず予兆側で済ませておくこと */
   const liveOC = _bossOC.liveOC ||
     (_bossOC.liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr));
   /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
@@ -8213,35 +8063,33 @@ function _initBossBattle() {
   const marks = [];
   /* 縦レイアウトを実寸から動的計算する（マジックナンバーの縦横別ハードコード禁止）。
      コインヘッダー下端〜こんがりゲージ上端の実際の空き高さにボスを収まるよう縮小し、
-     ボス下端〜ゲージ上端の間にこんがりミニリール4連（旧: 砲台）の場所を確保する。
-     旧実装（by=H/2固定）はボスがキャンバス縦幅をほぼ占領し、砲台がゲージパネルの
-     背景（砲台より後に描画される）に埋もれて見えなくなっていた（実機報告で発覚）。 */
+     ボス下端〜ゲージ上端の間にこんがりミニリール4連の場所を確保する。
+     by=H/2のような固定値にすると、ボスがキャンバス縦幅をほぼ占領し、ミニリールが
+     ゲージパネルの背景（リールより後に描画される）に埋もれて見えなくなる */
   /* ボス上端〜ヘッダー下端の余白: 縦画面は左右の隙間（コインヘッダーの左右マージン）と、
-     横画面は外枠〜コインヘッダーの隙間（BTN_M。BTN_TOPは内枠厚み11pxを含む絶対Y座標であり
-     「隙間」そのものではないため誤り。BTN_M=10が実際の枠〜コンテンツの余白）と、
-     それぞれ同じ量にする（実機要望による） */
+     横画面は外枠〜コインヘッダーの隙間（BTN_M）と、それぞれ同じ量にする。
+     横画面でBTN_TOPを使ってはいけない: 内枠厚み11pxを含む絶対Y座標であって「隙間」そのもの
+     ではない。枠〜コンテンツの余白はBTN_M=10 */
   const topGap = IS_PORTRAIT ? (W - COIN_HEADER_W) / 2 : BTN_M;
   const headerBottom = COIN_HEADER_BOTTOM_Y + topGap; // コインヘッダー下端(y座標) + 余白
   /* 横画面: panelTopをゲージ上端そのものにし、リールとの隙間はGAP_REEL_PANEL
-     （topGap=BTN_M、統一マージン）1本だけにする。以前は独立した-15pxが
-     GAP_REEL_PANELと二重に効いて合計25pxの隙間になっていた（実機指摘:
-     「こんがり表示エリアのぎりぎりまで下げられる」「縦横一定の空間」＝
-     他の余白と同じ統一マージンだけにしてほしいという要望）。
-     縦画面は従来どおり-15pxを維持（今回の要望は横画面限定のため） */
+     （topGap=BTN_M、統一マージン）1本だけにする。ここに独立した固定オフセットを足すと
+     GAP_REEL_PANELと二重に効いて隙間が倍近くになる。横画面ではリールをこんがり表示エリアの
+     ぎりぎりまで下げ、他の余白と同じ統一マージンだけを残すのが正しい。
+     縦画面は縦方向に余裕がないため -15px のオフセットを別途持つ */
   const panelTop      = IS_PORTRAIT ? P_BAR_Y - 15 : KING_GAUGE_Y; // こんがりゲージ上端 - 余白
   const REEL_D = KING_WR * 2, GAP_BOSS_REEL = 16;
   /* リール下端〜ゲージ枠上端の隙間は、ヘッダー上と対称に「太外枠とのマージン」と
-     同じ量にする（topGap を再利用。実機要望による）。この隙間はリールをゲージ枠から
-     固定量だけ離す下端基準の値であり、ボス側の空きに余裕があっても膨らまない
-     （旧実装はboss基準の積み上げ式で、実際には約24pxまで開いてしまっていた）。 */
+     同じ量にする（topGap を再利用）。この隙間はリールをゲージ枠から固定量だけ離す
+     下端基準の値であり、ボス側の空きに余裕があっても膨らませない。ボス基準の積み上げ式に
+     すると空きに応じて隙間が伸び、対称性が崩れる */
   const GAP_REEL_PANEL = topGap;
   /* half(=0.75s)はスタンプ・呼吸アニメ余裕を含む安全バウンディング半径であり、
      実際に見えるボスの輪郭はもっと内側。_drawGyozaBody の本体楕円
      （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から-0.40s、裾は+0.56sと算出できる。
-     scale-fit と by の余白計算の両方をこの見た目比率（0.40+0.56=0.96s）基準にする：
+     scale-fit と by の余白計算の両方をこの見た目比率（0.40+0.56=0.96s）基準にすること。
      half基準（1.5s相当）のまま fit させると見た目より遥かに大きい余白込みで縮小され、
-     ボスが必要以上に小さく表示される（実機報告で発覚: 縦画面で頭頂が100px以上離れる・
-     横画面でボスが小さすぎる、の双方が同根）。 */
+     縦画面では頭頂が100px以上離れ、横画面ではボスが小さすぎる（どちらも同根） */
   /* KING_RESULT_H: 的の下に当たった文字を表示するための縦スペース（drawKingReel参照）。
      ここで確保しないと文字がゲージ枠に重なる */
   const availH = panelTop - headerBottom - GAP_BOSS_REEL - REEL_D - KING_RESULT_H - GAP_REEL_PANEL;
@@ -8250,14 +8098,13 @@ function _initBossBattle() {
   const by = headerBottom + visualTopOffset;
   const reelY = panelTop - GAP_REEL_PANEL - KING_RESULT_H - KING_WR; // ゲージ枠から固定隙間の下端基準（結果文字の分だけ上に確保）
   const reelGapX = KING_WR * 2 + (IS_PORTRAIT ? KING_REEL_GAP : 12);
-  /* charWeights: 4的ぶんの文字配分（%）。的ごとに独立管理し、狙って命中させた
-     文字の比率を毎回少しずつ増やしていく（_adjustKingCharWeight）。初期値は
-     4文字均等の25%（ユーザー要望） */
+  /* charWeights: 4的ぶんの文字配分（%）。的ごとに独立管理し、狙って命中させた文字の
+     比率を毎回少しずつ増やしていく（_adjustKingCharWeight）。初期値は4文字均等の25% */
   const charWeights = [0, 1, 2, 3].map(() => Object.fromEntries(KING_CHARS.map(c => [c, 25])));
   const reels = [0, 1, 2, 3].map(i => _createKingReel(W / 2 + (i - 1.5) * reelGapX, reelY, charWeights[i]));
   /* dbx/dby/dscale は誕生演出（_omen step6-7）での鎮座位置・等倍スケールを初期値にし、
      ここから戦闘位置(bx,by,scale)へ毎フレーム収束させる（_easeKingXform）。
-     こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする（実機報告で発覚）。 */
+     こうしないと戦闘開始の瞬間に位置とスケールが瞬時にジャンプする */
   const omenBy = H / 2 - (IS_PORTRAIT ? 60 : 0);
   _king = {
     liveOC, half, marks, cookPct: 0, scale,
@@ -8274,7 +8121,7 @@ function _initBossBattle() {
        rec         : 打ち込み記録 [{pos, flight}]（pos=生のバッファ位置。強制発射分はnull）
        recStartPos : コール開始のバッファ位置（必ず小節境界）。バッテリー残量の起点であり、
                      コール＆レスポンスの枠の原点でもある（_kingBuildSequence参照）。
-                     nullの間はバッテリー無効＝従来どおり時間制限なし（音声が使えるまでの保険）
+                     nullの間はバッテリー無効＝時間制限なし（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
        nextTrialPos: 次トライを開始するバッファ位置（小節境界）。nullなら未予約
        seqAccentAt : 5音目（焼き込み）のctx時刻。帯電の充電進捗を出すのに使う
@@ -8303,16 +8150,15 @@ function _initBossBattle() {
    個々の焦げ跡は revealedAt からの経過時間（wall-clock）でアルファを減衰させ、
    フェード仕切りの局所的な焦げ跡だけを別途上描きする。
    フェード中の焦げ跡が1つも無ければ再合成をスキップし、素のスプライト（pct=0）または
-   前回合成済みの liveOC（pct>0 かつ全焦げ跡が消え切った定常状態）をそのまま返す。 */
+   合成済みの liveOC（pct>0 かつ全焦げ跡が消え切った定常状態）をそのまま返す */
 function _renderKingBody() {
   const pct = _king.cookPct / 100;
   const now = performance.now();
-  /* 焦げ跡は「フェード中」(t<1、毎フレーム再合成が必要)と「フェード完了後も
-     ごくごく薄く残る永続痕」(t>=1、KING_MARK_RESIDUAL_ALPHA固定)の2状態。
-     以前は個々の焦げ跡とは無関係な固定7個の「焼き目模様」を別レイヤーで
-     重ねていたが、文字が飛んでいった先（＝実際の焦げ跡）と模様の位置が
-     一致しないという実機指摘で廃止し、焦げ跡自身が薄れながら痕を残す
-     方式に統一した（永続痕＝settledがそのまま「焼き目模様」を兼ねる） */
+  /* 焦げ跡は「フェード中」(t<1、毎フレーム再合成が必要)と「フェード完了後もごくごく薄く
+     残る永続痕」(t>=1、KING_MARK_RESIDUAL_ALPHA固定)の2状態。
+     永続痕（settled）がそのまま全身の「焼き目模様」を兼ねる。着弾位置と無関係な固定の
+     焼き目模様を別レイヤーで重ねてはいけない。文字が飛んでいった先＝実際の焦げ跡と
+     模様の位置が食い違い、当てた場所が焦げていないように見える */
   let activeCount = 0, settledCount = 0;
   for (const m of _king.marks) {
     if (m.revealedAt == null) continue;
@@ -8320,12 +8166,11 @@ function _renderKingBody() {
     if (t < 1) activeCount++; else settledCount++;
   }
   if (pct <= 0 && activeCount === 0 && settledCount === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
-  /* 再合成スキップの条件は pct 一致だけでは不十分: 前回まだフェード中の焦げ跡が
-     残っていた（_toneHadActive）場合、今回activeCountが0になっていても「焦げ跡を
-     残痕アルファまで落とし切る」1回の再合成をしないと古い焦げ跡が残ったままキャッシュ
-     されてしまう（実機検証で発覚: フェード完了直後の1フレームが欠落しボスが直前
-     フレームのまま固まる不具合）。settledCountの増加も同様に再合成トリガーにする
-     （新たに永続痕入りした焦げ跡を反映するため）。 */
+  /* 再合成スキップの条件は pct 一致だけでは不十分: 直前のフレームでまだフェード中の
+     焦げ跡が残っていた（_toneHadActive）場合、今回activeCountが0になっていても「焦げ跡を
+     残痕アルファまで落とし切る」1回の再合成をしないと、消える途中の焦げ跡が残ったまま
+     キャッシュされ、ボスが直前フレームの絵で固まる。settledCountの増加も同様に再合成
+     トリガーにする（新たに永続痕入りした焦げ跡を反映するため） */
   /* 視線（gazeUp）も再合成トリガーに含める。含めないと見上げるアニメの間、
      pct/焦げ跡が変化しないため古い顔がキャッシュされたまま瞳が動かない */
   const gazeUp = _king.gazeUp || 0;
@@ -8334,11 +8179,10 @@ function _renderKingBody() {
   const lc = _king.liveOC.getContext('2d');
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.clearRect(0, 0, _king.liveOC.width, _king.liveOC.height);
-  /* globalCompositeOperation/globalAlpha は setTransform/clearRect では戻らず
-     前回呼び出し（source-atop・低アルファで終わっている）の状態を引き継いでしまう。
-     source-atop のままだと直後の clearRect 直後（アルファ0）への drawImage が
-     「既存アルファ内にのみ合成」の制約で何も描かれない（実機検証で発覚:
-     フェード完了直後にボスが透明になる不具合の真因）。明示的にリセットする。 */
+  /* globalCompositeOperation/globalAlpha は setTransform/clearRect では戻らず、
+     直前の呼び出し（source-atop・低アルファで終わっている）の状態を引き継ぐ。
+     source-atop のままだと clearRect 直後（アルファ0）への drawImage が「既存アルファ内に
+     のみ合成」の制約で何も描かれず、ボスが透明になる。明示的にリセットすること */
   lc.globalCompositeOperation = 'source-over';
   lc.globalAlpha = 1;
   lc.drawImage(_bossOC.bodyOC, 0, 0); // 顔なし本体レイヤーから再構成（永続焼き込みではない）
@@ -8361,13 +8205,13 @@ function _renderKingBody() {
     lc.translate(m.lx, m.ly);
     lc.rotate(m.rot);
     const sc = m.r / 26; // スプライト基準半径26に対する倍率
-    lc.globalAlpha = alpha; // 0.9掛けは廃止（濃さ不足でサイズ差が見えないという指摘への対応の一環）
+    lc.globalAlpha = alpha; // ここで減衰を掛けない（薄いとJUST/GOODのサイズ差が見えなくなる）
     lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
     lc.restore();
   }
-  /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けない常に元の色で最後に上描きする
-     （白目の白さと焦げ色とのコントラストを保つユーザー要望）。pctに応じて表情が
-     変化する（_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
+  /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けず、常に元の色で最後に上描きする
+     （白目の白さと焦げ色とのコントラストを保つ）。pctに応じて表情が変化する
+     （_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
      論理座標系（scale+translate）に戻してから描く必要がある */
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.scale(_dpr, _dpr);
@@ -8382,18 +8226,17 @@ function _renderKingBody() {
   return _king.liveOC;
 }
 
-/* 的の下に出た結果文字を1体スポーンし、ボス付近まで飛ばす。的が1本ロックされる
-   たびに呼ぶ（1〜3本目はまだこんがり成立/不成立が分からないため、着弾後は
-   'wait' 状態でボス付近に留まる。4本目のロックで結果が判明したら resolve を
-   全未解決分にまとめて設定＝_kingReelShoot 側）。
-   着地先（markRef）はこの時点で確定させる。タップ自体の精度（score）で
-   JUST/GOODが決まった瞬間に、位置とサイズ込みの焦げ跡候補を _createKingMark
-   で生成して持たせる（OK以下は候補なし＝null、ボス中心へ向かうだけ）。
-   まだ _king.marks には登録しない（当たり確定＝「こ・ん・が・り」全一致まで
-   正式な焦げ跡にはしない。_kingReelShoot 参照）。結果が判明する前から確定
-   位置を使うことで、結果確定時に位置を作り直す必要が一切なくなる（実機指摘:
-   待機中は中心寄りの仮位置にして結果確定時に本来の位置へ動かす実装を
-   していたが、そもそも最初から本来の位置に配置してほしいという要望だった） */
+/* 的の下に出た結果文字を1体スポーンし、ボス付近まで飛ばす。的が1本ロックされるたびに呼ぶ
+   （1〜3本目はまだこんがり成立/不成立が分からないため、着弾後は 'wait' 状態でボス付近に
+   留まる。4本目のロックで結果が判明したら resolve を全未解決分にまとめて設定＝
+   _kingReelShoot 側）。
+   着地先（markRef）はこの時点で確定させる。タップ自体の精度（score）でJUST/GOODが決まった
+   瞬間に、位置とサイズ込みの焦げ跡候補を _createKingMark で生成して持たせる
+   （OK以下は候補なし＝null、ボス中心へ向かうだけ）。
+   まだ _king.marks には登録しない（当たり確定＝「こ・ん・が・り」全一致まで正式な焦げ跡には
+   しない。_kingReelShoot 参照）。
+   待機中を中心寄りの仮位置にして結果確定時に動かす、という作りにはしないこと。最初から
+   本来の位置に配置すれば、結果確定時に位置を作り直す処理そのものが不要になる */
 /* 生成した飛翔体を返す（リズムシーケンサが打ち込み記録と紐付けるため。
    _kingReelShoot 参照） */
 function _spawnKingCharFlight(w, reelIdx) {
@@ -8401,10 +8244,9 @@ function _spawnKingCharFlight(w, reelIdx) {
   const f = {
     char: w.result, score: w.syncScore, // 文字色を通常モードと同じ赤〜黄〜緑にするため保持（drawKingCharFlights参照）
     sx: w.x, sy: w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2,
-    /* ハズレ時の復路（_startKingCharBounce）が戻る先＝的の上部、三角ポインタ
-       付近（drawKingReelのpx,pyと同じ式）。的の下（sx,sy）へ戻すと文字が
-       ボスと反対側から回り込む不自然な軌道になってしまうため、ボス側を
-       向いている上側を衝突点にする（ユーザー指摘） */
+    /* ハズレ時の復路（_startKingCharBounce）が戻る先＝的の上部、三角ポインタ付近
+       （drawKingReelのpx,pyと同じ式）。的の下（sx,sy）へ戻すと文字がボスと反対側から
+       回り込む不自然な軌道になるため、ボス側を向いている上側を衝突点にする */
     rtx: w.x, rty: w.y - (KING_WR + 12),
     reelIdx, // 衝突の瞬間（_startKingCharBounce）にどの的のスロットへひびを追加するか
     tier, markRef: tier ? _createKingMark() : null,
@@ -8416,11 +8258,10 @@ function _spawnKingCharFlight(w, reelIdx) {
   return f;
 }
 
-/* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布）。サイズはtierに
-   依存しない一定範囲（ユーザー指摘: 焦げの面積とマークされる文字の大きさは
-   別物。文字側のサイズ差はKING_CHAR_JUST_FONT_SCALE・drawKingCharFlights参照）。
-   当たりが確定するまでは _king.marks に登録しない「候補」のまま
-   （_spawnKingCharFlight参照） */
+/* 焦げ跡候補を1個生成する（位置はボス胴体内に一様分布）。サイズはtierに依存しない一定範囲。
+   焦げの面積とマークされる文字の大きさは別物として扱う（文字側のサイズ差は
+   KING_CHAR_JUST_FONT_SCALE・drawKingCharFlights参照）。
+   当たりが確定するまでは _king.marks に登録しない「候補」のまま（_spawnKingCharFlight参照） */
 function _createKingMark() {
   const ang = Math.random() * Math.PI * 2;
   const rad = Math.sqrt(Math.random()); // 円盤上に一様分布
@@ -8461,20 +8302,19 @@ function _kingCurrentFlightPos(f) {
   return { x: f.bx, y: f.by };
 }
 
-/* こんがりリールへのタップ入力＝コールの1打。1本ずつ hitResult() で位置判定して
-   確定する（通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
-   **4本目でコールが閉じ、そのまま _kingFireAttack へ進む**（発射トリガーは廃止）。
-   かつては4本マーク後にもう一度タップして発射する方式だったが、
+/* こんがりリールへのタップ入力＝コールの1打。1本ずつ hitResult() で位置判定して確定する
+   （通常ゲームの onShoot と同じ「タップ時点の回転角で止める」操作感）。
+   **4本目でコールが閉じ、そのまま _kingFireAttack へ進む**。独立した発射トリガーは持たない:
    ・コール＆レスポンスとして見ると、コールは4打ちょうどであるべき
    ・5打目の位置がプレイヤー任せだと「4連射→間→爆発」の形が打ち方次第で崩れる
-   ・「もう一手必要」が伝わらず、バッテリー切れの自動発射が標準トリガーだと
-     誤解される（実機評価。発射バッジで補っていたがトリガーごと無くせば解決する）
-   の3点から廃止した。締めのアクセントは小節境界に置かれる（_kingBuildSequence参照）。
+   ・「もう一手必要」がプレイヤーに伝わらず、バッテリー切れの自動発射が標準トリガーだと
+     誤解される
+   締めのアクセントは小節境界に置かれる（_kingBuildSequence参照）。
    決定した文字はここで即バックグラウンドの飛翔演出（_spawnKingCharFlight）に渡す。
-   演出自体は _updateKingCharFlights が矢を射る操作（リールのロック）とは無関係に
-   毎フレーム自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える。
-   'wait'状態（着地して結果待ち）にはタイムアウトが無いため、レスポンスまでの
-   待機がどれだけ延びても安全（_updateKingCharFlights参照） */
+   演出自体は _updateKingCharFlights が矢を射る操作（リールのロック）とは無関係に毎フレーム
+   自走するため、プレイヤーは飛翔の完了を待たず次の的を狙える。
+   'wait'状態（着地して結果待ち）にはタイムアウトが無いため、レスポンスまでの待機がどれだけ
+   延びても安全（_updateKingCharFlights参照） */
 function _kingReelShoot(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || _king.reelIdx >= 4 || _king.attemptFired) return;
   const w = _king.reels[_king.reelIdx];
@@ -8502,12 +8342,12 @@ function _kingReelShoot(inputPerfMs, forced = false) {
   if (last) _kingFireAttack(inputPerfMs, forced); // コールが閉じた＝そのままレスポンスを組む
 }
 
-/* コールが閉じた瞬間の処理（4打目の _kingReelShoot から直接呼ばれる。
-   独立した発射入力は廃止済み）。こ・ん・が・り全一致なら打ち込んだリズムを
-   再生シーケンスへ組んで（_kingBuildSequence）レスポンスを鳴らし、不一致なら従来どおり
-   篩い落とし→衝突→ひびへ進む。いずれの場合も4本の結果文字を表示したまま静止させ、
-   次のトライは _kingTrialGate が小節境界で解放する。
-   forced=true はバッテリー切れで最後の的が自動確定した場合（_kingBatteryCheck 経由）。 */
+/* コールが閉じた瞬間の処理（4打目の _kingReelShoot から直接呼ばれる）。
+   こ・ん・が・り全一致なら打ち込んだリズムを再生シーケンスへ組んで（_kingBuildSequence）
+   レスポンスを鳴らし、不一致なら篩い落とし→衝突→ひびへ進む。
+   いずれの場合も4本の結果文字を表示したまま静止させ、次のトライは _kingTrialGate が
+   小節境界で解放する。
+   forced=true はバッテリー切れで最後の的が自動確定した場合（_kingBatteryCheck 経由） */
 function _kingFireAttack(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || _king.reelIdx < 4 || _king.attemptFired) return;
   _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
@@ -8516,17 +8356,16 @@ function _kingFireAttack(inputPerfMs, forced = false) {
   const matched = _king.reels.every((r, i) => r.result === KING_TARGET[i]);
   if (matched) {
       const avgScore = _king.reels.reduce((a, r) => a + r.syncScore, 0) / 4;
-      /* こんがり%はタップごとの精度で直接積算する（JUST=+1.0%・GOOD=+0.5%・
-         OK以下=0%）。今回の4タップぶんの候補焦げ跡（スポーン時に
-         _createKingMarkで生成済み、_spawnKingCharFlight参照）を、当たりが
-         確定したこの時点で初めて _king.marks へ正式登録する（不一致なら
-         登録されず消える＝「文字が飛んでいっていない場所に焦げが発生する」
-         を避けるための設計を踏襲）。ただし実際に見えるのは revealedAt が打たれて
-         から（_stickKingChar）＝再生で各文字が撃ち込まれた瞬間。
-         %の加算自体は5音目のアクセントへ集約する（_kingSeqAccent参照。
-         1発ごとに+0.5〜1.0%を4回刻むより、まとめて伸ばすほうが目に見えるため）。
-         スコア平均（avgScore）はビーム色・JUST/GOOD/OKラベル表示のみに使う
-         （%やサイズには使わない＝1本ずつ個別判定という要望のため） */
+      /* こんがり%はタップごとの精度で直接積算する（JUST=+1.0%・GOOD=+0.5%・OK以下=0%）。
+         この4タップぶんの候補焦げ跡（スポーン時に_createKingMarkで生成済み、
+         _spawnKingCharFlight参照）を、当たりが確定したこの時点で初めて _king.marks へ
+         正式登録する。不一致なら登録されず消える＝「文字が飛んでいっていない場所に焦げが
+         発生する」ことを避ける。ただし実際に見えるのは revealedAt が打たれてから
+         （_stickKingChar）＝再生で各文字が撃ち込まれた瞬間。
+         %の加算自体は5音目のアクセントへ集約する（_kingSeqAccent参照。1発ごとに+0.5〜1.0%を
+         4回刻むより、まとめて伸ばすほうが目に見える）。
+         スコア平均（avgScore）はビーム色・JUST/GOOD/OKラベル表示のみに使う（%やサイズには
+         使わない＝1本ずつ個別に判定する） */
       const thisAttempt = _kingCharFlights.filter(f => f.resolve === null);
       let gain = 0;
       for (const f of thisAttempt) {
@@ -8539,9 +8378,9 @@ function _kingFireAttack(inputPerfMs, forced = false) {
       _king.resultTimer = 0;
       _king.missAttemptToken = null;
       if (_kingBuildSequence(forced, gain, thisAttempt)) return; // 以降は_kingSeqStepが進める
-      /* 音声の時計が引けない場合（BGM未開始・テープ演出のレートランプ中など）は
-         従来どおり即時に適用する。シーケンサは音楽が鳴っていて初めて意味を持つので、
-         鳴っていない状況では旧来の「4本同時着弾」に退避するのが正しい */
+      /* 音声の時計が引けない場合（BGM未開始・テープ演出のレートランプ中など）は即時に適用する。
+         シーケンサは音楽が鳴っていて初めて意味を持つので、鳴っていない状況では
+         「4本同時着弾」へ退避するのが正しい */
       _kingApplyGain(gain);
       _kingApplyBeams(thisAttempt);
       for (const f of thisAttempt) f.resolve = 'stick';
@@ -8549,22 +8388,17 @@ function _kingFireAttack(inputPerfMs, forced = false) {
       return;
     } else {
       /* 失敗（こ・ん・が・り不一致）: こんがり%を少し後退させる。KING_MAX_FAILS回で
-         ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が
-         的へ衝突した瞬間（_startKingCharBounce、_updateKingCharFlights参照。
-         ユーザー要望: 「クラックが入るタイミングがおかしい。文字が衝突した瞬間
-         という話をしたはず」）。
-         playSE('miss')（ズコーという下降スライド）は当初「通常モードの外れと
-         聞こえ方を統一する」ために流用したものだが、その後ユーザー要望で通常
-         モード側は無音化したため（該当箇所のコメント参照）、現在このSEが鳴るのは
-         キング戦の失敗時だけになっている。頻度が低く演出上の意味があるので
-         ここでは維持する。なお実際にひびが入る瞬間には別途金属音が鳴る
-         （_playKingCrackKin参照） */
+         ルーレット完全破壊＝敗北。ひびを追加するのはここではなく、実際に文字が的へ
+         衝突した瞬間（_startKingCharBounce、_updateKingCharFlights参照）。
+         playSE('miss')（ズコーという下降スライド）が鳴るのはゲーム中でここだけ
+         （通常モードの外れは無音）。頻度が低く演出上の意味があるので鳴らす。
+         実際にひびが入る瞬間には別途金属音が鳴る（_playKingCrackKin参照） */
       _king.cookPct = Math.max(0, _king.cookPct - KING_MISS_PCT_PENALTY);
       _king.failCount = Math.min(KING_MAX_FAILS, _king.failCount + 1);
-      /* 6回目の失敗は即座に敗北確定にはせず、今回の4文字が全て的へ衝突（ひびが
-         全て入り終える）まで待ってから、的が砕けて破片が消えきった後に敗北を
-         確定する（ユーザー要望）。_updateKingCharFlightsのattemptToken.remaining
-         が0になった時点でpendingDefeatを見て_startKingReelShatterへ進む */
+      /* 6回目の失敗は即座に敗北確定にはせず、この4文字が全て的へ衝突（ひびが全て入り終える）
+         まで待ってから、的が砕けて破片が消えきった後に敗北を確定する。
+         _updateKingCharFlightsのattemptToken.remainingが0になった時点でpendingDefeatを見て
+         _startKingReelShatterへ進む */
       if (_king.failCount >= KING_MAX_FAILS) _king.pendingDefeat = true;
       playSE('miss');
       /* 篩い落としを予約する。実際の発動は4文字すべてがキングへ到着してから
@@ -8572,37 +8406,35 @@ function _kingFireAttack(inputPerfMs, forced = false) {
       _king.siftPending = true;
     }
     /* ここから下はハズレ経路だけ（当たりは上のブランチで return 済み）。
-       ハズレは再生シーケンスを作らず、従来どおり即座に4体へ結果を伝える */
+       ハズレは再生シーケンスを作らず、即座に4体へ結果を伝える */
     _king.resultMatched = false;
     _king.resultTimer = 0; // 結果表示保持タイマー開始（音声が無い場合のフォールバック用）
     _king.reelBeamed = [true, true, true, true]; // ハズレはビームが飛ばないので帯電はここで止める
-    /* 今回の試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先は
-       スポーン時から確定済みのためここでの位置変更は不要（そこから跳ね返る）。
-       ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が
-       全て入り終えたか」（シャッター演出のトリガー、_updateKingCharFlights参照）、
-       aliveは「4体とも画面外へ消えて配列から取り除かれたか」（次のトライを
-       許可する条件、_kingTrialGate参照）を別々に数える。衝突完了と画面外
-       退場はタイミングが異なる（衝突後もfall状態でしばらく画面内に残る）ため
-       2つのカウンタが必要 */
+    /* この試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先はスポーン時から
+       確定済みのためここでの位置変更は不要（そこから跳ね返る）。
+       ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が全て入り
+       終えたか」（シャッター演出のトリガー、_updateKingCharFlights参照）、aliveは「4体とも
+       画面外へ消えて配列から取り除かれたか」（次のトライを許可する条件、_kingTrialGate参照）を
+       別々に数える。衝突完了と画面外退場はタイミングが異なる（衝突後もfall状態でしばらく
+       画面内に残る）ため2つのカウンタが必要 */
     const attemptToken = { remaining: 0, alive: 0 };
     for (const f of _kingCharFlights) {
       if (f.resolve !== null) continue;
       f.resolve = 'bounce';
       f.attemptToken = attemptToken; attemptToken.remaining++; attemptToken.alive++;
     }
-    /* ユーザー要望: 「こんがりが揃わなかった場合、落下してきた文字が的にぶつかって
-       全て画面外に消えるまで、次のトライができないようにしてほしい」。
-       _king側に保持し、_kingTrialGateの再スピン可否判定で参照する */
+    /* こんがりが揃わない場合、落下してきた文字が的にぶつかって全て画面外へ消えるまで
+       次のトライを始めさせない。_king側に保持し、_kingTrialGateの再スピン可否判定で参照する */
     _king.missAttemptToken = attemptToken;
 }
 
 /* ── 打ち込んだリズムの再生（KING_SEQ_*の定義部参照） ── */
 
 /* 打ち込んだ5タップを再生シーケンスへ組み、音を先行スケジュールする。
-   組めた場合のみ true（false なら呼び出し側が従来の即時適用へ退避する）。
-   スロットは絶対インデックスで記録されているので、最初のマークからの
-   相対オフセットを取ればアンカーを好きな位置に置ける＝小節に固定せず、
-   発射の直後の拍境界から鳴らし始められる（速く打ち終われば速く再生も終わる）。 */
+   組めた場合のみ true（false なら呼び出し側が即時適用へ退避する）。
+   スロットは絶対インデックスで記録されているので、最初のマークからの相対オフセットを取れば
+   アンカーを好きな位置に置ける＝小節に固定せず、発射の直後の拍境界から鳴らし始められる
+   （速く打ち終われば速く再生も終わる） */
 function _kingBuildSequence(forced, gain, flights) {
   if (!audioCtx || _bgmRateRamping()) return false; // レートランプ中は将来位置を外挿できない
   /* 打ち込みの起点が定まらないまま進んだトライ（戦闘開始直後のテープ演出中に
@@ -8614,8 +8446,7 @@ function _kingBuildSequence(forced, gain, flights) {
   const rec = _king.rec.filter(r => r.pos !== null);
   if (rec.length === 0) return false;
   /* ── コール＆レスポンス: 打ち込みが占めた小節の、次の同じ枠へ返す ──
-     ユーザー要望「コール＆レスポンスみたいにしたい。撃ったタイミングが
-     レスポンスとして再現されて返ってくる」。
+     撃ったタイミングがレスポンスとして再現されて返ってくる、という体験が目的。
 
      間隔が合っているだけでは「返ってきた」と感じられない。耳が2つを照合できるのは
      **キック/和太鼓に対して同じ場所に鳴った**ときなので、レスポンスの各音がコールの
@@ -8626,7 +8457,7 @@ function _kingBuildSequence(forced, gain, flights) {
          → レスポンスが終わった次の小節境界がアクセント（＝次のコールの1拍目）
      leadIn は1打目の絶対位置ではなく**小節内の位置**だけを引き継ぐ。序盤は正解文字を
      待って何小節も空けるので、絶対位置ごと持ってくると先頭に死んだ間が入る。
-     小節内位置さえ揃えば照合には十分。 */
+     小節内位置さえ揃えば照合には十分 */
   const callStart = _king.recStartPos;
   const barSlots = KING_SEQ_BAR_SLOTS;
   const firstSlot = Math.round((rec[0].pos - callStart) / KING_SEQ_QUANT);
@@ -8634,50 +8465,45 @@ function _kingBuildSequence(forced, gain, flights) {
   const callSlots = Math.max(0, Math.round((rec[rec.length - 1].pos - callStart) / KING_SEQ_QUANT));
   const callBars = Math.max(1, Math.ceil(callSlots / barSlots));
   /* ── 打ち込んだ「相対的な間隔」から意図したビートシーケンスを読み取る ──
-     実機評価「打ち込んだリズムと違うリズムが再生される」「複数の音が同じタイミングに
-     集約されすぎる」「ンタタンタタンのようなリズムが上手く再生されない」への対応。
 
-     以前は各タップを記録時に絶対16分グリッドへ独立にスナップしていた。これだと
-     タップ同士の相対関係が壊れる。実測（BGM 182BPM相当・16分=82.2ms）:
+     各タップを記録時に絶対16分グリッドへ独立にスナップしてはいけない。タップ同士の
+     相対関係が壊れる。実測（BGM 182BPM相当・16分=82.2ms）:
        均等な150ms×4    → 164.5, 164.5, 82.2, 164.5  （均等に叩いたのに3発目だけ半分）
        300,150,150,300  → 328.9, 82.2, 164.5, 328.9  （等しい2つの150msが分裂）
-     しかも結果が「最初のタップがグリッドのどこに落ちたか」に依存するため、同じ叩き方
-     でも毎回違うリズムになる。隣り合うタップが同じスロットへ丸まれば1発に潰れる。
+     しかも結果が「最初のタップがグリッドのどこに落ちたか」に依存するため、同じ叩き方でも
+     毎回違うリズムになる。隣り合うタップが同じスロットへ丸まれば1発に潰れる。
 
      そこで絶対位置は使わず、隣接タップの間隔だけを見る:
        1. 各間隔を上限（KING_SEQ_GAP_MAX）でクランプ … 待ち時間の除去。ここで先に
           潰しておかないと、後段で読み取った比を長い待ちが壊す
-       2. 候補となる単位（16分の1〜KING_SEQ_GAP_MAX倍）を総当りし、全間隔の量子化
-          誤差の合計が最小になる単位を選ぶ … プレイヤーが刻んでいた拍節を推定する
+       2. 候補となる単位（16分の1〜KING_SEQ_GAP_MAX倍）を総当りし、全間隔の量子化誤差の
+          合計が最小になる単位を選ぶ … プレイヤーが刻んでいた拍節を推定する
        3. 各間隔 = round(間隔 / 単位) × 単位 … 比を整数で保つ
      これで「均等に叩いたら均等に鳴る」「等しい間隔は等しく鳴る」が保証され、位相にも
      依存しなくなる。出力は必ず16分の整数倍なので、絶対グリッドの上に乗る点は不変。
 
      各間隔は最低1スロット空ける（Math.max(1, ...)）。これで異なるタップが同じ時刻へ
      集約されることが構造的に起きなくなる。
-     並べるのは4打のみ。5打目（発射）は廃止され、締めのアクセントはプレイヤーの
-     タップではなく小節境界に置かれるようになった。
-     OK以下のタップ（ビームも焦げ跡も出ない）も時間としては間隔を持つので、
-     markRef の有無に関わらず全タップを並べる。
+     並べるのは4打のみ。締めのアクセントはプレイヤーのタップではなく小節境界に置かれる。
+     OK以下のタップ（ビームも焦げ跡も出ない）も時間としては間隔を持つので、markRef の
+     有無に関わらず全タップを並べる。
 
-     なお、これにより「JUSTを取ったタップは絶対グリッドの境界に乗る」という以前の
-     性質は無くなる。再生はプレイヤーの絶対位置ではなくパターンの内部構造の再構成に
-     なったため。採点（こんがり%）とベロシティは従来どおり生のタイミングで決まるので、
-     報酬構造には影響しない。 */
+     再生はプレイヤーの絶対位置ではなくパターンの内部構造の再構成なので、「JUSTを取った
+     タップが絶対グリッドの境界に乗る」という性質は持たない。採点（こんがり%）とベロシティは
+     生のタイミングで決まるので、報酬構造には影響しない */
   const taps = rec.map(r => r.pos);
   const raw = [];
   for (let i = 1; i < taps.length; i++) raw.push(Math.max(0, taps[i] - taps[i - 1]));
   const off = [0];
   if (raw.length > 0) {
-    /* 上限クランプは _kingSeqFitGaps の中で「倍率を下げる」形で掛かるので、ここでは
-       生の間隔を渡す。先にクランプすると比を読む前に長い音が潰れる（例: タ=200msで
-       1:2 を叩くと 400ms が上限329msへ落ちて 1:1.64 に見え、2:3 と誤読されていた）。
+    /* 上限クランプは _kingSeqFitGaps の中で「倍率を下げる」形で掛かるので、ここでは生の
+       間隔を渡す。先にクランプすると比を読む前に長い音が潰れる（例: タ=200msで1:2 を叩くと
+       400ms が上限329msへ落ちて 1:1.64 に見え、2:3 と誤読される）。
 
-       一時期ここに「序盤は長短の段だけ残す」対数モードと、的の配分に応じた混合を
-       入れていたが撤去した。上限を4拍へ広げたことで長い待ちもそのまま表現できるように
-       なり、段階化しなくても長短は残る。それ以上に、推定で作った別パターンへ置き換わる
-       ことが「打った通りに再生されない」という評価の主因になっていたため、
-       打ったものをそのまま量子化する一本道に戻す。 */
+       「序盤は長短の段だけ残す」対数モードや、的の配分に応じた混合は入れないこと。上限が
+       4拍あるので長い待ちもそのまま表現でき、段階化しなくても長短は残る。それ以上に、
+       推定で作った別パターンへ置き換わることが「打った通りに再生されない」の主因になる。
+       打ったものをそのまま量子化する一本道にする */
     for (const g of _kingSeqFitGaps(raw)) off.push(off[off.length - 1] + g);
   }
   /* レスポンスの長さは上限（KING_SEQ_SPAN_SLOTS＝2小節）で頭打ちにする。
@@ -8703,12 +8529,11 @@ function _kingBuildSequence(forced, gain, flights) {
   for (let i = 0; i < rec.length; i++) {
     const at = _bgmBufPosToCtxTime(slotAt(off[i]));
     if (at === null) return false;
-    /* OK以下（グレー）のタップは焦げ跡もビームも出ない（加点しないというバランス仕様）。
-       以前はそのスロットを完全に無音にしていたが、叩いた拍にそのまま穴が空くため
-       「打ち込んだビート通りにならない」原因になっていた。実機評価「グレーOKのはずれ
-       でも何か音は鳴らしてフィードバックしたい。ごく小さくスネアを鳴らすとか」に沿って、
-       音だけ小さく鳴らす。加点しない・焦げ跡も付かないという扱いは変えないので、
-       バランスはそのままにリズムの形だけが完全になる */
+    /* OK以下（グレー）のタップは焦げ跡もビームも出ない（加点しないというバランス仕様）が、
+       音だけは小さく鳴らす。そのスロットを完全に無音にすると叩いた拍にそのまま穴が空き、
+       打ち込んだビート通りに返ってこない。
+       加点しない・焦げ跡も付かないという扱いは変えないので、バランスはそのままにリズムの
+       形だけが完全になる */
     const quiet = !rec[i].flight.markRef;
     const vol = _kingBeamVol(rec[i].flight.tier);
     if (!quiet) {
@@ -8717,26 +8542,25 @@ function _kingBuildSequence(forced, gain, flights) {
     }
     events.push({ at, kind: 'impact', f: rec[i].flight, quiet, vol });
   }
-  /* アクセント（爆発）＝レスポンスが終わった次の小節境界。ここが次のコールの
-     1拍目にもなるので、コールとレスポンスが途切れずに回り続ける。
-     以前は5打目（発射タップ）の位置だったため、詰めて押すと爆発が4打目に張り付き、
-     「4連射 → 間 → 爆発」の形が打ち方次第で崩れていた。小節境界に置けば毎回同じ形になる。
+  /* アクセント（爆発）＝レスポンスが終わった次の小節境界。ここが次のコールの1拍目にも
+     なるので、コールとレスポンスが途切れずに回り続ける。プレイヤーのタップ位置に置いては
+     いけない（詰めて押すと爆発が4打目に張り付き、「4連射 → 間 → 爆発」の形が打ち方次第で
+     崩れる）。小節境界に置けば毎回同じ形になる。
      次トライのバッテリー起点（recStartPos）もこの位置＝必ず小節境界になる。
-     焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく既存の
-     不発音にして「音は撃ったと言っているのに画面は無反応」を避ける */
+     焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく不発音にして
+     「音は撃ったと言っているのに画面は無反応」を避ける */
   const respSlots = leadIn + mapOff(noteSpan);
   const respBars = Math.max(1, Math.ceil(respSlots / barSlots));
   const accentPos = (respStartSlot + respBars * barSlots) * KING_SEQ_QUANT;
   const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
   /* forced（バッテリー切れで最後の的が自動確定した試技）はアクセントを鳴らさない。
-     こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」で出す。
-     発射トリガーがあった頃は「5音目を叩かなかったから」が理由だったが、廃止後も
-     「自分でコールを閉じたか、時間切れで閉じられたか」の差として意味が残る */
-  /* dud=この試技のダメージがゼロ（＝焦げ跡を1つも作れなかった＝4タップ全てOK止まり）。
-     以前は events.length === 0 で見ていたが、OK以下のタップにも小音量の着弾イベントを
-     置くようにした時点で常に false になっていた（穴だったのを修正）。焦げ跡の有無は
-     gain と同値（gain は markRef を持つタップだけで積算される、_kingFireAttack参照） */
+     こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」＝
+     自分でコールを閉じたか、時間切れで閉じられたかの違いとして出す */
+  /* dud=この試技のダメージがゼロ（＝焦げ跡を1つも作れない＝4タップ全てOK止まり）。
+     events.length で判定してはいけない: OK以下のタップにも小音量の着弾イベントが置かれる
+     ので常に false になる。焦げ跡の有無は gain と同値（gain は markRef を持つタップだけで
+     積算される、_kingFireAttack参照） */
   events.push({ at: accentAt, kind: 'accent', gain, flights,
                 dud: gain <= 0, forced, nextPos: accentPos });
   /* 同一スロットの重なりは間引かずそのまま重ねる（プレイヤーの入力を補正しない
@@ -8755,9 +8579,9 @@ function _kingBuildSequence(forced, gain, flights) {
                 '/ 音数', events.filter(e => e.kind === 'impact').length,
                 '/ うち小音量', events.filter(e => e.quiet).length);
   }
-  /* 焼き込みを5音目まで遅らせる印（_stickKingChar参照）。シーケンスを組めた場合に
-     だけ立てる＝音声の時計が無くて即時適用へ退避する経路（_kingFireAttack）は
-     アクセント自体が発火しないので、従来どおり着弾と同時に焦げが付く */
+  /* 焼き込みを5音目まで遅らせる印（_stickKingChar参照）。シーケンスを組めた場合にだけ
+     立てる＝音声の時計が無くて即時適用へ退避する経路（_kingFireAttack）はアクセント自体が
+     発火しないので、着弾と同時に焦げが付く */
   for (const f of flights) f.deferBurn = true;
   _king.seqAccentAt = accentAt; // 帯電の充電進捗の分母（_drawKingMarkCharges）
   _king.seqEvents = events;
@@ -8799,13 +8623,13 @@ function _kingSeqScheduleAudio(events) {
 /* 通常モード（リズムとして叩けている）の当てはめ。dは生の間隔（秒・クランプ前）で、
    16分スロット数の配列を返す。上限は倍率の選び方で担保する（下記2)）。
 
-   「最小間隔を基準にする」方式は基準そのものが1回のブレや偶然の短い間隔に引きずられ、
-   他の間隔がまとめて狂うため廃止した。意図した比を復元できた割合（6000試行の
-   シミュレーション、人の打鍵ジッタは20〜30msが現実的な範囲）:
-     ジッタ10ms  最小間隔基準 81.8% → 現行 100%
-           20ms              58.7% →      100%
-           30ms              41.1% →       94.3%
-           45ms              21.9% →       63.8% */
+   「最小間隔を基準にする」方式は採らない。基準そのものが1回のブレや偶然の短い間隔に
+   引きずられ、他の間隔がまとめて狂う。意図した比を復元できた割合（6000試行のシミュレーション、
+   人の打鍵ジッタは20〜30msが現実的な範囲）:
+     ジッタ10ms  最小間隔基準 81.8% → この方式 100%
+           20ms              58.7% →          100%
+           30ms              41.1% →           94.3%
+           45ms              21.9% →           63.8% */
 function _kingSeqFitGaps(d) {
   /* 1) 打鍵から拍節単位 b を推定する。BGMのグリッドとは無関係に、各間隔が b の整数倍
         へ素直に収まるような b を探す。候補は「各間隔 ÷ 1〜KING_SEQ_GAP_MAX」から作る
@@ -8814,10 +8638,9 @@ function _kingSeqFitGaps(d) {
   for (const x of d) {
     for (let k = 1; k <= KING_SEQ_GAP_MAX; k++) {
       const b = x / k;
-      /* 単位を細かく取るほど誤差は下がる（極端には b→0 で誤差0）ので、そのまま
-         最小化すると必ず最も細かい解が勝ち、比が無意味に大きくなる。実測でも
-         1拍×4を30msのブレ込みで叩くと b≈27ms・11スロット刻みが選ばれ、再生が
-         2.75拍×4へ膨張していた。2つで抑える:
+      /* 単位を細かく取るほど誤差は下がる（極端には b→0 で誤差0）ので、そのまま最小化すると
+         必ず最も細かい解が勝ち、比が無意味に大きくなる。実測でも1拍×4を30msのブレ込みで
+         叩くと b≈27ms・11スロット刻みが選ばれ、再生が2.75拍×4へ膨張する。2つで抑える:
          ・16分より細かい単位は候補にしない（人がそれ以下を刻み分けることはない）
          ・誤差は b で正規化する＝「推定した拍に対して何割ずれているか」で比べる */
       if (b < KING_SEQ_QUANT * 0.9) continue;
@@ -8827,20 +8650,20 @@ function _kingSeqFitGaps(d) {
     }
   }
   if (best === null) return d.map(() => 1);
-  /* 2) 推定した b をBGMの16分グリッドへ載せ替える。倍率は「比が上限
-        （KING_SEQ_GAP_MAX）に収まる範囲で最大」を選ぶ。ここで倍率を下げることで
-        長さの上限も同時に満たすので、間隔を先にクランプする必要が無い（先に潰すと
-        比を読む前に長い音が縮んで別の比に見える。実測: タ=200msで1:2を叩くと
-        400msが上限329msへ落ちて1:1.64に見え、2:3と誤読されていた）。
-        テンポと比が両立しないときは比の保存を優先する: 打ち込んだリズムとして
-        伝わるのは長さの一致ではなく長短の比のため。
+  /* 2) 推定した b をBGMの16分グリッドへ載せ替える。倍率は「比が上限（KING_SEQ_GAP_MAX）に
+        収まる範囲で最大」を選ぶ。ここで倍率を下げることで長さの上限も同時に満たすので、
+        間隔を先にクランプする必要が無い（先に潰すと比を読む前に長い音が縮んで別の比に
+        見える。実測: タ=200msで1:2を叩くと400msが上限329msへ落ちて1:1.64に見え、2:3と
+        誤読される）。
+        テンポと比が両立しないときは比の保存を優先する: 打ち込んだリズムとして伝わるのは
+        長さの一致ではなく長短の比のため。
 
-     この2段構えにしたのは、グリッド上で直接あてはめる（候補単位ごとに絶対誤差を
-     最小化する）方式だと、プレイヤーのテンポが16分に乗っていないときに比が崩れる
-     ため。例: タ=120msで 120,240,120,240（1:2:1:2）と叩くと、120msは16分1つ(82ms)と
-     2つ(165ms)のどちらからも遠く、240msは3つ(247ms)にほぼ一致するので、絶対誤差
-     最小の解が 1,3,1,3 になっていた。先に比(1:2:1:2)を読んでからグリッドへ載せれば
-     1,2,1,2 が保たれる（テンポは120ms→82msへ詰まるが、リズムは意図どおり）。 */
+     この2段構えが要る理由: グリッド上で直接あてはめる（候補単位ごとに絶対誤差を最小化する）
+     方式だと、プレイヤーのテンポが16分に乗っていないときに比が崩れる。例: タ=120msで
+     120,240,120,240（1:2:1:2）と叩くと、120msは16分1つ(82ms)と2つ(165ms)のどちらからも遠く、
+     240msは3つ(247ms)にほぼ一致するので、絶対誤差最小の解が 1,3,1,3 になる。先に比
+     (1:2:1:2)を読んでからグリッドへ載せれば 1,2,1,2 が保たれる（テンポは120ms→82msへ詰まるが、
+     リズムは意図どおり） */
   const rmax = Math.max(...best.r);
   const rsum = best.r.reduce((a, v) => a + v, 0);
   /* 倍率は3つの上限の最小を取る。いずれも倍率を下げるだけなので比は整数のまま保たれる:
@@ -8883,14 +8706,14 @@ function _kingSeqFlush() {
   while (_king.seqEvents.length > 0) _kingSeqFire(_king.seqEvents.shift(), true);
 }
 
-/* 5音目のアクセント。帯電していた4箇所が一斉に焦げへ変わって発光し、キング全体が
-   光ってのけぞり、全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約している
-   ため、ゲージと焼き色と焦げが全て同じ瞬間に動く）。従来キングは被弾しても無反応だった */
+/* 5音目のアクセント。帯電していた4箇所が一斉に焦げへ変わって発光し、キング全体が光って
+   のけぞり、全身の焼き色が一段濃くなる（こんがり%の加算をここへ集約しているため、ゲージと
+   焼き色と焦げが全て同じ瞬間に動く）。キングが被弾に反応するのはこの1回だけ */
 function _kingSeqAccent(e, flush) {
-  /* 鳴らす対象が無かった飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
-     画面に残し続ける理由が無いため。deferBurn も同時に降ろす: これ以降に着地する
-     文字（このフレームより後に _stickKingChar が呼ばれる分）は焼き込みの瞬間を
-     過ぎているので、帯電させずその場で焦げにしないと永久に焦げが出ない */
+  /* 鳴らす対象を持たない飛翔体（OK以下・強制発射の自動確定分）もここで吸い込む。
+     画面に残し続ける理由が無いため。deferBurn も同時に降ろす: これ以降に着地する文字
+     （このフレームより後に _stickKingChar が呼ばれる分）は焼き込みの瞬間を過ぎているので、
+     帯電させずその場で焦げにしないと永久に焦げが出ない */
   for (const f of e.flights) {
     f.deferBurn = false;
     /* 帯電中は消えずに待っていた文字（_predKingCharAlive）のフェードをここから
@@ -8901,9 +8724,8 @@ function _kingSeqAccent(e, flush) {
     if (f.state === 'stick' && f.markRef && f.markRef.charging) f.frames = 0;
     if (f.resolve === null) f.resolve = 'stick';
   }
-  /* 焼き込み: 帯電したまま待っていた焦げ跡を一斉に出現させる（ユーザー要望の
-     「5拍目で焼き込み」）。ここで初めて revealedAt が入り、_renderKingBody の
-     フェード表示が4つ同時に始まる */
+  /* 焼き込み: 帯電したまま待っていた焦げ跡を、5拍目のアクセントで一斉に出現させる。
+     ここで初めて revealedAt が入り、_renderKingBody のフェード表示が4つ同時に始まる */
   const burnAt = performance.now();
   for (const m of _kingChargedMarks) {
     if (m.revealedAt == null) m.revealedAt = burnAt;
@@ -8923,7 +8745,7 @@ function _kingSeqAccent(e, flush) {
       _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
     }
   }
-  /* ユーザー選択: アクセントのダウンビートを次のトライの開始と同じ瞬間にする
+  /* アクセントのダウンビートは次のトライの開始と同じ瞬間にする
      （死に時間がゼロになり、アクセントがそのまま次の小節の「1」になる）。
      勝敗が決まった場合は次のトライへ進ませない。
      ポーズによる畳み込み（_kingSeqFlush）は時刻が過去なので、ここで起こすと
@@ -8976,11 +8798,11 @@ function _kingBatteryCheck() {
   while (_king.reelIdx < 4) _kingReelShoot(null, true);
 }
 
-/* 次トライの解放。レスポンスが終わり（ハズレなら4体が画面外へ消え切り）、その後の
-   最初の**小節境界**で的を回し直す。速く打ち終われば速くレスポンスが終わり、速く次へ進む。
+/* 次トライの解放。レスポンスが終わり（ハズレなら4体が画面外へ消え切り）、その後の最初の
+   **小節境界**で的を回し直す。速く打ち終われば速くレスポンスが終わり、速く次へ進む。
    当たりの場合はアクセント（爆発）が次のコールの1拍目を兼ねるのでここは通らず、
-   _kingSeqAccent から直接 _kingStartTrial が呼ばれる。ここを通るのはハズレ経路と、
-   音声の時計が使えずシーケンスを組めなかった場合 */
+   _kingSeqAccent から直接 _kingStartTrial が呼ばれる。ここを通るのはハズレ経路と、音声の
+   時計が使えずシーケンスを組めなかった場合 */
 function _kingTrialGate() {
   if (!_king.attemptFired || _king.pendingDefeat || _king.pendingVictory) return;
   if (_king.seqEvents.length > 0) return; // 再生中
@@ -8988,7 +8810,7 @@ function _kingTrialGate() {
   if (!missClear) return;
   const pos = _bgmJudgePos();
   if (pos === null || _bgmRateRamping()) {
-    /* 音声の時計が使えない場合は従来の解放条件（フレーム数＋16分グリッド）へ退避 */
+    /* 音声の時計が使えない場合は解放条件をフレーム数＋16分グリッドへ退避 */
     if (_king.resultTimer === null) return;
     _king.resultTimer++;
     const minWait = _king.resultMatched ? KING_RESULT_MIN_WAIT.hit : KING_RESULT_MIN_WAIT.miss;
@@ -9027,12 +8849,11 @@ function _respinKingReels() {
   _king.attemptFired = false; // 次トライの帯電演出（drawKingReel参照）を解禁
 }
 
-/* 的posIdxで文字charが命中した際、その的（他の3的とは独立）の配分を少し
-   偏らせる。命中文字をKING_WEIGHT_STEPぶん増やし（上限KING_WEIGHT_MAX）、
-   増えた分は他の3文字から比例配分で差し引く（下限KING_WEIGHT_MINを維持。
-   下限に達した文字が出た場合は残りをさらに他へ再配分するwhileループ）。
-   毎タップ（結果の当たり外れに関わらず）呼ぶ＝「その的で狙って当てた文字」
-   だけが基準（ユーザー要望） */
+/* 的posIdxで文字charが命中した際、その的（他の3的とは独立）の配分を少し偏らせる。
+   命中文字をKING_WEIGHT_STEPぶん増やし（上限KING_WEIGHT_MAX）、増えた分は他の3文字から
+   比例配分で差し引く（下限KING_WEIGHT_MINを維持。下限に達した文字が出た場合は残りを
+   さらに他へ再配分するwhileループ）。
+   結果の当たり外れに関わらず毎タップ呼ぶ＝基準は「その的で狙って当てた文字」 */
 function _adjustKingCharWeight(posIdx, char) {
   const w = _king.charWeights[posIdx];
   const target = Math.min(KING_WEIGHT_MAX, w[char] + KING_WEIGHT_STEP);
@@ -9050,13 +8871,12 @@ function _adjustKingCharWeight(posIdx, char) {
   }
 }
 
-/* ビーム1本を撃つ（的の三角 → 対応するマーク）。ユーザー要望: 「射った的の三角
-   からそれぞれ対応するマークに向かってビームを発射したい。ビームの色はマーク
-   の色と一致させたい」。マークが無い（OK以下）タップは対応するビームも無し
-   ＝的とマークが1:1で対応する見た目を保つ（5本目を足さないのもこの原則のため。
-   5音目のアクセントはビームではなくキング本体のリアクションで表現する）。
-   飛翔時間は距離によらずKING_LASER_TRAVEL_FRAMESで一定という性質はそのままで、
-   リズムシーケンサでは「撃つ時刻」だけが1本ずつずれる */
+/* ビーム1本を撃つ（的の三角 → 対応するマーク）。ビームの色はマークの色と一致させる。
+   マークが無い（OK以下）タップは対応するビームも無し＝的とマークが1:1で対応する見た目を
+   保つ。5本目を足さないのも同じ原則で、5音目のアクセントはビームではなくキング本体の
+   リアクションで表現する。
+   飛翔時間は距離によらずKING_LASER_TRAVEL_FRAMESで一定。リズムシーケンサでは「撃つ時刻」
+   だけが1本ずつずれる */
 function _kingFireBeam(f) {
   if (!f.markRef) return false; // 焦げ跡が無いタップはビームも発射しない
   const p1 = _kingReelPointerPos(_king.reels[f.reelIdx]);
@@ -9077,14 +8897,13 @@ function _kingSetSyncLabel(score) {
   syncJustLabel = label; syncJustTimer = 50; syncJustScore = score;
 }
 
-/* 4本同時にビームを撃つ旧来の一撃（音声の時計が引けずシーケンサを組めなかった
-   場合のフォールバック専用。通常は _kingBuildSequence が1本ずつ時刻を付けて撃つ）。
-   こ・ん・が・りが揃っても4タップ全てがOK止まりだとmarkRefが無く、ビームが
-   1本も出ず焦げ跡もこんがり%も増えない（JUST/GOODのみ加点という既存の
-   バランス仕様どおり）。この時に発射音を鳴らすと「音は撃ったと言っているのに
-   画面は無反応」になるため、音の方を実際の見た目に合わせて弱い不発音にする
-   （バランスは変えず演出の整合だけを取る方針。タイミング精度が報酬の核という
-   設計思想を薄めないため、OKティアへの加点はしない） */
+/* 4本同時にビームを撃つ一撃（音声の時計が引けずシーケンサを組めなかった場合のフォール
+   バック専用。通常は _kingBuildSequence が1本ずつ時刻を付けて撃つ）。
+   こ・ん・が・りが揃っても4タップ全てがOK止まりだとmarkRefが無く、ビームが1本も出ず焦げ跡も
+   こんがり%も増えない（JUST/GOODのみ加点というバランス仕様どおり）。この時に発射音を鳴らすと
+   「音は撃ったと言っているのに画面は無反応」になるため、音の方を実際の見た目に合わせて弱い
+   不発音にする。バランスは変えず演出の整合だけを取る＝タイミング精度が報酬の核という設計を
+   薄めないよう、OKティアへの加点はしない */
 function _kingApplyBeams(flights) {
   let fired = 0;
   for (const f of flights) if (_kingFireBeam(f)) fired++;
@@ -9100,17 +8919,15 @@ function _easeKingXform() {
   _king.dscale += (_king.scale - _king.dscale) * KING_XFORM_EASE;
 }
 
-/* キング戦系フェーズを通して「決着に関係なく背景で自走し続ける」演出をまとめて
-   1フレーム進める。boss / bossShatter / bossVictory / bossDefeat /
-   bossDefeatShrink / bossDefeatOutro のすべてから呼ぶ。
-   以前はこの3つ（姿勢イージング・文字飛翔・レーザー寿命）が各フェーズの
-   update関数にバラバラの組み合わせでコピーされており、bossVictory だけ
-   レーザーの寿命処理が抜けている等の穴があった（実際、勝利を決めた瞬間の
-   ビームが life を消費できず描画もされないまま残る不具合の一因になっていた）。
-   フェーズごとの取捨選択をやめて一箇所に集約し、新しい常時演出を追加した際の
-   水平展開漏れを構造的に防ぐ。
-   個々の中身は対象が空なら何もしない（_king が null、配列が空）ため、
-   どのフェーズから呼んでも安全 */
+/* キング戦系フェーズを通して「決着に関係なく背景で自走し続ける」演出をまとめて1フレーム
+   進める。boss / bossShatter / bossVictory / bossDefeat / bossDefeatShrink /
+   bossDefeatOutro のすべてから呼ぶ。
+   姿勢イージング・文字飛翔・レーザー寿命の3つは、フェーズごとに取捨選択せず必ずここへ
+   集約すること。各update関数へ個別にコピーすると組み合わせに穴が空き、たとえばbossVictory
+   だけレーザーの寿命処理が抜けて、勝利を決めた瞬間のビームが life を消費できず残り続ける
+   といった不具合になる。集約しておけば、新しい常時演出を足したときの水平展開漏れも起きない。
+   個々の中身は対象が空なら何もしない（_king が null、配列が空）ため、どのフェーズから
+   呼んでも安全 */
 /* 文字飛翔の生存判定と後始末。毎フレーム呼ばれるswapRemoveの引数なので、
    その場のアロー関数ではなくモジュールスコープに置く（クロージャ生成ゼロ。
    通常モードの_pred*と同じ方針で、キング戦側にも水平展開する） */
@@ -9125,8 +8942,8 @@ const _predKingCharAlive = f => {
   return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
 };
 /* 画面外へ消えて配列から取り除かれた瞬間にattemptToken.aliveを減らす。
-   _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を見て
-   初めて次のトライ（respin）を許可する（ユーザー要望） */
+   _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を見て初めて
+   次のトライ（respin）を許可する */
 const _onKingCharRemoved = f => { if (f.attemptToken) f.attemptToken.alive--; };
 
 function _updateKingCommonFx() {
@@ -9238,14 +9055,13 @@ function _kingSiftReleased() {
   return _king.siftTimer !== null && _king.siftTimer >= KING_SIFT_RELEASE_FRAME;
 }
 
-/* ハズレ確定の文字を、着地点（ボス側）から的の上部（三角ポインタ付近、
-   f.rtx/rty＝ボス側を向いている面）へ戻す物理シミュレーションに切り替える
-   （ユーザー要望: 的への衝突・反発・落下を物理エミュレーションで表現し、
-   最終的に画面外へ落ちていくようにしたい。戻る先は的の下ではなくボス側の
-   上にしたい）。ここではまだ「接近（bounce）」フェーズの初速度だけを設定
-   する。等速直線運動で的へ向かい、KING_CHAR_RETURN_FRAMES後（＝ちょうど的に
-   到達する頃）に_updateKingCharFlights側で衝突判定→反発（fallへ遷移）し、
-   その瞬間に的へひびを追加する（_addKingReelCrackAtCollision参照）。
+/* ハズレ確定の文字を、着地点（ボス側）から的の上部（三角ポインタ付近、f.rtx/rty＝
+   ボス側を向いている面）へ戻す物理シミュレーションに切り替える。戻る先は的の下ではなく
+   ボス側の上。
+   ここではまだ「接近（bounce）」フェーズの初速度だけを設定する。等速直線運動で的へ向かい、
+   KING_CHAR_RETURN_FRAMES後（＝ちょうど的に到達する頃）に_updateKingCharFlights側で
+   衝突判定→反発（fallへ遷移）し、その瞬間に的へひびを追加する
+   （_addKingReelCrackAtCollision参照）。
    この関数が呼ばれるのは篩い落としの振り下ろしが底に達した後（_kingSiftReleased） */
 function _startKingCharBounce(f) {
   f.state = 'bounce'; f.frames = 0;
@@ -9258,17 +9074,14 @@ function _startKingCharBounce(f) {
   f.bvy = dy / dist * spd;
 }
 
-/* 文字が実際に的へ衝突した瞬間（bounce→fall遷移）にひびを1本追加する
-   （ユーザー要望: 「クラックが入るタイミングがおかしい。文字が衝突した瞬間
-   という話をしたはず」。以前はミス確定と同時に4的まとめて追加していたが、
-   衝突は個々の文字の飛翔完了タイミングでバラける現象のため、それぞれの
-   衝突の瞬間に合わせて1本ずつ追加するよう変更した）。的は再スピンにより
-   衝突時点では別オブジェクトへ差し替わっている場合があるため、f.reelIdx
+/* 文字が実際に的へ衝突した瞬間（bounce→fall遷移）にひびを1本追加する。
+   ミス確定と同時に4的まとめて追加してはいけない: 衝突は個々の文字の飛翔完了タイミングで
+   バラけるので、それぞれの衝突の瞬間に合わせて1本ずつ追加する。
+   的は再スピンにより衝突時点では別オブジェクトへ差し替わっている場合があるため、f.reelIdx
    （スロット番号、_spawnKingCharFlight参照）で現在の的を引き直す。
-   ワールド座標上の衝突角（常に真上＝-PI/2＋ボス位置に応じた傾き）から、
-   その的の「現在の」w.rotを差し引いてローカル角度に変換する（_createKingCrackWedge
-   参照。衝突時点で的が既に次の的へ切り替わっていても、新しい的の現在の
-   回転にひびが正しく追従する） */
+   ワールド座標上の衝突角（常に真上＝-PI/2＋ボス位置に応じた傾き）から、その的の「現在の」
+   w.rotを差し引いてローカル角度に変換する（_createKingCrackWedge参照）。これにより、
+   衝突時点で的が既に次の的へ切り替わっていても、新しい的の現在の回転にひびが正しく追従する */
 function _addKingReelCrackAtCollision(f) {
   if (!_king || f.reelIdx == null) return;
   const rw = _king.reels[f.reelIdx];
@@ -9290,17 +9103,15 @@ function _addKingReelCrackAtCollision(f) {
   /* 衝突の瞬間だけ画面も短く揺らす（KING_IMPACT_SHAKE_*参照）。4文字は同じ
      フレームに着弾するので、加算せず同じ値をセットして暴れないようにする */
   _kingImpactShake = KING_IMPACT_SHAKE_FRAMES;
-  /* ひびが入る瞬間の金属音（ユーザー要望。_playKingCrackKin参照）。
-     揺れと同じ理由で多重発音を避ける: この関数は文字1体ごとに呼ばれ、4体は
-     ほぼ同じフレームに着弾するため、素直に鳴らすと同じ音が4重になって音量が
-     跳ね上がり「キン」ではなく潰れた濁音になる。直前の発音からの経過時間で
-     間引いて1発にまとめる。
-     フレームカウンタではなく wall-clock を使う理由: これは「実時間で失効すべき
-     ガード」であり、rAFが止まる状況（タブ非表示など）でフレームが進まないと
-     永久に失効せず、復帰後の最初のひびが無音になってしまう（CLAUDE.mdの
-     時間条件の実装規約）。
-     間隔が空いて着弾がばらけた場合は個別に鳴る（そのほうが自然）ため、
-     窓は「同一フレーム群をまとめる」のに足る最小限に留める */
+  /* ひびが入る瞬間の金属音（_playKingCrackKin参照）。
+     揺れと同じ理由で多重発音を避ける: この関数は文字1体ごとに呼ばれ、4体はほぼ同じ
+     フレームに着弾するため、素直に鳴らすと同じ音が4重になって音量が跳ね上がり、
+     「キン」ではなく潰れた濁音になる。直前の発音からの経過時間で間引いて1発にまとめる。
+     フレームカウンタではなく wall-clock を使うこと: これは「実時間で失効すべきガード」で
+     あり、rAFが止まる状況（タブ非表示など）でフレームが進まないと永久に失効せず、復帰後の
+     最初のひびが無音になる（CLAUDE.mdの時間条件の実装規約）。
+     間隔が空いて着弾がばらけた場合は個別に鳴る（そのほうが自然）ため、窓は「同一フレーム群を
+     まとめる」のに足る最小限に留める */
   const nowMs = performance.now();
   if (nowMs - _kingCrackKinLastMs >= KING_CRACK_KIN_MIN_GAP_MS) {
     _kingCrackKinLastMs = nowMs;
@@ -9314,12 +9125,12 @@ function _isKingCharOffscreen(f) {
          f.by < -KING_CHAR_OFFSCREEN_MARGIN || f.by > H + KING_CHAR_OFFSCREEN_MARGIN;
 }
 
-/* こんがり確定の文字がボスへ実際に到達した瞬間。予約だけされて revealedAt 未設定の
-   焦げ跡は _renderKingBody 側では「まだ見えない」ため、これより前のフレームで焦げが
-   先に見えてしまうことはない。
-   リズム再生を伴う通常経路（f.deferBurn）では、ここでは焦げにせず「帯電」させて
-   5音目の焼き込みまで待たせる（KING_TETHER_* の定義部参照）。再生シーケンスを
-   組めなかった退避経路（音声の時計が無い場合）だけが従来どおり即座に焦げになる */
+/* こんがり確定の文字がボスへ実際に到達した瞬間。予約だけされて revealedAt 未設定の焦げ跡は
+   _renderKingBody 側では「まだ見えない」ため、これより前のフレームで焦げが先に見えることは
+   ない。
+   リズム再生を伴う通常経路（f.deferBurn）では、ここでは焦げにせず「帯電」させて5音目の
+   焼き込みまで待たせる（KING_TETHER_* の定義部参照）。再生シーケンスを組めなかった退避経路
+   （音声の時計が無い場合）だけが即座に焦げになる */
 function _stickKingChar(f) {
   f.state = 'stick'; f.frames = 0;
   if (!f.markRef || f.markRef.revealedAt != null) return;
@@ -9372,17 +9183,16 @@ function _updateKingCharFlights() {
         const jitter = (Math.random() - 0.5) * 0.5;
         f.bvx = f.bvx * KING_CHAR_BOUNCE_FRICTION + jitter;
         f.bvy = -f.bvy * KING_CHAR_BOUNCE_RESTITUTION;
-        /* 弾き飛ばしインパルスをわずかに上乗せする（KING_CHAR_KNOCK_SPEED_X/Y
-           定義部参照: ユーザー要望で運動エネルギーの大半を的の破壊に使わせ、
-           ほぼ自由落下に近づけたため、この上乗せもごく小さい値に変更済み）。
-           左右方向はボス中心から見たその的のオフセット方向（ひび演出の
-           biasAngleと同じ考え方、_addKingReelCrackAtCollision参照）に払う */
+        /* 弾き飛ばしインパルスをわずかに上乗せする（KING_CHAR_KNOCK_SPEED_X/Y 定義部参照。
+           運動エネルギーの大半は的の破壊に使われる想定なので、上乗せもごく小さい値）。
+           左右方向はボス中心から見たその的のオフセット方向（ひび演出のbiasAngleと同じ
+           考え方、_addKingReelCrackAtCollision参照）に払う */
         const reel = _king.reels[f.reelIdx];
         const knockDir = reel ? (Math.sign(reel.x - _king.dbx) || 1) : 1;
         f.bvx += knockDir * KING_CHAR_KNOCK_SPEED_X;
         f.bvy -= KING_CHAR_KNOCK_SPEED_Y;
         f.rotSpd = knockDir * KING_CHAR_KNOCK_ROT_SPD * (0.7 + Math.random() * 0.6);
-        /* 衝突の瞬間にひびを追加（ユーザー要望どおりのタイミング） */
+        /* 衝突の瞬間にひびを追加 */
         _addKingReelCrackAtCollision(f);
         /* 同じ失敗attemptの4体全てが衝突し終えたら、6回目の失敗（pendingDefeat）
            の場合に限り的の破砕演出へ進む（_kingReelShoot参照）。
@@ -9418,7 +9228,7 @@ function _updateBossBattle() {
   _updateBossBgmTier(); // こんがり度に応じて地鳴りをマイルド化（_playGroundRumble参照）
   _kingSeqStep();       // 打ち込んだリズムの再生（音は予約済み・ここは視覚と状態）
   /* 篩い落としの発動判定: 予約済みかつ「降ろす対象の文字が全員キングへ到着済み」
-     になったら振り始める（ユーザー選択の案(b)）。到着済みの判定は
+     になったら振り始める。到着済みの判定は
      bounce予定の文字が1つも'fly'に残っていないこと。最速発射でも常に
      「到着→振り下ろす→落ちる」の順になり、見え方が一定になる */
   if (_king.siftPending) {
@@ -9433,44 +9243,40 @@ function _updateBossBattle() {
       _king.siftPending = false; // 降ろす文字が無い（通常起こらないが保険）
     }
   }
-  /* こんがり100%到達（pendingVictory）は即座に勝利へ飛ばさず、この試技で撃った
-     ビームが消えきるのを待ってから確定させる。_kingFireAttackは入力ハンドラから
-     同期的に呼ばれるため、そこで直接_startBossVictory()するとビーム生成と同じ
-     フレームでphaseがbossVictoryに変わり、drawBossBattleが早期returnして
-     「とどめの一撃のビームだけ一度も描画されない」状態になっていた。
-     敗北側（pendingDefeat→文字の衝突完了を待って破砕へ）と同じ「予約してから
-     演出の完了を待つ」形に揃える。ビームが1本も出なかった場合
-     （全タップOK以下でmarkRefが無い）は_kingLasersが空なので即座に確定する */
+  /* こんがり100%到達（pendingVictory）は即座に勝利へ飛ばさず、この試技で撃ったビームが
+     消えきるのを待ってから確定させる。_kingFireAttackは入力ハンドラから同期的に呼ばれるため、
+     そこで直接_startBossVictory()するとビーム生成と同じフレームでphaseがbossVictoryに変わり、
+     drawBossBattleが早期returnして「とどめの一撃のビームだけ一度も描画されない」状態になる。
+     敗北側（pendingDefeat→文字の衝突完了を待って破砕へ）と同じ「予約してから演出の完了を
+     待つ」形に揃える。ビームが1本も出なかった場合（全タップOK以下でmarkRefが無い）は
+     _kingLasersが空なので即座に確定する */
   if (_king.pendingVictory) {
     /* 再生シーケンスを撃ち切り、ビームも消えきってから勝利を確定する */
     if (_kingLasers.length === 0 && _king.seqEvents.length === 0) { _startBossVictory(); }
     return;
   }
   /* 打ち込みの持ち時間（バッテリー）と、次トライの解放。
-     6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示した
-     ままロックされ続け、文字の衝突（ひび）→破砕へそのまま進む。
-     以前はKING_RESULT_MIN_WAIT.miss（2フレーム）＋拍同期ですぐ再スピンして
-     いたが、文字の衝突（シャッター発動）は復路込みで32フレーム以上先のため、
-     6回目失敗後も的が回り直してタップ受付が再開され、pendingDefeat中に追加
-     attemptを撃ててしまうバグがあった（最悪ケース: 追加attemptでこんがり
-     100%到達→_startBossVictoryの後に、先行attemptの衝突完了でシャッターが
-     発動し、勝利フローと敗北フローが衝突する）。再スピンを止めれば
-     reelIdx=4のまま_kingReelShootの既存ガードで入力も塞がれる
+     6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示したままロックされ
+     続け、文字の衝突（ひび）→破砕へそのまま進む。
+     ここで再スピンを許すと重大な破綻になる: 文字の衝突（シャッター発動）は復路込みで
+     32フレーム以上先なので、その間に的が回り直してタップ受付が再開され、pendingDefeat中に
+     追加attemptを撃ててしまう。最悪ケースでは追加attemptでこんがり100%到達→
+     _startBossVictoryの後に、先行attemptの衝突完了でシャッターが発動し、勝利フローと
+     敗北フローが衝突する。
+     再スピンを止めれば reelIdx=4 のまま_kingReelShootの既存ガードで入力も塞がれる
      （_kingTrialGate の先頭で pendingDefeat を弾いている） */
   _kingBatteryCheck();
   _kingTrialGate();
 }
 
-/* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら
-   待機、stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで的へ
-   直線的に接近、fall=的に衝突した反発後の重力落下（画面外に出るまでフェード
-   しない。ユーザー指摘: 途中で消えるのではなく画面外に弾け飛ぶまで見えていて
-   ほしい）。位置計算は _kingCurrentFlightPos に集約。
-   文字色はそのタップのスコア（f.score）で通常モードのSYNCメーターと同じ
-   赤〜黄〜緑（_syncBarColor）を使う（ユーザー指摘: OK/GOOD/JUSTの評価に
-   合わせて色を変えたい・通常ゲーム時と同じ仕様にしたい）。
-   文字自体の大きさもJUSTでKING_CHAR_JUST_FONT_SCALE倍にする（ユーザー指摘:
-   マークされる文字の大きさと焦げ跡の面積は別物。焦げ跡側は常に一定サイズ）。
+/* 決定文字の飛翔演出の描画。fly=弧を描いて接近、wait=着地して微妙に揺れながら待機、
+   stick=こんがり成立で吸い込まれるようにフェード、bounce=ハズレで的へ直線的に接近、
+   fall=的に衝突した反発後の重力落下（画面外に弾け飛ぶまでフェードしない）。
+   位置計算は _kingCurrentFlightPos に集約。
+   文字色はそのタップのスコア（f.score）で通常モードのSYNCメーターと同じ赤〜黄〜緑
+   （_syncBarColor）を使う＝OK/GOOD/JUSTの評価表示を通常ゲームと同じ仕様に揃える。
+   文字自体の大きさもJUSTでKING_CHAR_JUST_FONT_SCALE倍にする（焦げ跡側は常に一定サイズで、
+   文字の大きさとは別物）。
    フォントサイズが1文字ごとに変わるため ctx.font はループ内で設定する */
 /* キング本体を現在の表示姿勢（dbx/dby/dscale）で1枚描く。決着まわりの4つの
    描画関数が同じ4行を持っていたのを一本化した。alphaを渡すとその不透明度で描く
@@ -9484,10 +9290,9 @@ function _drawKingBody(alpha) {
   ctx.restore();
 }
 
-/* 決着画面の見出しのY。ボスの裾（拡大アニメ中は dscale に連動して動く）の
-   すぐ下に置く。旧実装は画面上部固定だったため所持ギヨウザ表示・上部アイコンと
-   重なっていた（ユーザー報告で発覚）。dscale基準なので拡大演出中も裾の位置と
-   一緒に滑らかに動く。勝利・敗北で同じ式を持っていたのを一本化した */
+/* 決着画面の見出しのY。ボスの裾（拡大アニメ中は dscale に連動して動く）のすぐ下に置く。
+   画面上部固定にすると所持ギヨウザ表示・上部アイコンと重なる。dscale基準なので拡大演出中も
+   裾の位置と一緒に滑らかに動く。勝利・敗北で同じ式なので必ずここに集約する */
 function _kingTitleY() {
   return _king
     ? _king.dby + _BOSS_S * KING_VISUAL_BOTTOM_RATIO * _king.dscale + (IS_PORTRAIT ? 40 : 34)
@@ -9532,9 +9337,9 @@ function drawBossBattle() {
      （drawKingReelShatter参照） */
   if ((phase !== 'boss' && phase !== 'bossShatter') || !_king) return;
   /* レーザー（層状ストローク・shadowBlur不使用の描画規約に準拠）。
-     距離に関わらずKING_LASER_TRAVEL_FRAMES（時間基準の進行度）で先端を
-     x1,y1→x2,y2へ進めるため、的とマークの距離が違っても4本が同時に着弾する
-     （ユーザー要望参照、KING_LASER_TRAVEL_FRAMES定義部） */
+     距離に関わらずKING_LASER_TRAVEL_FRAMES（時間基準の進行度）で先端をx1,y1→x2,y2へ
+     進めるため、的とマークの距離が違っても4本が同時に着弾する
+     （KING_LASER_TRAVEL_FRAMES定義部参照） */
   for (const l of _kingLasers) {
     const t = Math.min(1, l.age / KING_LASER_TRAVEL_FRAMES);
     const tx = l.x1 + (l.x2 - l.x1) * t, ty = l.y1 + (l.y2 - l.y1) * t;
@@ -9614,13 +9419,13 @@ function drawBossBattle() {
     drawKingReelShatter();
   }
   drawKingCookGauge();
-  /* 発射バッジは廃止。4本マーク後にもう一度タップさせる方式そのものを無くしたので、
-     「あと1回必要」を伝える表示自体が不要になった（_kingReelShoot参照） */
+  /* 4打目でコールが閉じる（もう一度タップして発射する方式ではない）ので、
+     「あと1回必要」を伝えるバッジ表示は持たない（_kingReelShoot参照） */
 }
 
 /* こんがりゲージ: BETバーと同じ位置・寸法（戦闘中はBETバーを非表示にして差し替える） */
 /* achieved=true でラベルを「こんがり 達成！」に差し替える（退場演出中に使う。
-   drawBossVictoryOutro参照。戦闘中は従来どおりパーセント表示） */
+   drawBossVictoryOutro参照。戦闘中はパーセント表示） */
 function drawKingCookGauge(achieved = false) {
   if (!_king) return;
   const pct = _king.cookPct / 100;
@@ -9650,10 +9455,9 @@ function drawKingCookGauge(achieved = false) {
     const ch = 4, cgap = 1.5, ggap = 5;
     const cw = (bw - (groups - 1) * ggap - (KING_BATTERY_BEATS - groups) * cgap) / KING_BATTERY_BEATS;
     const by0 = my + (IS_PORTRAIT ? 5 : 3); // ラベル文字の上端より上（パネル上端の細帯）
-    /* 残量が少ないほど橙→赤へ。しきい値は小節単位で持つ（残り2小節で橙、
-       残り1小節で赤）。以前は総拍数に対する割合（2/7・1/7）だったが、小節が
-       意味を持つようになったので区切りと一致させる＝色が変わる瞬間が
-       セルの隙間と揃い、「あと2小節」が数えずに読める */
+    /* 残量が少ないほど橙→赤へ。しきい値は小節単位で持つ（残り2小節で橙、残り1小節で赤）。
+       総拍数に対する割合ではなく小節で区切ることで、色が変わる瞬間がセルの隙間と揃い、
+       「あと2小節」が数えずに読める */
     const warm = left <= KING_BATTERY_GROUP * 2 ? '#ffb03a' : Y;
     const col  = left <= KING_BATTERY_GROUP ? '#ff6a3a' : warm;
     let x = bx;
@@ -9666,19 +9470,17 @@ function drawKingCookGauge(achieved = false) {
   }
   ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = Y;
-  /* 四捨五入(Math.round)だと99.5%が「100%」と表示されるのに勝利条件
-     （_king.cookPct>=100、_kingReelShoot参照）は満たさず、表示100%なのに
-     クリアにならず追加で1本必要になる不整合が起きる（実機指摘）。切り捨て
-     （Math.floor）にすることで、表示が100%になった時点で必ず実際にも
-     100%（勝利条件成立）であることを保証する */
+  /* 表示は必ず切り捨て（Math.floor）にする。四捨五入だと99.5%が「100%」と表示されるのに
+     勝利条件（_king.cookPct>=100、_kingReelShoot参照）は満たさず、表示100%なのにクリアに
+     ならず追加で1本必要になる。切り捨てなら、表示が100%になった時点で必ず実際にも100%
+     （勝利条件成立）であることが保証される */
   ctx.fillText(achieved ? 'こんがり 達成！' : `こんがり ${Math.floor(pct * 100)}%`,
     mx + mw / 2, my + (mh - bh - 10) / 2 + 4);
   ctx.restore();
 }
 
 /* 湯気スプライト（柔らかい放射状グラデーションの円）を1回だけ生成する。
-   保持する形は_kingFlashSpriteと揃えて生キャンバス1枚（旧{oc,r}のrは
-   参照されていなかった） */
+   保持する形は_kingFlashSpriteと揃えて生キャンバス1枚 */
 function _buildSteamSprite() {
   if (_steamSprite || !_CACHE_OK) return;
   _steamSprite = _buildRadialSprite([
@@ -9731,9 +9533,9 @@ function _updateVictorySteam() {
   _victorySteam = _victorySteam.filter(p => p.age < p.maxAge && p.disperse !== 0);
 }
 
-/* 溜めた湯気を一斉に霧散させる（ユーザー要望: 「力を貯めた後、飛び去り始めた
-   ときに湯気は霧散するのが良い」）。キング中心から外向きに散らしつつ、
-   独立した減衰係数で薄れさせる。飛び去り開始（bossVictoryOutro step1）で呼ぶ */
+/* 溜めた湯気を一斉に霧散させる。キング中心から外向きに散らしつつ、独立した減衰係数で
+   薄れさせる。飛び去り開始（bossVictoryOutro step1）で呼ぶ＝力を貯めたあと、飛び去る
+   タイミングで湯気が霧散する */
 const _VICTORY_STEAM_DISPERSE_RATE = 0.045; // 1フレームあたりの減衰量（約22フレームで消えきる）
 function _disperseVictorySteam() {
   const cx = _king ? _king.dbx : W / 2, cy = _king ? _king.dby : H / 2;
@@ -9768,20 +9570,19 @@ function _startBossVictory() {
   phase = 'bossVictory';
   _bossVictoryTimer = 0;
   if (_king) _king.scale = 1; // 戦闘スケールから等倍への収束目標に切り替える（_easeKingXform）
-  /* こんがり達成の報酬（ユーザー要望）: このキングの実体である蓄積メーター分
-     （_kingMeterAtBattleStart＝1000+アルファ）と、過去の敗北で没収されて
-     プールされていた分（kingLostPool）をまとめて所持ギヨウザへ返す。
-     「キングに取り込まれていたギヨウザが、こんがり焼けて解放される」という
-     筋立て。プールは返した時点で0に戻す（ユーザー指示）。
-     返却額は勝利画面の表示にも使うため_bossVictoryWonCoinsへ控える（_kingは
-     復帰時にnullになるので、そちらには持たせない＝真実の源を1つに保つ） */
+  /* こんがり達成の報酬: このキングの実体である蓄積メーター分（_kingMeterAtBattleStart＝
+     1000+アルファ）と、過去の敗北で没収されてプールされていた分（kingLostPool）をまとめて
+     所持ギヨウザへ返す。「キングに取り込まれていたギヨウザが、こんがり焼けて解放される」
+     という筋立て。プールは返した時点で0に戻す。
+     返却額は勝利画面の表示にも使うため_bossVictoryWonCoinsへ控える（_kingは復帰時にnullに
+     なるので、そちらには持たせない＝真実の源を1つに保つ） */
   const won = _kingMeterAtBattleStart + kingLostPool;
   coins += won;
   kingLostPool = 0;
   _kingMeterAtBattleStart = 0; // 二重取得防止（次戦の_initBossBattleで再設定される）
-  /* 蓄積メーターを1にする（ユーザー要望）。_initBossBattleが戦闘開始時に0へ
-     リセットしているので実害は無かったが、敗北側が明示的に閾値の50%へ戻して
-     いるのと対称に、達成側もここで明示する（暗黙の依存を残さない）。
+  /* 蓄積メーターを1にする。_initBossBattleが戦闘開始時に0へリセットするので実害は無いが、
+     敗北側が明示的に閾値の50%へ戻しているのと対称に、達成側もここで明示する
+     （暗黙の依存を残さない）。
      0ではなく1にするのは、退場演出で舞い上がらずに1個だけ残るギヨウザ
      （_victoryOutro.seedItem）と数を合わせるため＝「また1個から集まりはじめる」 */
   kingGyozaMeter = 1;
@@ -9790,22 +9591,19 @@ function _startBossVictory() {
   lsSaveStats();
   checkCoinsAch(); // 返却で所持数が跳ね上がるため実績判定を回す
   launchFireworks();
-  /* BGMをここで止め、達成感のある専用ファンファーレを鳴らす。従来は通常モードの
-     jackpot（stopBGM+2秒後に自動再開）を流用しており、勝利演出の最中にボスBGM
-     が復活してしまっていた。専用のBGM停止＋専用ファンファーレに差し替える
+  /* BGMをここで止め、達成感のある専用ファンファーレを鳴らす。通常モードのjackpot
+     （stopBGM+2秒後に自動再開）を流用してはいけない: 勝利演出の最中にボスBGMが復活する。
+     専用のBGM停止＋専用ファンファーレを使う
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
   playSE('kongariComplete');
-  /* 実機報告で発覚: 「実績解除が今回初めてか」（!unlockedAch[KONGARI_ACH_ID]）
-     で判定していたが、こんがり実績自体は真エンディング実装より前の別セッション
-     で既に解除済みのプレイヤーが実在し、その場合は常にfalseになって
-     _kingBattleEnd()（通常復帰）へ流れてしまい、真エンディングへ一切
-     到達できなかった（スローハンドバナー等、通常モードの演出が一瞬見えて
-     すぐ戻る、という報告と一致する）。
-     判定すべきは「実績が今回初めて解除されたか」ではなく「真エンディングを
-     まだ見ていないか」であり、これは実績の解除タイミングとは独立している
-     （実績システムはこの機能より前から存在し得る）。trueEndingSeenは
-     まさにこの判定のために用意したフラグなので、そちらを使う */
+  /* 真エンディングへ入るかどうかは trueEndingSeen で判定する（「実績が今回初めて解除された
+     か」で判定してはいけない）。
+     こんがり実績は真エンディングとは独立に、より前から解除され得る。解除済みのプレイヤーでは
+     初回解除判定が常にfalseになり、_kingBattleEnd()（通常復帰）へ流れて真エンディングへ
+     一切到達できなくなる。
+     判定すべきは「真エンディングをまだ見ていないか」であり、trueEndingSeenはまさにこの判定の
+     ために用意したフラグ */
   _pendingTrueEnding = !trueEndingSeen;
   unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績）
   _buildSteamSprite();
@@ -9850,36 +9648,32 @@ function drawBossVictory() {
 }
 
 /* ════════════════ こんがり達成の退場演出（bossVictoryOutro） ════════════════
-   実機指摘: 「唐突にキングギヨウザモードが終わる感じになっている」。
-   原因は演出の非対称性で、こんがり失敗側は
+   達成側と失敗側は必ず対になる段数を踏ませる。失敗側は
    bossDefeat →（縮小ブリッジ）→ bossDefeatOutro（拡散＋締め2行）→ 画面フェード
-   → tapestart（的スピンアップ＋BGM同期）と段階を踏むのに対し、達成側は
-   CONTINUEタップから_kingBattleEnd()を直接呼んでおり、次のフレームでキングが
-   消えて的が現れていた（スピンアップとBGM同期自体は_restartToTapestart経由で
-   効いていたので、足りないのは「キングが去る」中間演出と画面フェードだけ）。
-   ユーザー案「こんがりしたキングギヨウザが少し上を見て、上に飛び去る」を軸に、
-   失敗側と対になる4段構成にする:
+   → tapestart（的スピンアップ＋BGM同期）と進むので、達成側もCONTINUEタップから
+   _kingBattleEnd()を直接呼ぶのではなく、同じ段数を踏む。直接呼ぶと次のフレームでキングが
+   消えて的が現れ、キングギヨウザモードが唐突に終わったように見える。
+   「こんがりしたキングギヨウザが少し上を見て、上に飛び去る」を軸にした4段構成:
      step0 見上げ＋沈み込み（飛び立つ前のタメ）
      step1 上へ加速して飛び去る（easeIn＝加速して抜ける）
      step2 解放されたギヨウザが下から舞い上がる（失敗側の「拡散して落ちる」の対）
      step3 締めメッセージ（失敗側と同じ呼吸・同じmsgAlpha方式）
    その後は失敗側と完全に同じ場面転換（_startScreenFade → tapestart）。
-   初回（実績コンプリート）の真エンディングへ入る場合も、この飛び去りを見せて
-   から暗転して入る（ユーザー要望）。 */
+   初回（実績コンプリート）の真エンディングへ入る場合も、この飛び去りを見せてから暗転して
+   入る */
 const _VICTORY_OUTRO_LOOKUP_FRAMES = 40; // step0: 見上げ＋タメ
 const _VICTORY_OUTRO_FLY_FRAMES    = 70; // step1: 飛び去り
 const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザの舞い上がり
-/* 締め2行。ユーザー選択のC案（周回の示唆）。文言は実際に何度か遊んでから
-   確定させる予定のため、ここだけ差し替えれば済むよう配列で持つ */
+/* 締め2行。周回（また集まりはじめる）を示唆して終える。文言を差し替えるときはここだけで
+   済むよう配列で持つ */
 const _VICTORY_OUTRO_LINES = ['キングは みちたりて さった……', 'ギヨウザは また あつまりはじめる……'];
-/* メッセージのフェード式は失敗側と共有する（_advanceOutroMsg）。ただし尺は
-   共有せず、こちら専用の目標秒数（_OUTRO_MSG_TARGET_SEC_VICTORY = 6秒）を渡す。
-   「締めの呼吸を揃える」ことは大事だが、失敗側と同じフレーム数にすることが
-   呼吸を揃えることではなかった（こちらは文字数1.7倍・縦画面では4行になるため
-   同じ尺では読み終わらない、という実機指摘があった） */
+/* メッセージのフェード式は失敗側と共有する（_advanceOutroMsg）。ただし尺は共有せず、
+   こちら専用の目標秒数（_OUTRO_MSG_TARGET_SEC_VICTORY = 6秒）を渡す。
+   締めの呼吸を揃えることと、同じフレーム数にすることは別。こちらは文字数1.7倍・縦画面では
+   4行になるので、失敗側と同じ尺では読み終わらない */
 /* bossVictory の CONTINUE タップから呼ぶ。キングはまだ生きている（_king != null） */
 function _startBossVictoryOutro() {
-  if (!_king) { _finishBossVictoryOutro(); return; } // 保険: キングが居ない場合は演出を挟まず従来動作
+  if (!_king) { _finishBossVictoryOutro(); return; } // 保険: キングが居なければ演出を挟まず終端へ
   phase = 'bossVictoryOutro';
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
      尺は目標秒数から逆算するので縦横で合計は変わらない（縦画面は折り返しで
@@ -9896,7 +9690,7 @@ function _startBossVictoryOutro() {
 }
 
 /* 演出の終端。初回のみ真エンディングへ、2回目以降は通常モードへ復帰する
-   （分岐条件は従来のbossVictory分岐と同一。_pendingTrueEnding参照） */
+   （_pendingTrueEnding参照） */
 function _finishBossVictoryOutro() {
   if (_victoryOutro) {
     for (const g of _victoryOutro.items) g._dead = true; // プールへ返却（リーク防止）
@@ -9926,10 +9720,9 @@ function _updateBossVictoryOutro() {
   const o = _victoryOutro;
   if (!o) { _finishBossVictoryOutro(); return; }
   _updateKingCommonFx();
-  /* 湯気の更新はここで明示的に呼ぶ。_updateKingCommonFx（姿勢・飛翔文字・
-     レーザー）には含まれておらず、bossVictoryでは_updateBossVictoryが個別に
-     呼んでいる。退場演出でこれを呼び忘れていたため、湯気が描画だけされて
-     位置も寿命も進まず画面に固定表示で残っていた（実機指摘） */
+  /* 湯気の更新はここで明示的に呼ぶ。_updateKingCommonFx（姿勢・飛翔文字・レーザー）には
+     含まれておらず、bossVictoryでは_updateBossVictoryが個別に呼んでいる。退場演出でこれを
+     呼ばないと、湯気が描画だけされて位置も寿命も進まず画面に固定表示で残る */
   _updateVictorySteam();
   o.timer++;
 
@@ -9946,9 +9739,9 @@ function _updateBossVictoryOutro() {
     if (o.timer % 3 === 0 && _king) _spawnVictorySteamWisp(); // 力を溜めるイメージで湯気を増やす
     if (o.timer >= _VICTORY_OUTRO_LOOKUP_FRAMES) {
       o.step = 1; o.timer = 0;
-      /* 溜めた湯気は飛び去りと同時に霧散させる（ユーザー要望）。
-         step1では新たな湯気を出さない＝「溜めた力を解き放って飛び立つ」
-         という筋立てにする（軌跡として出し続けると霧散と矛盾する） */
+      /* 溜めた湯気は飛び去りと同時に霧散させる。
+         step1では新たな湯気を出さない＝「溜めた力を解き放って飛び立つ」という筋立てにする
+         （軌跡として出し続けると霧散と矛盾する） */
       _disperseVictorySteam();
       playSE('kingVictoryFly');
     }
@@ -10005,8 +9798,8 @@ function drawBossVictoryOutro() {
   if (o.seedItem) drawOneItem(o.seedItem);
   if (_king) _drawKingBody();
   _drawVictorySteam();
-  /* こんがりゲージの締め: 100%のまま「達成！」を出してから飛び去りに合わせて
-     消す（実機指摘: 決着した瞬間にゲージが消えるのも唐突さの一因） */
+  /* こんがりゲージの締め: 100%のまま「達成！」を出してから飛び去りに合わせて消す。
+     決着した瞬間にゲージが消えると、終わり方が唐突に見える */
   if (o.gaugeAlpha > 0) {
     ctx.globalAlpha = o.gaugeAlpha;
     drawKingCookGauge(true);
@@ -10029,19 +9822,17 @@ function drawBossVictoryOutro() {
    並列の選択肢という位置づけのため、あえて実績パネルの中には置かない。
    3幕構成、いつでもタップでスキップ可（act3の締めくくりのみ
    最短表示後にCONTINUE待ち、既存のバッジ演出と同じ操作感）。 */
-/* 開幕セリフ（「荒ぶっていた／野生のギヨウザたちも／おだやかな心を取り戻しました。」）は
-   廃止した。こんがり達成の退場演出（bossVictoryOutro: 見上げ→飛び去り→解放→締め2行）を
-   追加したことで、その直後に見せる内容としてこのセリフが噛み合わなくなったため
-   （尺を詰める目的ではない）。副作用として、開幕セリフに紐づいていたキングの
-   再登場（旧_trueEndingKingAlpha）も無くなり、「飛び去ったキングがエンドロールで
-   また出てくる」という矛盾も解消している。
-   代わりに実績一覧の前に見出しを1行置く（上下を細い罫線で挟むだけの最小構成。
-   締めで丸いギヨウザロゴを大きく見せる構成を弱めないよう、冒頭は文字だけに留める） */
+/* 真エンディングは開幕セリフを持たず、実績一覧の見出し1行から始める。
+   直前に見せる退場演出（bossVictoryOutro: 見上げ→飛び去り→解放→締め2行）と、
+   語りで始まる開幕セリフは噛み合わない。また、開幕セリフに紐づけてキングを再登場させると
+   「飛び去ったキングがエンドロールでまた出てくる」という矛盾が生じる。
+   見出しは上下を細い罫線で挟むだけの最小構成にする（締めで丸いギヨウザロゴを大きく見せる
+   構成を弱めないよう、冒頭は文字だけに留める） */
 const _TRUE_ENDING_HEADER_TEXT = 'たっせいのあかし';
 /* まとめ（累計データ）の前に置く小見出し。空白だけで区切っていたときは
    実績一覧の続きなのか別のまとまりなのかが読み取りにくかったため、語を1つだけ置く。
    冒頭の見出しと同じ「罫線で挟む」様式にはせず、罫線なし・小さめの文字・字間を広げる
-   だけに留める（ユーザー選択）。エンドロール中に強い見出しが2回出ると、締めで
+   だけに留める。エンドロール中に強い見出しが2回出ると、締めで
    丸いギヨウザロゴを大きく見せる構成が相対的に弱まるため、格を一段下げて
    「冒頭の見出し＞この小見出し」の関係を視覚的に保つ */
 const _TRUE_ENDING_SUBHEADER_TEXT = 'そうけっさん';
@@ -10056,28 +9847,25 @@ const _TRUE_ENDING_CLOSE_LINES = [
   'ありがとう。',
 ];
 const _TRUE_ENDING_ROLL_ROW_H = 40; // クレジットロール1行の高さ
-/* 実績ロール1行内の「アイコン」「文字列」の位置・フォントをそれぞれ独立した
-   定数として明示指定する。以前はアイコンをtextAlign='right'で文字列の
-   すぐ左に詰めて置いていたため、絵文字グリフの実測送り幅がプラットフォーム
-   依存でわずかに狂う（U+FE0F付きコードポイントで実際に発生）と、文字列側の
-   開始位置がその影響をそのまま受けて隙間が潰れていた。アイコンを
-   textAlign='center'の固定スロットに変え、文字列の開始位置もアイコンの
-   実測幅から逆算せず完全に独立した固定値にすることで、個々のグリフの
-   幅ゆれに左右されず確実に隙間を確保する。将来アイコン・文字列それぞれの
-   サイズだけを個別に調整したい場合もこの4定数だけを触ればよい */
-/* アイコンの見た目サイズは絵文字1文字ぶんで固定なので、textAlign='left'で
-   常に同じ左端に描けば揃う（'center'/'right'は送り幅の半分/全部を左へ
-   シフトする計算が入るため、送り幅の実測がグリフと食い違う環境ではその
-   ぶんズレる。'left'はシフト計算そのものが無いのでこのズレが原理的に
-   起きない。ユーザー指摘により変更） */
-/* 左端の位置は「最長行の右余白が左余白と等しくなる」ように取る。実績名の直後へ
-   達成日を足したぶん行が右へ伸びたため、以前の W/2-92 / W/2-44 では縦画面(W=420)で
-   左余白118px・最長行の右余白38pxと3:1に偏り、最長行「ベテランプレイヤー 2026/3/13」が
-   右端に迫って見えていた（実機評価）。40px左へ寄せると左右とも余白78pxで対称になる。
-   ブロック幅は画面幅に依存しない（W/2基準の配置＋固定フォント）ので、横画面でも
-   同じ40pxで揃う。行長は211〜382pxとばらつきがあり、中央値の行を基準にするなら
-   シフトは6pxで足りるが、短い行が左に残るのは左揃えのロールでは自然な一方、
-   最長行が右端に迫るのは詰まって見えるため、最長行を基準にしている */
+/* 実績ロール1行内の「アイコン」「文字列」の位置・フォントをそれぞれ独立した定数として
+   明示指定する。アイコンをtextAlign='right'で文字列のすぐ左に詰める作りにしてはいけない:
+   絵文字グリフの実測送り幅はプラットフォーム依存でわずかに狂う（U+FE0F付きコードポイントで
+   実際に起きる）ため、文字列側の開始位置がその影響をそのまま受けて隙間が潰れる。
+   アイコンはtextAlign='center'の固定スロットに置き、文字列の開始位置もアイコンの実測幅から
+   逆算せず完全に独立した固定値にする。これで個々のグリフの幅ゆれに左右されず隙間が確保でき、
+   アイコン・文字列それぞれのサイズを個別に調整したい場合もこの4定数だけを触ればよい */
+/* アイコンの見た目サイズは絵文字1文字ぶんで固定なので、textAlign='left'で常に同じ左端に
+   描けば揃う。'center'/'right'は送り幅の半分/全部を左へシフトする計算が入るため、送り幅の
+   実測がグリフと食い違う環境ではそのぶんズレる。'left'はシフト計算そのものが無いので
+   このズレが原理的に起きない */
+/* 左端の位置は「最長行の右余白が左余白と等しくなる」ように取る。実績名の直後に達成日が
+   付くぶん行が右へ伸びるので、名前だけを想定した位置では縦画面(W=420)で左余白118px・
+   最長行の右余白38pxと3:1に偏り、最長行が右端に迫って見える。40px左へ寄せると左右とも
+   余白78pxで対称になる。
+   ブロック幅は画面幅に依存しない（W/2基準の配置＋固定フォント）ので、横画面でも同じ40pxで
+   揃う。行長は211〜382pxとばらつきがあり、中央値の行を基準にするならシフトは6pxで足りるが、
+   短い行が左に残るのは左揃えのロールでは自然な一方、最長行が右端に迫るのは詰まって見えるため、
+   最長行を基準にする */
 const _TRUE_ENDING_ROLL_ICON_X    = W / 2 - 132; // アイコンの左端
 const _TRUE_ENDING_ROLL_ICON_FONT = `18px serif`;
 const _TRUE_ENDING_ROLL_TEXT_X    = W / 2 - 84;  // 文字列の開始位置（アイコンの実測幅とは無関係）
@@ -10085,24 +9873,19 @@ const _TRUE_ENDING_ROLL_TEXT_FONT = `bold 15px ${FONT_MIN}`;
 /* テーマ曲の拍の長さ（秒）。_playTrueEndingThemeのstepDur算出にも使う
    （ここで先に定義することでスクロール速度の算出にも使えるようにした） */
 const _TRUE_ENDING_BEAT = 0.6;
-/* 演出全体を貫く唯一の速度。以前はセリフ(タイマーで1行ずつ表示)→
-   ロール(rollYスクロール)→締め(固定表示)がそれぞれ別の時間軸・別の
-   見せ方で継ぎ目がバラバラだったため、開幕セリフ・実績ロール・締めの
-   セリフを1本の縦スクロール座標に乗せ、同じ速度で流し続ける方式に統一した。
-   速度は勘のpx/frame値ではなく、実績ロール1行(_TRUE_ENDING_ROLL_ROW_H)が
-   テーマ曲ちょうど1拍分の時間で流れるように、行の高さと拍の長さから
-   直接算出する（ユーザー要望: スクロールがBGMのテンポと同期して感じられる
-   ように）。結果は1.111...px/frameで、以前の指摘で落ち着かせた1.2に近い
-   速度のまま、テーマ曲のリズムに正確に乗る */
+/* 演出全体を貫く唯一の速度。見出し・実績ロール・締めのセリフを1本の縦スクロール座標に
+   乗せ、同じ速度で流し続ける（区間ごとに別の時間軸・別の見せ方を持たせると継ぎ目がばらつく）。
+   速度は勘のpx/frame値ではなく、実績ロール1行(_TRUE_ENDING_ROLL_ROW_H)がテーマ曲ちょうど
+   1拍分の時間で流れるように、行の高さと拍の長さから直接算出する＝スクロールがBGMのテンポと
+   同期して感じられる。結果は1.111...px/frame */
 const _TRUE_ENDING_SCROLL_SPEED = _TRUE_ENDING_ROLL_ROW_H / (_TRUE_ENDING_BEAT * 60);
 const _TRUE_ENDING_HEADER_HOLD_FRAMES = 130; // 見出しを静止表示しておく時間（締めセリフの静止表示と対にする）
-/* 各区間の空白（何も表示されない区間）はH比で定義する。縦画面と横画面で
-   H（IS_PORTRAIT ? 820 : 560）が大きく異なり、同じpx値だと縦画面では
-   相対的に間延びして見え・横画面では逆に窮屈に見えるため、必ずH比で
-   持たせて画面比に依存しない見え方にする（実機指摘: 縦横で最適な間隔が違う）。
-   SPACER_BEFORE_CLOSEは特に、締めセリフが静止した瞬間にまとめ（累計データ）
-   の末尾がまだ画面に残って見えるという指摘を受け、静止位置での重なりが
-   出ない値（縦横それぞれで計算済み・80px前後の余裕を持たせた）まで広げた */
+/* 各区間の空白（何も表示されない区間）はH比で定義する。縦画面と横画面でH
+   （IS_PORTRAIT ? 820 : 560）が大きく異なり、同じpx値だと縦画面では相対的に間延びし、
+   横画面では逆に窮屈に見える。必ずH比で持たせて画面比に依存しない見え方にすること。
+   SPACER_BEFORE_CLOSEは特に広めに取る: 締めセリフが静止した瞬間に、まとめ（累計データ）の
+   末尾がまだ画面に残っていると重なって見えるため、静止位置で重ならない値（縦横それぞれで
+   計算済み・80px前後の余裕）にしてある */
 /* 見出し〜実績ロールの間隔。他の空白と違い固定のH比では持たせない。
    見出しは静止表示（_TRUE_ENDING_HEADER_HOLD_FRAMES）してから流れ始めるので、
    その静止中に実績の先頭行が画面内に居ると「見出しを読ませてから一覧が始まる」
@@ -10120,15 +9903,12 @@ const _TRUE_ENDING_CLOSE_REST_Y_RATIO = 0.5; // 締めセリフが止まった�
 const _TRUE_ENDING_CLOSE_LINGER_FRAMES = 170; // 締めセリフが止まってからフェードアウトを始めるまでの余韻（表示時間が短いとの指摘で延長）
 const _TRUE_ENDING_CLOSE_FADEOUT_FRAMES = 70;
 const _TRUE_ENDING_TITLE_FADEIN_FRAMES = 150; // 締めくくりのタイトル表示。重要な瞬間なのでゆっくりフェードインさせる（旧50=0.83sは早すぎるとの指摘で2.5sに延長）
-/* macOS Safari実機報告: フェード中にshadowBlurのグローを併用すると、
-   globalAlphaがshadowの描画に正しく効かず（shadowColor自体にalphaを
-   埋め込んでも改善せず）、フェードが一瞬で終わったように見えてしまう
-   不具合があった。alpha変化とshadowBlur変化を同時に行うこと自体が
-   Safari側の合成でうまく扱えていないと考えられるため、両者を時間的に
-   分離する設計に変更（ユーザー提案）: フェード中はグロー無しの単純な
-   文字フェードのみ（globalAlpha単体は既にクレジット表示で動作確認済み）、
-   フェードが完了してアルファが1で固定された後にグローだけを別途
-   育てる。「輝きが増していく」印象も強くなる */
+/* フェード中はグローを併用しない。macOS Safari では globalAlpha が shadow の描画に正しく
+   効かず（shadowColor自体にalphaを埋め込んでも同じ）、フェードが一瞬で終わったように見える。
+   alpha変化とshadowBlur変化を同時に行うこと自体がSafariの合成で正しく扱われないため、
+   両者を時間的に分離する: フェード中はグロー無しの単純な文字フェードのみ（globalAlpha単体は
+   正しく効く）、フェードが完了してアルファが1で固定された後にグローだけを別途育てる。
+   結果として「輝きが増していく」印象も強くなる */
 const _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES = 60; // フェード完了後、グローが0→フルに育つ時間
 /* タイトル＋COPYRIGHTのブロック全体を一行分上にずらすオフセット。
    PAUSE中は"PAUSED"がH*0.5に表示されるため、そのままだとタイトルと
@@ -10156,11 +9936,11 @@ let _trueEnding = null;
 let _trueEndingIsReplay = false; // タイトル画面のボタンからの単体再生か（_finishTrueEndingでのキング戦state後片付けの要否に使う）
 let _trueEndingGain = null; // テーマ曲専用のgainノード（スキップ時に即座にフェードして打ち切るため）
 
-/* セリフ1文を指定フォント・幅に収まるよう折り返す。セリフの原文には
-   フレーズの区切りに半角/全角スペースが入っているため、それを語境界として
-   貪欲法で行に詰める（決め打ちの改行位置を持たず、画面幅から動的に決める）。
-   縦画面（W=420）は横画面（W=1060）よりずっと狭く、同じ1行表示だと
-   セリフが画面外へはみ出していた（実機指摘）ため導入した */
+/* セリフ1文を指定フォント・幅に収まるよう折り返す。セリフの原文にはフレーズの区切りに
+   半角/全角スペースが入っているため、それを語境界として貪欲法で行に詰める（決め打ちの改行
+   位置を持たず、画面幅から動的に決める）。
+   縦画面（W=420）は横画面（W=1060）よりずっと狭いので、必ずここを通すこと。1行固定だと
+   セリフが画面外へはみ出す */
 function _wrapTrueEndingLine(text, font, maxWidth) {
   ctx.font = font;
   const words = text.split(/[ 　]+/).filter(w => w.length > 0);
@@ -10205,14 +9985,13 @@ function _buildTrueEndingContent() {
 
   const rollStartIdx = rows.length;
   for (const a of ACHIEVEMENTS) {
-    /* 達成日は実績名と同じ1つの文字列にする＝まとめ（そうけっさん）の
-       「総プレイ回数 142」と完全に同じ書式（同じ大きさ・同じ色・説明の直後）。
-       一度は行の右端へ右寄せし小さく薄く描いていたが、同じロールの中に
-       「値が説明の直後に来る行」と「値が右端へ飛ぶ行」が混在して様式が
-       揃っていなかった（実機評価）。ロールは1行ずつ読み下すもので、日時を
-       列で見比べる機会が無く右寄せの利点は活きていない。
-       日時が無い（未解除・または日時を記録していなかった頃のデータ）なら
-       名前だけ。区切りはまとめの行と同じ半角スペース1つ */
+    /* 達成日は実績名と同じ1つの文字列にする＝まとめ（そうけっさん）の「総プレイ回数 142」と
+       完全に同じ書式（同じ大きさ・同じ色・説明の直後）。
+       行の右端へ右寄せしてはいけない: 同じロールの中に「値が説明の直後に来る行」と「値が
+       右端へ飛ぶ行」が混在して様式が揃わない。ロールは1行ずつ読み下すもので、日時を列で
+       見比べる機会が無く右寄せの利点も活きない。
+       日時が無い（未解除・または日時が記録されていないデータ）なら名前だけ。区切りはまとめの
+       行と同じ半角スペース1つ */
     const _achDate = _achDateText(a.id);
     rows.push({ type: 'roll', icon: a.icon, text: _achDate ? `${a.name} ${_achDate}` : a.name,
                 ix: _TRUE_ENDING_ROLL_ICON_X, tx: _TRUE_ENDING_ROLL_TEXT_X,
@@ -10238,12 +10017,12 @@ function _buildTrueEndingContent() {
     /* MUSICボーナスの自己ベスト。画面上の表記（♪×N）に合わせる */
     { icon: '🎵', text: `最高連鎖 ♪×${fmt(bestSyncChain)}` },
   ];
-  /* まとめは実績とは独立した開始位置にする。小見出し「そうけっさん」は中央揃えなのに、
-     まとめ行を実績と同じ左端に置くとブロックの中心が32px左へずれ、タイトルに対して
-     左に寄って見えた（実機評価）。実績側を最長行基準で40px左へ寄せたぶんがそのまま
-     効いている＝実績とまとめでは行の長さが違うので、同じ左端では揃わない。
-     実績名は固定文字列なので定数で持てるが、**まとめの行は数字で幅が変わる**ため、
-     ここだけは実測してブロックが中央へ来る左端を毎回求める（同じ理由で定数化しない） */
+  /* まとめは実績とは独立した開始位置にする。小見出し「そうけっさん」は中央揃えなので、
+     まとめ行を実績と同じ左端に置くとブロックの中心が32px左へずれ、タイトルに対して左に
+     寄って見える（実績側を最長行基準で40px左へ寄せたぶんがそのまま効く＝実績とまとめでは
+     行の長さが違うので同じ左端では揃わない）。
+     実績名は固定文字列なので定数で持てるが、**まとめの行は数字で幅が変わる**ため、ここだけは
+     実測してブロックが中央へ来る左端を毎回求める（同じ理由で定数化しない） */
   const _sumGap = _TRUE_ENDING_ROLL_TEXT_X - _TRUE_ENDING_ROLL_ICON_X;
   ctx.save();
   ctx.font = _TRUE_ENDING_ROLL_TEXT_FONT;
@@ -10279,14 +10058,14 @@ function _startTrueEnding(replay) {
      入口でも閉じておくことで「エンドロール中はパネルが出ない」を両側から保証する */
   showAchievements = false;
   if (replay) {
-    /* 実機報告で発覚: _stopBossBGMForVictory（120msフェード+150ms後に破棄）は
-       ボス勝利演出の余韻を意図した緩やかな停止だが、_playTrueEndingThemeは
-       50ms後には最初の音を鳴らし始めるため、フェード中盤（ゲームBGMがまだ
-       46〜73%の音量で鳴っている区間）とテーマ曲の出だしが数十ms重なって
-       「BGMが混ざる」ように聞こえていた。実績パネルからの手動リプレイは
-       ユーザーの能動的な操作であり緩やかな余韻を残す必然性がないため、
-       フェードを挟まず即座に無音化してから鳴らす（_destroyBGMSourceを直接
-       呼ぶ。ボス勝利側の演出上の余韻フェードとは意図的に区別する） */
+    /* 実績パネルからの手動リプレイでは、フェードを挟まず即座に無音化してから鳴らす
+       （_destroyBGMSourceを直接呼ぶ）。
+       _stopBossBGMForVictory（120msフェード+150ms後に破棄）はボス勝利演出の余韻を意図した
+       緩やかな停止だが、_playTrueEndingThemeは50ms後には最初の音を鳴らし始めるため、
+       フェード中盤（ゲームBGMがまだ46〜73%の音量で鳴っている区間）とテーマ曲の出だしが
+       数十ms重なって「BGMが混ざる」ように聞こえる。
+       手動リプレイはユーザーの能動的な操作であり緩やかな余韻を残す必然性がないので、
+       ボス勝利側の演出上の余韻フェードとは意図的に区別する */
     /* ここはランプにしない。直後に _destroyBGMSource() でソースごと止めるので
        ランプが渡り切らず意味が無い（この経路は「フェードを挟まず即座に無音化」が
        意図。上のコメント参照）。鳴り続けるソースの音量を動かす経路とは別物 */
@@ -10399,22 +10178,20 @@ function _updateTrueEnding() {
     o.closeAlpha = Math.max(0, 1 - o.timer / _TRUE_ENDING_CLOSE_FADEOUT_FRAMES);
     if (o.timer >= _TRUE_ENDING_CLOSE_FADEOUT_FRAMES) _trueEndingEnterStage('titleFadeIn');
   } else if (o.stage === 'titleFadeIn') {
-    /* 単純な線形フェード（timer/FRAMES）だと、暗い背景に金色グロー付き文字
-       という組み合わせでは中盤（alpha 0.3〜0.5あたり）で既に肉眼上「ほぼ
-       表示済み」に見えてしまい（実測: alpha0.3でもRGB(95,87,20)と背景から
-       はっきり浮いた色になる）、残り半分のフェードがほとんど知覚できず
-       「フェードインしていない、ただ長く待たされるだけ」に見えるという
-       実機指摘があった。二次イージング（t*t）で序盤の立ち上がりを抑え、
-       輝度の変化がフェード時間いっぱいに知覚できるようにする */
+    /* 二次イージング（t*t）で序盤の立ち上がりを抑える。
+       単純な線形フェード（timer/FRAMES）だと、暗い背景に金色グロー付き文字という組み合わせ
+       では中盤（alpha 0.3〜0.5あたり）で既に肉眼上「ほぼ表示済み」に見え（実測: alpha0.3でも
+       RGB(95,87,20)と背景からはっきり浮いた色になる）、残り半分のフェードがほとんど知覚
+       できず「フェードインしていない、ただ長く待たされるだけ」に見える。
+       イージングを掛けると輝度の変化がフェード時間いっぱいに知覚できる */
     const t = Math.min(1, o.timer / _TRUE_ENDING_TITLE_FADEIN_FRAMES);
     o.titleAlpha = t * t;
     if (o.timer >= _TRUE_ENDING_TITLE_FADEIN_FRAMES) _trueEndingEnterStage('titleHold');
   } else if (o.stage === 'titleHold') {
-    /* フェード完了（alpha=1固定）後、まずグローを0→フルへ育て、
-       それが育ち切ってからクレジットを単独でフェードインさせる
-       （ユーザー要望: タイトルの下に適度な間隔をあけてフェード表示、
-       タイトルが完全に出てからクレジットが出てくる、の2点。加えて
-       グロー成長を分離したことで「輝きが増していく」演出にもなる）。
+    /* フェード完了（alpha=1固定）後、まずグローを0→フルへ育て、それが育ち切ってから
+       クレジットを単独でフェードインさせる。タイトルが完全に出てからクレジットが出る、
+       という順序と、タイトルの下に十分な間隔を空けることの2点が要件。
+       グロー成長を分離した結果「輝きが増していく」演出にもなる。
        いずれも同じt*tの二次イージングで知覚できるフェードにする */
     const gt = Math.min(1, o.timer / _TRUE_ENDING_TITLE_GLOW_GROW_FRAMES);
     o.titleGlow = gt * gt;
@@ -10440,12 +10217,11 @@ function _drawTrueEndingRows(o) {
     if (edgeFade <= 0) continue;
     ctx.globalAlpha = edgeFade;
     if (row.type === 'roll') {
-      /* アイコン・文字列は_TRUE_ENDING_ROLL_ICON_X/TEXT_X等で位置・フォントを
-         それぞれ独立指定する（定義箇所のコメント参照）。アイコンをleft寄せに
-         しているのは、「フィーバー初体験」🌡️・「常連客」🕹️の2つだけ文字と
-         隙間なく詰まって見える（U+FE0F付きグリフの実測送り幅がプラット
-         フォームによって狂う）という実機報告への対策で、文字列側の開始位置が
-         アイコンの実測幅に一切影響されないようにするため */
+      /* アイコン・文字列は_TRUE_ENDING_ROLL_ICON_X/TEXT_X等で位置・フォントをそれぞれ
+         独立指定する（定義箇所のコメント参照）。アイコンをleft寄せにするのは、文字列側の
+         開始位置がアイコンの実測幅に一切影響されないようにするため。
+         右寄せで詰めると、U+FE0F付きグリフ（「フィーバー初体験」🌡️・「常連客」🕹️）の
+         実測送り幅がプラットフォームによって狂い、その2つだけ文字と隙間なく詰まって見える */
       ctx.textBaseline = 'middle';
       ctx.font = _TRUE_ENDING_ROLL_ICON_FONT;
       ctx.textAlign = 'left';
@@ -10503,12 +10279,10 @@ function _drawTrueEndingRows(o) {
   ctx.globalAlpha = 1;
 }
 
-/* 旧_trueEndingKingAlphaは削除した。開幕セリフの表示中だけキングを見せる演出
-   だったが、開幕セリフ自体を廃止したうえ、こんがり達成の退場演出でキングは
-   既に空へ飛び去っているため、エンドロールで再登場させると矛盾する
-   （_TRUE_ENDING_HEADER_TEXT付近のコメント参照）。
-   なおこの関数は先頭2行を「開幕セリフ」と決め打ちで参照していたため、
-   残したままだと見出し行を誤って参照する不具合になっていた */
+/* エンドロール中にキングを描画してはいけない。こんがり達成の退場演出でキングは既に空へ
+   飛び去っているため、ここで再登場させると矛盾する（_TRUE_ENDING_HEADER_TEXT付近の
+   コメント参照）。エンドロールの構成は「見出し → 実績ロール → まとめ → 締めのセリフ →
+   タイトル」で、ボス本体は登場しない */
 
 /* 崎陽軒ギヨウザのパッケージにある丸いロゴマークを模した装飾。
    黄色い円を縦3分割し、中央（やや幅広）を緑地に白文字で大きく「ギヨウザ」、
@@ -10528,7 +10302,7 @@ function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
   ctx.clip();
   ctx.fillStyle = Y;
   ctx.fillRect(-R, -R, R * 2, R * 2);
-  /* 外径の枠線（黄色いリング）の太さを従来の1/3に */
+  /* 外径の枠線（黄色いリング）は細めに */
   ctx.beginPath();
   ctx.arc(0, 0, R * (1 - 0.08 / 3), 0, Math.PI * 2);
   ctx.clip();
@@ -10598,15 +10372,13 @@ function drawTrueEnding() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `900 ${IS_PORTRAIT ? 34 : 46}px ${FONT_MIN}`;
     ctx.fillStyle = Y;
-    /* macOS Safari実機報告: アルファのフェードとshadowBlurのグローを同時に
-       変化させると、globalAlphaにもshadowColor自体へのalpha埋め込みにも
-       関わらずフェードが一瞬で終わったように見える不具合があった
-       （クレジット表示はshadowBlur無しで意図通りに見えている、との対比で
-       判明）。アルファ変化とグロー変化を同時に扱うこと自体がSafari側の
-       合成でうまく扱えないと考えられるため、時間的に分離する: フェード中
-       (titleFadeIn)はグロー無しの単純な文字フェードのみとし、フェードが
-       完了してalphaが1に固定された後（titleHold）にグローだけを別途
-       0→フルへ育てる（o.titleGlow、更新側参照）。輝きが増していく演出にもなる */
+    /* フェード中はグローを併用しない。macOS Safari ではアルファのフェードとshadowBlurの
+       グローを同時に変化させると、globalAlphaにもshadowColor自体へのalpha埋め込みにも
+       関わらず、フェードが一瞬で終わったように見える（shadowBlur無しの描画では意図どおりに
+       フェードする）。アルファ変化とグロー変化を同時に扱うこと自体がSafariの合成で正しく
+       扱われないため、時間的に分離する: フェード中(titleFadeIn)はグロー無しの単純な文字
+       フェードのみとし、フェードが完了してalphaが1に固定された後（titleHold）にグローだけを
+       別途0→フルへ育てる（o.titleGlow、更新側参照）。輝きが増していく演出にもなる */
     const glow = o.stage === 'titleHold' ? o.titleGlow : 0;
     if (glow > 0) {
       ctx.shadowColor = `rgba(245,208,32,${0.7 * glow})`;
@@ -10622,9 +10394,8 @@ function drawTrueEnding() {
       ctx.fillText(_TRUE_ENDING_CREDIT_TEXT, W / 2, H * 0.5 + (IS_PORTRAIT ? 78 : 90) - _TRUE_ENDING_TITLE_Y_OFFSET - creditFontSize * 2);
       ctx.globalAlpha = 1;
     }
-    /* あえてバッジは表示しない（ユーザー要望）。canExit成立後はタップ/
-       クリック/キー入力（handleGameClick、'trueEnding'分岐参照）で
-       いつでも終了できるが、余韻を楽しんでもらうため案内は出さず、
+    /* 終了操作の案内バッジは出さない。canExit成立後はタップ/クリック/キー入力
+       （handleGameClick、'trueEnding'分岐参照）でいつでも終了できるが、余韻を優先して
        静かに佇む演出のままにする */
   } else {
     /* キングはここでは描かない（旧_trueEndingKingAlphaの削除理由は同関数が
@@ -10634,24 +10405,20 @@ function drawTrueEnding() {
   ctx.restore();
 }
 
-/* 真エンディング終了処理。自動再生（本編勝利）・リプレイ（タイトル画面の
-   ボタン）のどちらでも、エンディングの後は常にゲームスタート前の初期画面
-   （startup）へ戻す（ユーザー要望: エンドロールはゲームの続きではなく、
-   スタートと並列の選択肢という位置づけのため）。本編勝利からの初回再生の
-   場合のみ、キング戦関連のstateを後片付けする必要がある（_trueEndingIsReplay
-   がfalseの時。リプレイはそもそも戦闘を経ていないため不要）。
-   startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()等は
-   呼ばない（無音のまま戻る）。
-   ただし bgmGain 自体は 0 のまま残ることがある: 本編勝利経由
-   （_stopBossBGMForVictoryが120msフェードで0にする）・タイトル画面から
-   のリプレイ（_startTrueEndingのreplay分岐が二重再生防止で即座に0にする）
-   のどちらも、そのままでは1に戻す処理を挟まない。真エンディングのテーマ曲
-   自体は専用の_trueEndingGain経由なので鳴るが、bgmGain=0のまま次回の
-   START（playStartJingleがdest=bgmGain経由でジングルを鳴らす。scheduleJingle
-   参照）を迎えると、オリエンタルリフとカウントイン（カウントダウン）が
-   無音のまま進行し、その後startBGM()がbgmGainを1に戻した瞬間に通常BGMだけ
-   唐突に鳴り出す＝画面（ゲームは即座に開始済み）と音のズレとして体感される
-   （実機報告で発覚）。startup帰還時に確実に1へ戻しておく */
+/* 真エンディング終了処理。自動再生（本編勝利）・リプレイ（タイトル画面のボタン）の
+   どちらでも、エンディングの後は常にゲームスタート前の初期画面（startup）へ戻す
+   （エンドロールはゲームの続きではなく、スタートと並列の選択肢という位置づけ）。
+   本編勝利からの初回再生の場合のみ、キング戦関連のstateを後片付けする必要がある
+   （_trueEndingIsReplayがfalseの時。リプレイはそもそも戦闘を経ていないため不要）。
+   startup画面はそもそもBGMが鳴らない設計のため、ここでstartBGM()等は呼ばない
+   （無音のまま戻る）。
+   ただし bgmGain は必ず 1 へ戻すこと。本編勝利経由（_stopBossBGMForVictoryが120msフェードで
+   0にする）・タイトル画面からのリプレイ（_startTrueEndingのreplay分岐が二重再生防止で即座に
+   0にする）のどちらも、放置すると0のまま残る。真エンディングのテーマ曲自体は専用の
+   _trueEndingGain経由なので鳴るが、bgmGain=0のまま次回のSTART（playStartJingleがdest=bgmGain
+   経由でジングルを鳴らす。scheduleJingle参照）を迎えると、オリエンタルリフとカウントインが
+   無音のまま進行し、その後startBGM()がbgmGainを1に戻した瞬間に通常BGMだけ唐突に鳴り出す
+   ＝画面（ゲームは即座に開始済み）と音のズレとして体感される */
 function _finishTrueEnding() {
   trueEndingSeen = true;
   lsSaveStats();
@@ -10665,22 +10432,22 @@ function _finishTrueEnding() {
 }
 
 /* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
-   （_updateKingCharFlights参照）。ユーザー要望: 「6回目の失敗で的にクラックが
-   入り、的が砕けて破片が全て消えてからキングギヨウザ失敗が確定するべき」。
-   4的それぞれの4セグメントをそのまま破片として使い（新規ジオメトリを
-   起こさず既存のsegs/色をそのまま流用）、的の中心から外向きに飛び散らせる。
-   phaseを'bossShatter'に切り替えて入力を止め、_updateKingReelShatterが
-   全破片の消滅を監視して_startBossDefeatへ引き継ぐ */
+   （_updateKingCharFlights参照）。的が砕けて破片が全て消えてから、キングギヨウザ失敗が
+   確定するという順序を守るための段。
+   4的それぞれの4セグメントをそのまま破片として使い（新規ジオメトリを起こさず既存のsegs/色を
+   そのまま流用）、的の中心から外向きに飛び散らせる。
+   phaseを'bossShatter'に切り替えて入力を止め、_updateKingReelShatterが全破片の消滅を監視して
+   _startBossDefeatへ引き継ぐ */
 /* 角度を 0〜2π へ正規化 */
 function _norm2pi(a) { const t = a % (Math.PI * 2); return t < 0 ? t + Math.PI * 2 : t; }
 
-/* 的1枚を「ひびの入った位置」で分割した破片の境界角（的ローカル＝OCの座標系、昇順）
-   を返す（ユーザー指摘: 均等に4つへ割れるのは、ひびの位置と無関係で違和感がある）。
-   ひびの保存角は基準文字エリア起点の相対角なので、現在の的の基準角を足して
-   OCの座標系へ戻す（drawKingReelの描画と同じ変換）。
-   ひびが2本未満だと扇形に分割できないため、その場合は従来どおり文字セグメントの
-   境界で割る（KING_MAX_FAILS回失敗して破砕に至る時点では通常6本あるので、
-   これは保険の経路） */
+/* 的1枚を「ひびの入った位置」で分割した破片の境界角（的ローカル＝OCの座標系、昇順）を返す。
+   均等に4つへ割るのではなく、実際に入ったひびの位置で割ること（位置と無関係な等分割は
+   違和感になる）。
+   ひびの保存角は基準文字エリア起点の相対角なので、現在の的の基準角を足してOCの座標系へ戻す
+   （drawKingReelの描画と同じ変換）。
+   ひびが2本未満だと扇形に分割できないため、その場合だけ文字セグメントの境界で割る
+   （KING_MAX_FAILS回失敗して破砕に至る時点では通常6本あるので、これは保険の経路） */
 function _kingReelShatterBounds(w, idx) {
   const cracks = (_king.reelCracks && _king.reelCracks[idx]) || [];
   const anchor = _kingReelAnchorAngle(w);
@@ -10741,7 +10508,7 @@ function _updateKingReelShatter() {
     p.rot += p.rotSpd;
   }
   /* 全破片が画面外に出きった、または保険の上限フレームに達したら敗北確定へ
-     （ユーザー要望どおり、破片が全て消えてから敗北が確定する順序を守る） */
+     （破片が全て消えてから敗北が確定する順序を守る） */
   const allGone = s.timer > KING_SHATTER_MAX_FRAMES || s.pieces.every(p => {
     const x = p.cx + p.x, y = p.cy + p.y;
     return x < -80 || x > W + 80 || y < -80 || y > H + 80;
@@ -10785,38 +10552,37 @@ function drawKingReelShatter() {
 }
 
 /* こんがり攻撃失敗がKING_MAX_FAILS回に達し、ルーレットが完全破壊された＝敗北。
-   所持ギヨウザの半分がキングギヨウザに吸収され、通常ゲームへ戻る（ユーザー要望）。
-   演出はdrawBossVictoryと対になる構成（暗幕・ボス・タイトル・CONTINUEバッジ）に
-   揃え、既存の「勝利」との対称性を保つ */
+   所持ギヨウザの半分がキングギヨウザに吸収され、通常ゲームへ戻る。
+   演出はdrawBossVictoryと対になる構成（暗幕・ボス・タイトル・CONTINUEバッジ）に揃え、
+   勝利側との対称性を保つ */
 function _startBossDefeat() {
   phase = 'bossDefeat';
   _bossDefeatTimer = 0;
-  /* 敗北時のking値: 0（振り出しに戻す）ではなく、出現閾値の50%からやり直し
-     にする（ユーザー要望）。戦闘開始時点で_initBossBattleが0にリセット済み
-     のため、ここで上書きする */
+  /* 敗北時のking値: 0（振り出しに戻す）ではなく、出現閾値の50%からやり直しにする。
+     戦闘開始時点で_initBossBattleが0にリセット済みのため、ここで上書きする */
   kingGyozaMeter = KING_GYOZA_THRESHOLD * 0.5;
   lsSaveStats();
   if (_king) {
     _king.scale = 1;
     /* 没収額は端数を切り上げる（半分を残すのではなく半分を取る側を優先）。
-       これにより所持1の場合はceil(1/2)=1で残数ゼロまで没収され、
-       「1だったら全部没収されてゲームオーバー」という直感的な期待に一致する
-       （floorだと1所持時に没収0で何も没収されないまま復帰してしまっていた） */
+       これにより所持1の場合はceil(1/2)=1で残数ゼロまで没収され、「1だったら全部没収されて
+       ゲームオーバー」という直感的な期待に一致する（floorだと1所持時に没収0になり、何も
+       没収されないまま復帰してしまう） */
     const lost = Math.ceil(coins / 2);
     coins -= lost;
     _king.lostCoins = lost; // 敗北画面での表示用（_kingBattleEndでのちに_kingがnullになるため先に記録）
-    /* 没収分はキングに取り込まれたものとしてプールし、いつかこんがり達成した
-       時にまとめて返す（ユーザー要望）。敗北を重ねるほどプールが厚くなり、
-       達成時の見返りが大きくなる。永続化はlsSaveStats側 */
+    /* 没収分はキングに取り込まれたものとしてプールし、いつかこんがり達成した時に
+       まとめて返す。敗北を重ねるほどプールが厚くなり、達成時の見返りが大きくなる。
+       永続化はlsSaveStats側 */
     kingLostPool += lost;
     lsSave();
     lsSaveStats();
   }
-  /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、
-     予兆演出・通常ゲームオーバーと同じ手法の流用）。以前はBGMが鳴りっぱなしで
-     ゲームオーバーSEと被って聞こえづらいという実機指摘があった。
-     _kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートから
-     イーズインするため、ここで止めても復帰時に自然に繋がる */
+  /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、予兆演出・
+     通常ゲームオーバーと同じ手法）。ここで止めないとBGMが鳴りっぱなしになり、
+     ゲームオーバーSEと被って聞こえづらい。
+     _kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートからイーズインする
+     ため、ここで止めても復帰時に自然に繋がる */
   stopBGMTape(700);
   playSE('gameOver');
 }
@@ -10836,27 +10602,23 @@ function drawBossDefeat() {
     drawKingCharFlights();
   }
 
-  /* 没収で所持ギヨウザが尽きた場合も、まずは通常の「こんがり しっぱい」＋
-     キングが縮んでギヨウザ群へ戻っていく演出を優先し、そのあとで通常モードの
-     コイン枯渇ゲームオーバー画面へ進む（ユーザー要望: 「所持ギヨウザが0に
-     なる場合、キングギヨウザが戻って飛んでいく演出を優先してください。
-     その後、所持ギヨウザ0のゲームオーバー演出に進んでください」）。
-     coins<=0によるここでの早期分岐（通常ゲームオーバー画面を先に出す）は
-     廃止し、_kingBattleEnd側で出口を分ける（コメント参照） */
+  /* 没収で所持ギヨウザが尽きた場合も、まずは通常の「こんがり しっぱい」＋キングが縮んで
+     ギヨウザ群へ戻っていく演出を見せ、そのあとで通常モードのコイン枯渇ゲームオーバー画面へ
+     進む。
+     coins<=0をここで早期分岐させて通常ゲームオーバー画面を先に出してはいけない。出口の
+     切り替えは_kingBattleEnd側で行う（コメント参照） */
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const titleY = _kingTitleY();
   outText('こんがり しっぱい……', W / 2, titleY, '#ff6655', 'rgba(40,0,0,0.9)', 8);
-  /* 没収個数メッセージは画面下端からの固定オフセットを基本にしつつ、ボスの拡大
-     アニメ（dscale→1）でtitleYが下がってきた場合はtitleYの下側に一定間隔を
-     保つ側を優先する（Math.max）。固定オフセットだけだとボスが十分に育った
-     状態でtitleYがそのオフセットを超え、見出しと重なってしまうため
-     （実機指摘: 「下に表示される文字列が重なっている」） */
+  /* 没収個数メッセージは画面下端からの固定オフセットを基本にしつつ、ボスの拡大アニメ
+     （dscale→1）でtitleYが下がってきた場合はtitleYの下側に一定間隔を保つ側を優先する
+     （Math.max）。固定オフセットだけだとボスが十分に育った状態でtitleYがそのオフセットを
+     超え、見出しと文字列が重なる */
   if (_bossDefeatTimer > 40) {
     ctx.font = `bold 15px ${FONT_MIN}`;
-    /* 没収個数の実数表示（ギヨウザN個が吸収された）から、割合表示に変更
-       （ユーザー要望）。_startBossDefeatの没収ロジック（Math.ceil(coins/2)）
-       が常に「所持数の半分」である事実そのままの文言にした */
+    /* 没収は個数の実数ではなく割合で表示する。_startBossDefeatの没収ロジック
+       （Math.ceil(coins/2)）が常に「所持数の半分」である事実をそのまま文言にする */
     outText('所持ギヨウザの半数が 吸収された……', W / 2, Math.max(H - 80, titleY + 40),
       '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
   }
@@ -10878,19 +10640,18 @@ function drawBossDefeatOutro() {
        描画本体は達成側と共通（_drawOutroMsg参照） */
     _drawOutroMsg(o, '#e8e2d0', 'rgba(0,0,0,0.9)');
   }
-  /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない
-     （ユーザー要望） */
+  /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない */
   ctx.restore();
 }
 
 /* ════════════════ サウンドテスト ════════════════
-   市販ゲームでよくある「クリア後に解禁されるサウンドテスト」。真エンディングを
-   一度見るとタイトルにボタンが出る（trueEndingSeen、エンディング再生ボタンの右隣）。
+   市販ゲームでよくある「クリア後に解禁されるサウンドテスト」。真エンディングを一度見ると
+   タイトルにボタンが出る（trueEndingSeen、エンディング再生ボタンの右隣）。
    曲・効果音・再生速度の演出を1画面で確かめられる。
-   もとは効果音の試聴だけを?cheatpanelに一覧表示していたが、デバッグ用パネルに
-   23個のボタンが並んで煩雑になったため、独立したモードへ移した。
+   効果音の試聴は?cheatpanelではなくこの独立したモードに置く（デバッグ用パネルに20個以上の
+   ボタンを並べると本来のチート操作が埋もれる）。
    このモード中はゲームの更新を止め（update参照）、全面を暗幕で覆う。
-   トロフィー・ポーズは隠し、ミュートと全画面だけ残す（音を止めたい場面があるため）。 */
+   トロフィー・ポーズは隠し、ミュートと全画面だけ残す（音を止めたい場面があるため） */
 const ST_ROW_H = 24, ST_GAP = 3, ST_SECT_GAP = 14, ST_LABEL_H = 15;
 
 /* 曲。bufを持つものはループ再生（バッファを差し替えて鳴らす）、onceは一回きり。
@@ -11153,13 +10914,12 @@ function _dpJogScale(dur) {
 }
 
 /* 4x4。配列は画面の上段から並べる（上段=ベース、下段=キック/スネア）。
-   gainはパッドごとの音量補正。各音はBGMの中での相対バランスで決めた値で、
-   単体で叩くとピークが0.058〜1.83と32倍もばらつく（オフラインレンダで実測）。
-   min(0.80/ピーク, 0.12/RMS) で「潰れない上限」と「聴感の大きさ」の両方を
-   満たす倍率を出したもの。長い音（ACID・DORA・ベース）はピークではなくRMSが、
-   短い打点（CLAP・BLAST）はピークが効いている。
-   実機のサンプリングレート（96kHz）でも測り直し、ノイズ系（CH/OH）はピークが
-   上がるぶん下げ、CLAPは3連バーストでピークだけ立ってRMSが痩せるぶん上げた。
+   gainはパッドごとの音量補正。各音はBGMの中での相対バランスで決めた値なので、単体で叩くと
+   ピークが0.058〜1.83と32倍もばらつく（オフラインレンダで実測）。
+   min(0.80/ピーク, 0.12/RMS) で「潰れない上限」と「聴感の大きさ」の両方を満たす倍率を出す。
+   長い音（ACID・DORA・ベース）はピークではなくRMSが、短い打点（CLAP・BLAST）はピークが効く。
+   実機のサンプリングレート（96kHz）でも測り直してあり、ノイズ系（CH/OH）はピークが上がる
+   ぶん低め、CLAPは3連バーストでピークだけ立ってRMSが痩せるぶん高めにしてある。
    結果はピーク0.23〜0.90・RMS0.06〜0.12に収まっている。ここは耳で微調整してよい。
    durは可聴長（ピークから-60dBまで落ちる秒数）の実測値で、ジョグの回し量に使う
    （_dpJogScale参照）。音を差し替えたらここも測り直すこと */
@@ -11387,10 +11147,10 @@ const DP_LOOP_TICK_MS  = 25;    // スケジューラの起動間隔
 const DP_SCHED_AHEAD   = 0.45;
 const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
 /* tickが遅れたときに、その間に来るはずだった音をどこまで拾うか（秒）。
-   描画が重いフレームなどでtickが1回飛ぶと、飛んだ区間の音が丸ごと捨てられる。
-   周の頭はちょうど予約の再開位置に当たるため真っ先に落ち、「たまに冒頭の
-   一音が鳴らない」として出る（実機報告）。取りこぼすくらいなら数十ms遅れて
-   鳴らすほうが良い。長い中断のあとに大量の音が一気に鳴らないよう上限を置く */
+   描画が重いフレームなどでtickが1回飛ぶと、飛んだ区間の音が丸ごと捨てられる。周の頭は
+   ちょうど予約の再開位置に当たるため真っ先に落ち、「たまに冒頭の一音が鳴らない」として出る。
+   取りこぼすくらいなら数十ms遅れて鳴らすほうが良い。長い中断のあとに大量の音が一気に
+   鳴らないよう上限を置く */
 const DP_LATE_TOL_SEC  = 0.12;
 const DP_BPM_MIN = 40, DP_BPM_MAX = 200, DP_BPM_STEP = 1;
 /* TEMPO±の長押し。1押し1BPMだと40→200に160回かかるので、押しっぱなしで
@@ -11544,11 +11304,10 @@ function _dpLoopTick() {
   if (!L || !audioCtx || !L.playing) return;
   const dur = _dpLoopDur(L), beat = _dpBeatDur(L), bpNow = _dpBeatsPerLoop(L);
   const now = audioCtx.currentTime, until = now + DP_SCHED_AHEAD;
-  /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は
-     先読みぶん最大0.25秒先を指しているので、そちらで判定すると周の変わり目が
-     0.25秒早まり、周の終わり際に叩いたぶんが次の周の記録に落ちる。その1〜2発が
-     次の切り替わりでtakeを置き換えてしまい、「打ち込んだのに1音しか入らない」
-     状態になっていた（実機報告） */
+  /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は先読みぶん
+     最大0.25秒先を指しているので、そちらで判定すると周の変わり目が0.25秒早まり、周の
+     終わり際に叩いたぶんが次の周の記録に落ちる。その1〜2発が次の切り替わりでtakeを
+     置き換えてしまい、「打ち込んだのに1音しか入らない」状態になる */
   if (L.rec) {
     const kNow = Math.floor((now - L.head) / dur);
     if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
@@ -11558,12 +11317,11 @@ function _dpLoopTick() {
   if (L.schedTo < now - DP_LATE_TOL_SEC) L.schedTo = now - DP_LATE_TOL_SEC;
   let guard = 0;
   while (L.schedTo < until && guard++ < 64) {
-    /* 予約済み位置がちょうど周の境目に乗ると、割り算の丸めで (schedTo-head)/dur が
-       整数のわずか手前になり、floorが1つ前の周を指す。するとその周の残り区間は
-       長さ0になり、予約が1歩も進まないまま空回りする。やがて遅延許容の巻き戻しで
-       schedToが境目を飛び越し、**周の頭の音だけが毎回落ちる**。
-       テンポを変えるとschedToを現在時刻に置き直すため、この一致が起きやすくなる
-       （実機報告「120で打ち込んで200で再生すると頭が抜ける」）。
+    /* 予約済み位置がちょうど周の境目に乗ると、割り算の丸めで (schedTo-head)/dur が整数の
+       わずか手前になり、floorが1つ前の周を指す。するとその周の残り区間は長さ0になり、
+       予約が1歩も進まないまま空回りする。やがて遅延許容の巻き戻しでschedToが境目を飛び越し、
+       **周の頭の音だけが毎回落ちる**。
+       テンポを変えるとschedToを現在時刻に置き直すため、この一致が起きやすくなる。
        極小の下駄を履かせて、境目はその周の先頭として扱う */
     const k = Math.floor((L.schedTo - L.head) / dur + 1e-9);
     const base = L.head + k * dur;            // この周の先頭（絶対時刻）
@@ -12185,9 +11943,8 @@ function _drawTrophyIcon() {
 }
 
 /* 祝賀メダル（円形ロゼット＋燕尾リボン）アイコン。単色シルエット。
-   ポーズ解除の再生三角と紛らわしいという指摘を受けて差し替えたが、
-   初版は細く小さすぎて遠目にメダルと判別できなかったため、
-   ボタン全体を使い切るサイズ・太いリボン幅・燕尾ノッチ付きで再設計した */
+   ボタン全体を使い切るサイズ・太いリボン幅・燕尾ノッチ付きにする。細く小さいと遠目に
+   メダルと判別できず、ポーズ解除の再生三角とも紛らわしくなる */
 function _drawEndingMedalIcon() {
   ctx.fillStyle = Y;
   ctx.beginPath();
@@ -12482,12 +12239,10 @@ function draw() {
 
   ctx.textBaseline='alphabetic'; // リセット
 
-  /* ホイール（ボス戦闘中は非表示）。タイトル画面の背景演出だけ、丸い
-     ギヨウザロゴに差し替える（ユーザー要望）。本来のホイール回転速度
-     (w.speed)は速すぎて文字が読めなくなるため、startupTimerとw.speed
-     （ホイールごとに元々ランダムな値）を元にした、読める範囲でゆっくり
-     めの回転角を使う。w.speedを流用することでホイールごとに回転速度が
-     バラバラになる */
+  /* ホイール（ボス戦闘中は非表示）。タイトル画面の背景演出だけ、丸いギヨウザロゴに
+     差し替える。本来のホイール回転速度(w.speed)は速すぎて文字が読めなくなるため、
+     startupTimerとw.speed（ホイールごとに元々ランダムな値）を元にした、読める範囲で
+     ゆっくりめの回転角を使う。w.speedを流用することでホイールごとに回転速度がバラバラになる */
   if (!_isBossBattlePhase()) {
     if (phase === 'startup') {
       for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.0375);
@@ -12596,15 +12351,13 @@ function draw() {
   }
 
   /* ── ミュート時ビートパルス: 外枠の太さ変化 ──
-     bgmSourceがある（＝拍位置が実際に進んでいる）ときだけ描く。
-     getBeatPulseは_bgmAccumStepの積算に依存し、_bgmAccumStepはbgmSourceが
-     無いと早期returnするため、ソースを破棄しているフェーズ
-     （bossVictory / bossVictoryOutro / trueEnding、NO_BGM_SOURCE_PHASES参照）
-     ではパルスが最後の値のまま凍結する。その値が0以外だと半透明の金枠が
-     一定の太さで描かれ続け、外枠の色が変わったように見えていた
-     （実機指摘「MUTE/アンミュートで外枠の色がおかしくなる」。ミュートを
-     切り替えると出たり消えたりするのはこの枠の描画条件そのもの）。
-     実測: ソース破棄の瞬間のpulseが0.9344なら5.6px幅で固定表示され続けた */
+     bgmSourceがある（＝拍位置が実際に進んでいる）ときだけ描くこと。
+     getBeatPulseは_bgmAccumStepの積算に依存し、_bgmAccumStepはbgmSourceが無いと早期return
+     するため、ソースを破棄しているフェーズ（bossVictory / bossVictoryOutro / trueEnding、
+     NO_BGM_SOURCE_PHASES参照）ではパルスが最後の値のまま凍結する。その値が0以外だと
+     半透明の金枠が一定の太さで描かれ続け、外枠の色が変わったように見える
+     （ミュートを切り替えると出たり消えたりするのはこの枠の描画条件そのもの）。
+     実測: ソース破棄の瞬間のpulseが0.9344なら5.6px幅で固定表示され続ける */
   if (audioMuted && phase !== 'startup' && bgmSource) {
     const pulse = getBeatPulse();
     if (pulse > 0) {
@@ -12675,7 +12428,7 @@ function drawWheel(i) {
     ctx.drawImage(w._oc, -_WHEEL_OC_R, -_WHEEL_OC_R, _WHEEL_OC_R*2, _WHEEL_OC_R*2);
     ctx.restore();
   } else {
-    /* フォールバック: OffscreenCanvas 未対応時は従来描画（文字は回転なし） */
+    /* フォールバック: OffscreenCanvas 未対応時はパス描画（文字は回転なし） */
     for (const s of w.segs) {
       const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
       ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,WR,a1,a2); ctx.closePath();
@@ -13222,11 +12975,11 @@ function drawEndOverlay() {
   ctx.fillRect(0,0,W,H);
 }
 
-/* ── 固定タイトル文字のプリレンダキャッシュ（shadowBlur 排除 第2弾） ──
-   エンド画面・リーチ演出のタイトルは固定文字列 × 固定スタイルのため、
-   初回使用時にグロー込みで OC へ焼き、毎フレームは drawImage 1回にする
-   （shadowBlur は Canvas 2D 最重量級の GPU 操作。v3.72 と同じ手法の水平展開）。
-   LRU 上限でメモリを制限。OffscreenCanvas 未対応時は従来描画へフォールバック。 */
+/* ── 固定タイトル文字のプリレンダキャッシュ ──
+   エンド画面・リーチ演出のタイトルは固定文字列 × 固定スタイルのため、初回使用時にグロー込みで
+   OC へ焼き、毎フレームは drawImage 1回にする（shadowBlur は Canvas 2D 最重量級の GPU 操作。
+   このプロジェクトでは shadowBlur を毎フレーム描画から全廃する方針）。
+   LRU 上限でメモリを制限。OffscreenCanvas 未対応時はパス描画へフォールバック */
 const _titleOCCache = new Map(); // key → { oc, w, h }
 const _TITLE_CACHE_MAX = 8;
 function _titleCachePrune() {
@@ -13299,9 +13052,9 @@ function _bakeGlowStroke(key, text, font, stroke, lw, glowC, glowB) {
 }
 
 /* ゲームオーバー演出（暗幕＋タイトル＋点滅する再開案内）。通常モードのコイン枯渇時
-   （drawEndScreen）とキングギヨウザ戦の没収で所持ギヨウザが尽きた場合
-   （drawBossDefeat）の両方から同じメッセージ・同じ待ち方で呼べるよう共通化した
-   （ユーザー要望: 敗北で0になった場合は通常のゲームオーバーと同じにしたい）。
+   （drawEndScreen）とキングギヨウザ戦の没収で所持ギヨウザが尽きた場合（drawBossDefeat）の
+   両方から、同じメッセージ・同じ待ち方で呼ぶ共通実装。所持ギヨウザが0になったときの体験は
+   経路によらず同じにする。
    timerは呼び出し元の経過フレーム数（通常はendTimer、ボス戦は_bossDefeatTimer）、
    canProceedは再開案内を出してよいか（通常はcanRestart相当） */
 function _drawGameOverTitle(alpha, timer, canProceed) {
@@ -13646,29 +13399,24 @@ function drawSlowHandBadge() {
      これはisSlowSpinガード（下記）に対する保険としてそのまま残す */
   if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (isGameOver) return;
-  /* 実機報告で発覚: grayRateCurは複数の演出（ボス関連フェーズだけでなく、
-     startBGMTapeのフォールバック分岐＝ボスBGMから通常BGMへ戻る際に
-     grayRateCurを0.001へ明示的にリセットしてから1.4秒かけて1.0へ回復させる、
-     等）でも下がりうる。キング戦は_bgmIsBoss=trueでBGM再生していたため、
-     _kingBattleEnd→_restartToTapestart→startBGMTapeが必ずこのフォールバック
-     分岐を通り、isSlowSpin=falseのままgrayRateCurが一瞬0付近まで落ちて
-     idle移行後もまだ回復しきっていない状態が残る（tapestart→idleの遷移条件
-     はBGM再生速度基準でありgrayRateCurの回復とは別の時定数のため）。
-     過去にも同種の誤表示（「グレースケール≠スローハンド」、bossDefeat確定時
-     のstopBGMTape由来）を一度修正しているが、その時はphase除外の追加という
-     対症療法だったため、後から追加された今回の要因（startBGMTapeのフォール
-     バック分岐）を見落とした。grayRateCurの下降要因を全て把握してその都度
-     除外を追加するのは水平展開が漏れ続ける構造のため、判定の主軸を
-     isSlowSpin自体に変える。ただし単純に「isSlowSpinがfalseなら常に非表示」
-     にすると、大当たり/中当たりでスローハンドを早期解除する際の
-     「isSlowSpin=falseにした後もgrayRateCurが1.0へ戻るまでバッジが滑らかに
-     フェードアウトする」という既存の意図的な演出（_kingReelShoot付近の
-     コメント「バッジも連動してフェードアウト」）まで壊してしまう（即座に
-     消える退行になる）。そのため_slowHandBadgeArmed（発動の瞬間だけ立てて
-     grayRateCurが1.0近くまで戻りきったら降ろすラッチ、update()側で管理）を
-     判定に使う。これにより既存のフェードアウト演出は維持しつつ、
-     isSlowSpinを一度も経由しないgrayRateCur変動（今回のバグの原因）では
-     ラッチが立たずバッジは一切表示されない */
+  /* バッジ表示の判定にはgrayRateCurそのものではなく_slowHandBadgeArmed（発動の瞬間だけ
+     立てて、grayRateCurが1.0近くまで戻りきったら降ろすラッチ。update()側で管理）を使う。
+
+     grayRateCurはスローハンド以外の複数の演出でも下がる。たとえばstartBGMTapeの
+     フォールバック分岐（ボスBGMから通常BGMへ戻る際にgrayRateCurを0.001へリセットしてから
+     1.4秒かけて1.0へ回復させる）がそれで、キング戦は_bgmIsBoss=trueでBGM再生しているため
+     _kingBattleEnd→_restartToTapestart→startBGMTapeが必ずこの分岐を通る。結果、
+     isSlowSpin=falseのままgrayRateCurが一瞬0付近まで落ち、idle移行後もまだ回復しきっていない
+     状態が残る（tapestart→idleの遷移条件はBGM再生速度基準で、grayRateCurの回復とは別の時定数）。
+     grayRateCurの下降要因を全て把握してphase除外を足していく方式は、要因が増えるたびに
+     水平展開が漏れるので採らない。
+
+     一方で「isSlowSpinがfalseなら常に非表示」にもできない。大当たり/中当たりでスローハンドを
+     早期解除する際、isSlowSpin=falseにした後もgrayRateCurが1.0へ戻るまでバッジが滑らかに
+     フェードアウトする、という意図的な演出（_kingReelShoot付近のコメント参照）が即座に消える
+     退行になる。
+     ラッチを使えば、このフェードアウト演出は維持しつつ、isSlowSpinを一度も経由しない
+     grayRateCur変動ではラッチが立たずバッジは一切表示されない */
   if (!_slowHandBadgeArmed) return;
   /* grayRateCur: 1.0=通常→alpha0, 0.5=スロー→alpha1 に線形マッピング */
   const alpha = Math.max(0, Math.min(1, (1.0 - grayRateCur) * 2));
@@ -13720,8 +13468,8 @@ function drawSlowHandBadge() {
 function drawBeatBonusBadge() {
   if (phase === 'startup' || phase === 'tapestart' || isGameOver) return;
   /* キングギヨウザ中はミュージックボーナス自体が無いのでバナーも出さない
-     （実機指摘: BONUS READYのまま戦闘に入ると出っ放しになる）。予兆から
-     エンディングまでを対象にする。シンクメーターの非表示条件と同じ扱い */
+     （BONUS READYのまま戦闘に入ると出っ放しになる）。予兆からエンディングまでを対象にする。
+     シンクメーターの非表示条件と同じ扱い */
   if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (syncChain < BEAT_BONUS_CHAIN) return;
 
@@ -13865,12 +13613,12 @@ function drawFeverBadge() {
 }
 
 /* ── 下部中央の呼吸ピルバッジ（「次へ進める」系の入力待ちを共通デザインで示す）。
-   「タップで」等の特定デバイス限定の文言を画面に出したくない（実機指摘・過去にも
-   同様の指摘あり）ため、通常モードのCONTINUEバッジと同じ見た目・同じ「クリック/
-   タップ/キーボードいずれでも反応する」操作系（handleGameClick）に統一する。
+   「タップで」等の特定デバイス限定の文言は画面に出さないこと。通常モードのCONTINUEバッジと
+   同じ見た目・同じ「クリック/タップ/キーボードいずれでも反応する」操作系（handleGameClick）
+   に統一する。
    表示条件・位置（下端からのオフセット）は呼び出し側が制御する */
 /* pulse: 0〜1を渡すとゆっくりした呼吸の代わりにビートで脈打つ（キング戦の「発射」用）。
-   省略時は従来どおりの呼吸アニメーション */
+   省略時は呼吸アニメーション */
 function _drawBottomPillBadge(text, bottomOffset = IS_PORTRAIT ? 12 : 10, pulse = null) {
   const breath = pulse !== null ? 1 + 0.13 * pulse
                                 : 1 + 0.04 * Math.sin(performance.now() / 500);
@@ -14161,11 +13909,8 @@ function drawStartup() {
 
 /* ════════════════ Loop / Input ════════════════ */
 /* ページロード直後 500ms は START を受け付けない。
-   元々は「orientationchange → location.reload() の際、iOS が回転操作の touchstart を
-   新ページに引き継いで発火させ、そのタッチが STARTUP_BTN に重なって意図せず
-   initGame() が呼ばれる」対策だった。回転はリロードせずPAUSEにする方式へ変更した
-   ため（_onOrientationChange参照）その経路は無くなったが、ロード直後の取りこぼし
-   タッチで誤スタートするのを防ぐ一般的なガードとしてそのまま残している。 */
+   ロード直後の取りこぼしタッチ（前のページで始まったタッチが新しいページへ引き継がれて
+   発火し、STARTUP_BTN に重なる等）で意図せず initGame() が呼ばれるのを防ぐガード */
 const _startupGuardUntil = Date.now() + 500;
 
 /* startup フェーズ: lsLoad/lsLoadAch だけ行い、画面は startup のままにする */
@@ -14188,11 +13933,11 @@ const _frameWorkTimes = new Float32Array(_FRAME_BUF_SIZE); // update()+draw()処
 const _TARGET_FRAME_MS = 1000 / 60; // ≈16.667ms: update()の1tick
 /* tickを起こす閾値は目標frame時間より少しだけ低くする。
    60Hz端末のrAFは毎回きっちり16.667msでは来ず、16.6msのように僅かに下回る回が混ざる。
-   閾値が16.667msちょうどだと、その回は積算が届かずtickが飛び、次のフレームでまとめて
-   1tickになる＝ゲームの状態が33ms凍結してから動く。実機の?perfで、こちらの処理が
-   何も走っていない（tagsが[-]）のにgapが33msという記録が繰り返し出ていたのはこれ。
+   閾値が16.667msちょうどだと、その回は積算が届かずtickが飛び、次のフレームでまとめて1tickに
+   なる＝ゲームの状態が33ms凍結してから動く（?perfでこちらの処理が何も走っていない＝tagsが[-]
+   のにgapが33msという記録が並ぶのはこれ）。
    1.5msの余裕を持たせると、9%まで短いフレームでも取りこぼさずtickできる。
-   長期的なズレは積算に残るので、実際に60Hzより遅い端末では従来どおり間引かれる */
+   長期的なズレは積算に残るので、実際に60Hzより遅い端末では間引かれる */
 const _TICK_THRESHOLD_MS = _TARGET_FRAME_MS - 1.5;
 /* 1フレームで走らせる最大tick数（遅延フレームの取り返し上限）。dtを50msに
    丸めているので3で足りる（50/16.7≒3）。詳細は_gameLoop内のコメント参照 */
@@ -14230,16 +13975,14 @@ function _gameLoop(t) {
     }
     _updateLastT = t;
     const _tWork = performance.now();
-    /* 遅れたぶんは捨てずに追いつく。
-       以前は必ず1tickだけ回し、余った時間（16.7msを超える借金）は捨てていた。
-       そのためフレームが44ms遅れると、update()は1回しか走らないのに実時間は
-       2.6フレーム進み、ゲーム世界が毎回realtimeから置いていかれる。
-       等速で回り続ける的にはこれが「一瞬止まる」＝引っかかりとして出る
-       （キング戦の的で顕著という実機指摘。frame workもkingも2msしか使って
-       いないのにgapが44msという状況＝遅延の原因はこちらの外側にあるので、
-       遅延が起きること自体は前提として、起きた後の扱いを直す）。
-       上限を設けるのは、極端に長い中断（タブ復帰等）で大量のtickが一気に走る
-       のを防ぐため。dtは50msに丸めてあるので最大3tickで足りる */
+    /* 遅れたぶんは捨てずに追いつく（アキュムレーター方式）。
+       1フレームにつき必ず1tickだけ回して余った時間を捨てると、フレームが44ms遅れたときに
+       update()は1回しか走らないのに実時間は2.6フレーム進み、ゲーム世界が毎回realtimeから
+       置いていかれる。等速で回り続ける的にはこれが「一瞬止まる」＝引っかかりとして出る
+       （キング戦の的で顕著）。遅延そのものは外部要因で起きるものとして、起きた後の扱いで
+       吸収する。
+       上限を設けるのは、極端に長い中断（タブ復帰等）で大量のtickが一気に走るのを防ぐため。
+       dtは50msに丸めてあるので最大3tickで足りる */
     let _steps = 0;
     while (_updateAccum >= _TICK_THRESHOLD_MS && _steps < _MAX_CATCHUP_TICKS) {
       _updateAccum -= _TARGET_FRAME_MS;
@@ -14251,14 +13994,13 @@ function _gameLoop(t) {
     draw();
     _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
   } else {
-    /* 追加フレーム（120Hz等・ジッター）。_bgmAccumStep()は常に呼ぶ: 呼ばないと
-       BGMリング表示が凍結しJUST判定とリングのピーク表示がずれる。
-       draw()は高リフレッシュレート端末でのみ行う。60Hz端末では、この分岐は
-       「update()が走らなかったフレーム」＝ゲームの状態が1つも変わっていない
-       フレームなので、描き直しても画は同じで、塗り直しと転送のコストだけが
-       増える。実機計測でframe workは2msなのにフレーム間隔が50msまで跳ねており、
-       詰まりはこちらのJSではなくブラウザ側の描画・合成にあった。無駄な1枚を
-       減らす（120Hz端末では従来どおり描いて滑らかさを保つ） */
+    /* 追加フレーム（120Hz等・ジッター）。_bgmAccumStep()は常に呼ぶ: 呼ばないとBGMリング表示が
+       凍結しJUST判定とリングのピーク表示がずれる。
+       draw()は高リフレッシュレート端末でのみ行う。60Hz端末では、この分岐は「update()が走らな
+       かったフレーム」＝ゲームの状態が1つも変わっていないフレームなので、描き直しても画は同じで、
+       塗り直しと転送のコストだけが増える。実機計測ではframe workが2msなのにフレーム間隔が50msまで
+       跳ねる＝詰まりはこちらのJSではなくブラウザ側の描画・合成にある。無駄な1枚を減らす
+       （120Hz端末では描いて滑らかさを保つ） */
     const _t0 = PERF_ON ? performance.now() : 0;
     _bgmAccumStep();
     if (_rafHz === 0 || _rafHz > _RAF_HZ_HIGH) draw();
@@ -14319,13 +14061,12 @@ function togglePause() {
         } catch(_e) {}
         applyMuteGain();
         _beatPulseCacheFrame = -1;
-        /* bossVictory（勝利ファンファーレでbgmSourceを破棄済み）・trueEnding
-           （専用オシレーターテーマのみでbgmSource自体を使わない）は、
-           ポーズ解除してもBGMループを再開してはいけないフェーズ。
-           以前はここがphaseを見ずに常に_bgmIsBossの値だけでバッファを選んで
-           再生していたため、これらのフェーズ中にポーズ→解除すると
-           （直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
-           鳴り出してしまっていた（NO_BGM_SOURCE_PHASES参照） */
+        /* bossVictory（勝利ファンファーレでbgmSourceを破棄済み）・trueEnding（専用
+           オシレーターテーマのみでbgmSource自体を使わない）は、ポーズ解除してもBGMループを
+           再開してはいけないフェーズ。
+           phaseを見ずに_bgmIsBossの値だけでバッファを選んで再生すると、これらのフェーズ中に
+           ポーズ→解除したときに（直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
+           鳴り出す（NO_BGM_SOURCE_PHASES参照） */
         /* 同じ理由でサウンドテスト・ドラムパッドも除外する。これらはPAUSEの
            対象外だが、画面回転で入ったPAUSEをフォアグラウンド復帰で自動解除する
            経路（_autoPauseExempt参照）があり、そこからここへ来られる */
@@ -14387,13 +14128,11 @@ function onShoot(_inputPerfMs){
     if (coins < bet) return; // 念のため
     betLocked = true;
     coins -= bet;
-    /* ベット直後（このトライで所持コインが最も低くなる時点）にも実績チェックを
-       挟む。以前はcheckCoinsAch()が4本目着弾後の配当加算後にしか呼ばれず、
-       「残りわずかでベット→そのトライ自体が配当加算で一気に200超まで届く」
-       ケースでは coins<=9 の瞬間が一度も観測されず、不死鳥（comeback、
-       wasPoorフラグ）が立たないまま実績を取りこぼす不具合があった（実機指摘:
-       「残1から当たりを重ねて200を越えたにもかかわらず実績がつかなかった」）。
-       ベット直後の最安値をここで確実に拾うことで解消する */
+    /* ベット直後（このトライで所持コインが最も低くなる時点）にも実績チェックを挟む。
+       checkCoinsAch()を4本目着弾後の配当加算後だけで呼んでいると、「残りわずかでベット→
+       そのトライ自体が配当加算で一気に200超まで届く」ケースで coins<=9 の瞬間が一度も
+       観測されず、不死鳥（comeback、wasPoorフラグ）が立たないまま実績を取りこぼす。
+       ベット直後の最安値をここで確実に拾う */
     checkCoinsAch();
     unlockAch('first_shot');
     if (bet >= 100) unlockAch('bet_max');
@@ -14411,16 +14150,14 @@ function onShoot(_inputPerfMs){
   w.result=hitResult(w); w.locked=true;
   phase='shooting';
   /* 発射時刻を記録（アニメーション進行用。performance.now: suspended中も止まらない）。
-     かつては着弾音のスケジュール用に audioCtx.currentTime も別途持っていたが、
-     着弾音の廃止で読み手がいなくなったため削除した */
+     着弾音は無いので audioCtx.currentTime 側の記録は持たない */
   _arrowStartWallTime  = performance.now() / 1000;
-  /* 発射SEは常に即時再生。ビートグリッドへのスナップは v3.80 で試行したが
-     「正確に打てた時だけ音が拍に揃って聞こえる」こと自体がゲーム性の核であり、
-     ズレた入力を補正して気持ちよく鳴らすのは設計思想に反するため廃止
-     （着弾音のビートスナップ廃止に続き2度目の同結論。以後再試行しない） */
+  /* 発射SEは常に即時再生。ビートグリッドへスナップさせてはいけない。
+     「正確に打てた時だけ音が拍に揃って聞こえる」こと自体がゲーム性の核であり、ズレた入力を
+     補正して気持ちよく鳴らすのは設計思想に反する（着弾音についても同じ結論） */
   _mark('shoot'); // タイムラインの目印（?mark。_markの定義部参照）
   /* Bluetooth出力のときだけ、聴こえる位置をグリッドへ寄せる幅を足す
-     （_shootSEPad参照。内蔵スピーカー等では0＝従来どおり即時） */
+     （_shootSEPad参照。内蔵スピーカー等では0＝即時） */
   const _pad = audioCtx ? _shootSEPad() : 0;
   playSE('shoot', _pad > 0 ? audioCtx.currentTime + 0.01 + _pad : undefined);
   /* ── ビートシンク評価（先頭でキャプチャした値を使用） ── */
@@ -14477,7 +14214,7 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'boss') {
-    _kingReelShoot(inputPerfMs); // 4打目で自動的にコールが閉じる（発射入力は廃止）
+    _kingReelShoot(inputPerfMs); // 4打目で自動的にコールが閉じる（独立した発射入力は無い）
     return;
   }
   if (phase === 'bossShatter') {
@@ -14487,9 +14224,8 @@ function _handleGameClick(inputPerfMs) {
   }
   if (phase === 'bossVictory') {
     /* CONTINUEタップで退場演出（見上げ→飛び去り→解放→締め）へ入る。
-       真エンディングへ進むか通常モードへ戻るかの分岐は演出の終端
-       （_finishBossVictoryOutro）へ移した。初回のエンディングでも飛び去りを
-       見せてから入る（ユーザー要望） */
+       真エンディングへ進むか通常モードへ戻るかの分岐は演出の終端（_finishBossVictoryOutro）
+       で行う。初回のエンディングでも飛び去りを見せてから入る */
     if (_bossVictoryTimer > 90) _startBossVictoryOutro();
     return;
   }
@@ -14499,16 +14235,14 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'trueEnding') {
-    /* 「実績一覧→そうけっさん→締めセリフ→タイトル＋COPYRIGHT」の4段階を、
-       タップ/クリック/キー入力のたびに1段ずつ順送りする（ユーザー要望）。
-       速度が一定なので、途中の停止位置までスキップしても自然に流れた
-       場合と同じ着地位置になる */
+    /* 「実績一覧→そうけっさん→締めセリフ→タイトル＋COPYRIGHT」の4段階を、タップ/クリック/
+       キー入力のたびに1段ずつ順送りする。速度が一定なので、途中の停止位置までスキップしても
+       自然に流れた場合と同じ着地位置になる */
     const o = _trueEnding;
     if (o.stage === 'scroll' && o.scrollY < o.summaryScrollY) {
-      /* 実績一覧 → そうけっさん。まとめは実績ロールの末尾にあるため、
-         従来の「1タップで締めセリフまで」だと総決算を読む機会が無かった
-         （ユーザー要望）。速度が一定なので、飛ばしても自然に流れた場合と
-         同じ見え方でここから続く */
+      /* 実績一覧 → そうけっさん。まとめは実績ロールの末尾にあるので、1タップで締めセリフまで
+         飛ばしてしまうと総決算を読む機会が無くなる。速度が一定なので、飛ばしても自然に
+         流れた場合と同じ見え方でここから続く */
       o.scrollY = o.summaryScrollY;
       /* 見出しの静止表示はo.timerで制御している（_TRUE_ENDING_HEADER_HOLD_FRAMES、
          _updateTrueEnding参照）。スクロールが始まる前にスキップされた場合、
@@ -14540,14 +14274,11 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossDefeat') {
-    /* 所持ギヨウザが尽きる・尽きないに関わらず、通常モードへ戻る前に必ず
-       キングが縮んでギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink、
-       内部でクロスフェード後にbossDefeatOutroへ自動遷移)を優先する
-       （ユーザー要望: 「所持ギヨウザが0になる場合、キングギヨウザが戻って
-       飛んでいく演出を優先してください。その後、所持ギヨウザ0のゲーム
-       オーバー演出に進んでください」）。全損時のゲームオーバー画面への
-       分岐は_kingBattleEnd側で行う。CONTINUEバッジの表示に合わせて
-       90フレーム待つ（drawBossDefeat参照） */
+    /* 所持ギヨウザが尽きる・尽きないに関わらず、通常モードへ戻る前に必ずキングが縮んで
+       ギヨウザ群へ弾け散るつなぎ演出(_startBossDefeatShrink、内部でクロスフェード後に
+       bossDefeatOutroへ自動遷移)を先に見せる。全損時のゲームオーバー画面への分岐は
+       _kingBattleEnd側で行う。
+       CONTINUEバッジの表示に合わせて90フレーム待つ（drawBossDefeat参照） */
     if (_bossDefeatTimer > 90) _startBossDefeatShrink();
     return;
   }
@@ -14557,9 +14288,8 @@ function _handleGameClick(inputPerfMs) {
     return;
   }
   if (phase === 'bossDefeatOutro') {
-    /* タップ待ちにせず時間経過で自動的に通常モードへ戻る（ユーザー要望:
-       CONTINUE待ちは不要、時間で進んで良い）。復帰そのものは_updateBossDefeatOutro
-       が_startScreenFade経由で行うため、このphase中の入力は無視する */
+    /* タップ待ちにせず時間経過で自動的に通常モードへ戻る。復帰そのものは
+       _updateBossDefeatOutroが_startScreenFade経由で行うため、このphase中の入力は無視する */
     return;
   }
   if (phase === 'done') {
@@ -14846,17 +14576,16 @@ function fitCanvas() {
 window.addEventListener('resize', fitCanvas);
 
 /* ── 画面回転 ──
-   以前は location.reload() でタイトル画面へ戻していた。レイアウト定数（IS_PORTRAIT・
-   W・H とそこから導かれる約20個のconst）が起動時に焼き込まれる設計のため、向きの
-   変更はリロードが唯一安全な手段だったという事情がある。
-   ユーザー要望により、リロードせずPAUSEにして続きから再開できるようにする。
-   レイアウトは回転前の論理サイズ（W×H）のまま維持し、fitCanvas()がCSSで新しい
-   ビューポートに収まるよう縮小する（＝向きに合わせた再レイアウトは行わない。
-   縦横でレイアウトを組み替える案は進行中オブジェクトの絶対座標の変換が必要で
-   別途検討とした）。通常モード・キングギヨウザモードのどちらでも同じ扱いになる
-   （togglePauseは既にボス系フェーズに対応済み）。
-   タイトル画面は進行中の状態が無く、togglePauseもstartupでは早期returnするため、
-   PAUSEにはせず表示の再フィットだけ行う。 */
+   回転時はリロードせず、PAUSEにして続きから再開できるようにする。
+   レイアウトは回転前の論理サイズ（W×H）のまま維持し、fitCanvas()がCSSで新しいビューポートに
+   収まるよう縮小する（＝向きに合わせた再レイアウトは行わない）。レイアウト定数
+   （IS_PORTRAIT・W・H とそこから導かれる約20個のconst）は起動時に焼き込まれる設計であり、
+   縦横でレイアウトを組み替えるには進行中オブジェクトの絶対座標の変換が必要になるため、
+   ここでは行わない。
+   通常モード・キングギヨウザモードのどちらでも同じ扱いになる（togglePauseはボス系フェーズに
+   対応済み）。
+   タイトル画面は進行中の状態が無く、togglePauseもstartupでは早期returnするため、PAUSEには
+   せず表示の再フィットだけ行う */
 let _orientationFitTimer = null;
 function _onOrientationChange() {
   /* 既にPAUSE中なら二重にトグルして解除してしまわないよう条件付きで呼ぶ
