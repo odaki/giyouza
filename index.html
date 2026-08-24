@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.37';
+const VERSION = 'v7.38';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2798,13 +2798,16 @@ function _playKingBlast(ctx, t, dest, vol = 1) {
      立ち上がりはクローズと同じ鋭さにして、尾だけを開かせる2層構成。
    dest を引数に取るのは OfflineAudioContext でレンダして検証できるようにするため
    （playSE 経由では audioCtx 固定になり測れない） */
-function _playKingHat(ctx, t, dest, open = false) {
+/* vol はクローズ側の基準レベル。既定はキング戦の打ち込み用（KING_HAT_VOL）で、
+   ドラムパッドのクリックのように伴走として控えめに鳴らしたい呼び出し側が指定する。
+   オープン側の上乗せ率（KING_HAT_ACCENT）はこの基準に対して掛かる */
+function _playKingHat(ctx, t, dest, open = false, vol = KING_HAT_VOL) {
   const d = _seDest(ctx, dest);
-  if (!open) { playNoise(ctx, t, 0.045, KING_HAT_VOL, 8500, d); return; }
+  if (!open) { playNoise(ctx, t, 0.045, vol, 8500, d); return; }
   /* オープン側はTRのACCENTと同じ考え方でレベルだけ上乗せする（音色は変えない）。
      立ち上がりはクローズと同じかそれ以上にしておく: 開いているぶん総量では勝っても、
      立ち上がりが弱いと打点としては弱く聞こえる */
-  const v = KING_HAT_VOL * KING_HAT_ACCENT;
+  const v = vol * KING_HAT_ACCENT;
   playNoise(ctx, t, 0.045, v,        9000, d); // 立ち上がり（クローズと同じ質感）
   playNoise(ctx, t, 0.28,  v * 0.55, 7000, d); // 開いた尾
 }
@@ -5414,6 +5417,13 @@ function _updateAlways() {
   /* 中当たりエフェクトの退場: 次のトライと並行して画面外へ抜けていくので、
      phaseをまたいで常時更新する必要がある（_fxOutro参照） */
   _updateFxOutro();
+  /* 画面シェイクの残量（_computeScreenShake が読む）。的ごとの揺れ（_kingReelShakeOffset）
+     と同じくアニメーション進行に紐づくフレームカウンタなので、必ず update() で減らすこと。
+     draw() で減らすと、draw の呼ばれ方がフレームレートと追いつき処理で変わるぶん揺れの
+     長さが端末ごとにぶれる（120Hz端末では半分、追いつきが起きた時は数倍になる）。
+     ボス系phaseは各分岐が早期returnするので、この常時更新セクションに置く必要がある */
+  if (_kingSiftShake   > 0) _kingSiftShake--;
+  if (_kingImpactShake > 0) _kingImpactShake--;
   /* localStorageの溜まり分は「矢を放った直後」に書き出す。プレイヤーは拍に乗せて
      打つので、発射直後は次のタップまで約1拍（395ms）の余裕がある＝ここで数ms
      止まっても入力は取りこぼさない。逆に固定遅延のタイマー任せにすると、
@@ -11271,7 +11281,7 @@ function _dpClickVoice(t, accent) {
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const d = _seDest(audioCtx);
   if (accent) _playRimshot(audioCtx, t, d, DP_CLICK_ACCENT_VOL);
-  else        _playKingHat(audioCtx, t, d, false);
+  else        _playKingHat(audioCtx, t, d, false, DP_CLICK_VOL);
 }
 
 function _dpLoopEventCount(L) {
@@ -12198,13 +12208,11 @@ function draw() {
     const k = _kingSiftShake / KING_SIFT_SHAKE_FRAMES;
     shakeX += (Math.random()-0.5) * 3 * k;
     shakeY += (Math.random()-0.5) * 5 * k;
-    _kingSiftShake--;
   }
   if (_kingImpactShake > 0) { // 文字が的に着弾した瞬間の衝撃（KING_IMPACT_SHAKE_*参照）
     const k = _kingImpactShake / KING_IMPACT_SHAKE_FRAMES;
     shakeX += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * k;
     shakeY += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * 1.6 * k;
-    _kingImpactShake--;
   }
 
   ctx.save();
