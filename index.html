@@ -105,10 +105,17 @@ canvas:focus-visible { outline: none; }
 /* ════════════════ 定数 ════════════════ */
 
 /* ── デバッグ用URLパラメータの一元パース ──
-   ?portrait ?cheatpanel ?perf ?dpr ?king ?lat ?jlat をここだけで解釈する。
-   使う場所ごとにURLSearchParamsを作ると、has/getの使い分けや既定値の扱いが
-   散らばるので入口を1つにまとめる。本番プレイではどのフラグも立たない。
-   _dbgFlag: 有無だけを見るもの / _dbgNum: 数値。無指定なら第2引数を返す */
+   デバッグ用URLパラメータはここだけで解釈する。使う場所ごとにURLSearchParamsを作ると、
+   has/getの使い分けや既定値の扱いが散らばるので入口を1つにまとめる。
+   本番プレイではどのフラグも立たない。
+   _dbgFlag: 有無だけを見るもの / _dbgNum: 数値。無指定なら第2引数を返す
+
+   有無フラグ: portrait（縦レイアウトを強制）/ cheatpanel（チートパネル）/ perf（性能オーバーレイ）
+               soundtest（サウンドテストを常時解禁）/ mark（焦げ跡の当たり判定を可視化）
+               nooc（OffscreenCanvas非対応の経路）/ noelev（無音<audio>の昇格を止める）
+               noresblur（結果文字のグローを外す）
+   数値:       dpr（実解像度倍率）/ king（キング蓄積の初期値）/ lat・jlat・sepad（音の遅延較正）
+               perfms（性能オーバーレイのスパイク閾値ms） */
 const _DBG_QUERY = new URLSearchParams(location.search);
 const _dbgFlag = name => _DBG_QUERY.has(name);
 const _dbgNum  = (name, fallback = null) => {
@@ -529,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.35';
+const VERSION = 'v7.36';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -867,7 +874,7 @@ const BEAT_BONUS_CHAIN = 100; // BEAT BONUS発動に必要なチェーン数（�
 const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率
 const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率
 const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（超大当たりより低い）
-/* ── キングギヨウザ（ボス戦）M1: 蓄積・予兆・出現予告 ── */
+/* ── キングギヨウザ（ボス戦）: 蓄積・予兆・出現予告 ── */
 const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
 const KING_OMEN_RATIO      = 0.8;  // 予兆演出（霊の横切り）開始割合
 /* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下する
@@ -4915,11 +4922,10 @@ function _createKingCrackWedge(baseAngle) {
   return [...left, ...right.reverse()]; // 閉じたポリゴン（先端は左右がほぼ同点で自然に尖る）
 }
 
-/* キング的のOCをプールへ返却する。通常ホイールの_releaseWheelOCsと対になる
-   （欠陥クラスの水平展開: 通常ホイールはプール運用なのにキング的だけ毎respinで
-   4枚ずつ新規生成・旧4枚は解放なしだった。長い戦闘では数十枚のOffscreenCanvasが
-   GC待ちで滞留し、iOS Safariのcanvasメモリを圧迫して戦闘後の処理落ち・音途切れの
-   原因になりうる） */
+/* キング的のOCをプールへ返却する。通常ホイールの_releaseWheelOCsと対になる。
+   respinのたびに新規生成して解放しない作りにしてはいけない: 長い戦闘では数十枚の
+   OffscreenCanvasがGC待ちで滞留し、iOS Safariのcanvasメモリを圧迫して戦闘後の処理落ち・
+   音途切れの原因になる。OffscreenCanvasを作る場所は必ずプール運用にすること */
 function _releaseKingReelOCs(reels) {
   if (!reels) return;
   for (const w of reels) {
@@ -6950,11 +6956,12 @@ function drawUzaFlash() {
   }
 }
 
-/* ════════════════ キングギヨウザ 出現予告（M1） ════════════════
-   蓄積メーター（画面外へ退場した落下ギヨウザ累計）が閾値に達すると、
-   トライの区切りで出現予告演出（phase='bossOmen'）が発動する。
-   演出構造（暗転→タメ台詞→収束→変身）は桃鉄キングボンビー誕生を参考にした
-   オリジナル。M1では戦闘は未実装で、誕生後タップで見送って通常モードへ復帰する。 */
+/* ════════════════ キングギヨウザ 出現予告 ════════════════
+   蓄積メーター（画面外へ退場した落下ギヨウザ累計）が閾値に達すると、トライの区切りで
+   出現予告演出（phase='bossOmen'）が発動する。
+   構造は 暗転 → タメ台詞 → バラバラのギヨウザが中心へ収束 → 変身 の4段で、そのまま
+   戦闘（phase='boss'）へ入る。敗北時の弾け散り演出（_defeatOutro）はこの収束の
+   厳密な逆再生になっているので、片方を変えたらもう片方も合わせること */
 
 const _OMEN_LINES = ['……おや？', 'ギヨウザたちが……', 'ちからを あわせて……', '……くる。'];
 const _OMEN_LINE_FRAMES = 80; // 台詞1行あたりの表示フレーム数（タメ）
@@ -7633,7 +7640,7 @@ function drawBossOmen() {
   ctx.restore();
 }
 
-/* ════════════════ キングギヨウザ 戦闘（M2） ════════════════
+/* ════════════════ キングギヨウザ 戦闘 ════════════════
    操作はタイミングのみ（自動照準）。的（文字）1本ずつのタップ精度でこんがり%が直接決まる
    （JUST=+1.0%・GOOD=+0.5%・OK以下=+0%、4本平均ではなく個別判定）。
    「こ・ん・が・り」全一致（当たり）確定時のみ、その4タップぶんの焦げ跡候補が正式に
@@ -10892,14 +10899,17 @@ function drawSoundTest() {
 }
 
 /* ════════════════ ドラムパッド ════════════════
-   サウンドテストから入る演奏モード（phase1: 叩けるところまで）。
+   サウンドテストから入る演奏モード。4x4のパッドを叩いて鳴らし、尺を固定した
+   パターンシーケンサ（ルーパー）へレイヤーを重ねていける。
    音色は新規に作らず、キング戦で使っているTR/TB系の発音関数をそのまま叩く。
    GUIはAKAI MPC・Roland SPシリーズの佇まい（ベベルの効いた4x4パッド・機種名
    プレート・LCD窓・大きなジョグ）を借り、色はゲームの意匠（金と濃緑）で通す。
    ジョグと銘板には丸いギヨウザロゴをそのまま使う。
 
-   クオンタイズはしない。叩いた瞬間に鳴らす（タイミング精度そのものが
-   この作品の手触りなので、入力を補正しない方針をここでも守る）。 */
+   叩いた音そのものは常に即時・無補正で鳴らす（タイミング精度がこの作品の手触りなので、
+   入力は補正しない）。クオンタイズは演奏の道具として明示的に選ぶ機能で、記録は生の時刻の
+   まま・再生時に丸めるだけの非破壊方式にする（_dpQuantBeat参照。OFFに戻せば叩いたままの
+   演奏が戻る）。 */
 const DP_PAD_GAP = 8;
 const DP_FLASH_FRAMES = 10;    // 叩いた光の減衰（フレーム）
 const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
@@ -14329,12 +14339,10 @@ function _handleGameClick(inputPerfMs) {
   onShoot(inputPerfMs); // idle / reach
 }
 
-/* チート操作の入口は?cheatpanelのタップ式パネル1つに集約した（CHEAT_PANEL_BTNS参照）。
-   以前あったキーボードチート（矢文字G/Y/U/Z・Ctrl+F/T/Cとその代替キー、
-   KeyboardEvent.keyフォールバック_keyMatches）は削除済み。iPhone+外付けキーボードでは
-   keydownがそもそも届かず実機で使えないうえ、パネルで同じ操作が全て賄えるため、
-   同じ機能に2つの入口を維持する理由が無くなった。キーボードで残すのは
-   スペース（発射・段送り）と左右矢印（BET変更）＝ゲーム本来の操作のみ */
+/* チート操作の入口は?cheatpanelのタップ式パネル1つだけ（CHEAT_PANEL_BTNS参照）。
+   キーボードのチートキーは持たない: iPhone+外付けキーボードでは keydown がそもそも届かず
+   実機で使えないうえ、同じ機能に2つの入口があると片方だけ直す事故が起きる。
+   キーボードで受けるのはスペース（発射・段送り）と左右矢印（BET変更）＝ゲーム本来の操作のみ */
 function cheatShoot(char) {
   if (phase!=='idle'||curIdx>=4) return;
   const w = wheels[curIdx];
@@ -14365,8 +14373,7 @@ document.addEventListener('keydown', e=>{
     changeBet(e.code==='ArrowLeft' ? -1 : +1);
     return;
   }
-  /* ここから下にあったキーボードチート（G/Y/U/Z・Ctrl+F/T/Cと各代替キー）は
-     削除した。理由はcheatShoot手前のコメント参照 */
+  /* チートキーはここに足さない（入口は?cheatpanelのみ。理由はcheatShoot手前のコメント参照） */
 });
 
 /* ── ポインタ入力のボタン当たり判定（touchstart / mousedown 共通） ──
