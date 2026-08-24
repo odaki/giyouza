@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.36';
+const VERSION = 'v7.37';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1013,7 +1013,6 @@ function _poolAlloc(pool) {
   pool.push(o);
   return o;
 }
-/* _swapRemovePool は swapRemove(arr, pred, _deadify) に統一したため削除 */
 
 const _gigiPool = _makePool(256, () =>
   ({ x:0, y:0, vx:0, vy:0, life:0, color:'', r:0, _dead:true }));
@@ -2084,9 +2083,9 @@ function _resumeAudioCtx(callback) {
 
 /* iOS マナーモード対策: <audio>要素をユーザーアクティベーション内で再生すると
    AVAudioSession カテゴリが Ambient → Playback に昇格し、マナーモードをバイパスする。
-   実時間を持つ無音WAV（8kHz・8bit・モノラル・0.5秒）を実行時に組み立て、loop再生で
-   鳴らし続ける。再生が途切れないのでセッションはPlaybackのまま保たれ、play()は
-   最初の1回で済む。8bit PCMの無音は0x80。
+   実時間を持つ無音WAVを実行時に組み立て、loop再生で鳴らし続ける。再生が途切れないので
+   セッションはPlaybackのまま保たれ、play()は最初の1回で済む（形式と長さは
+   _SILENT_WAV_RATE / _SILENT_WAV_SEC 参照）。
 
    「dataチャンク長0」の44バイトWAVを使ってはいけない。サンプルを1つも持たないため
    再生が始まらず、セッションがすぐ元に戻る。毎タップ play() を呼び直すはめになり
@@ -2096,7 +2095,8 @@ function _resumeAudioCtx(callback) {
 /* 形式は端末の出力に合わせる（48kHz・16bit・モノラル）。形式が違うと出力(48kHz)への
    リサンプリングが常に挟まる。16bit PCMの無音は0なので、確保した時点でゼロ埋め済み＝fill不要。
    （「バックグラウンド復帰時のノイズは無音要素が原因」という見立ては実機で否定されている。
-   ?noelev でも再現する。原因はパイプラインに残る音声で、対策は _CLOSE_ON_BG を参照）
+   ?noelev でも再現する。原因は移行の時点でOSの出力キューへ渡り終えていた音声で、
+   ページからは取り消せない。下の visibilitychange のコメント参照）
 
    長さ: 短いとループ境界の処理が頻繁に来てフレーム間隔の乱れになる（0.5秒だと毎秒2回）。
    ループ境界を避けるために再生を止める（待避する）方式は採らない — 上記のノイズを生む。
@@ -2136,7 +2136,7 @@ const _NO_ELEVATE = _dbgFlag('noelev');
    昇格を確認したら止める、という作りにしてはいけない。止めると出力ストリームが
    途切れ、そのあとWeb Audioが鳴り出すときに経路が張り直されて、Bluetooth側の
    古いバッファが吐き出される（ミュート解除でBGMにざらついた雑音が混ざる）。
-   0.5秒のWAVだとループ境界が毎秒2回来るので、WAVを20秒にして境界を減らしてある
+   ループ境界の処理はフレーム間隔を乱すので、WAVを十分に長くして境界の頻度を下げる
    （_SILENT_WAV_SEC参照）。止める方向で解こうとしないこと */
 function _elevateAudioSession() {
   if (_NO_ELEVATE) return;
@@ -7731,7 +7731,7 @@ const KING_CHAR_BOUNCE_FRICTION    = 0.15;
 /* 衝突時にキング側から加える能動的な「弾き飛ばし」インパルス。上記と同じ
    要望により、的が払いのけるような強い外力はほぼ無くし、わずかな残り香
    程度に留める（0だと硬直的に見えるため、ごくわずかだけ残す）。回転
-   （KNOCK_ROT）も同様にごく小さくし、勢いよく弾かれる見た目にしない */
+   （KING_CHAR_KNOCK_ROT_SPD）も同様にごく小さくし、勢いよく弾かれる見た目にしない */
 const KING_CHAR_KNOCK_SPEED_X = 0.6;
 const KING_CHAR_KNOCK_SPEED_Y = 0.8;
 const KING_CHAR_KNOCK_ROT_SPD = 0.06;
