@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.38';
+const VERSION = 'v7.39';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -9316,6 +9316,40 @@ function _kingTitleY() {
     : (IS_PORTRAIT ? 90 : 70);
 }
 
+/* ── キングギヨウザ戦の決着画面（達成・失敗で共通） ──
+   暗幕 → キング本体と飛翔文字 → 見出し → 副文 → CONTINUE の順で重ねる。
+   達成側と失敗側は対になる見せ方でなければならないので、色と文言以外はここに集約する
+   （個別に書くと配置やタイミングが片側だけずれる）。
+   見出しはボスの裾のすぐ下（_kingTitleY）。副文は画面下端からの固定オフセットを基本にしつつ、
+   ボスの拡大アニメで見出しが下りてきたら見出しの下側に間隔を保つ側を優先する。
+   opts:
+     veil    暗幕の色
+     title / titleFill / titleStroke   見出し
+     sub  / subFill  / subStroke       副文（null なら出さない）
+     timer   このフェーズの経過フレーム数。副文は40、CONTINUEは90を過ぎてから出す
+     extra   暗幕とキングの後・見出しの前に差し込む描画（達成側の湯気など） */
+function _drawKingOutcomeScreen(opts) {
+  ctx.save();
+  ctx.fillStyle = opts.veil; ctx.fillRect(0, 0, W, H);
+  if (_king) {
+    _drawKingBody();
+    drawKingCharFlights();
+  }
+  if (opts.extra) opts.extra();
+
+  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const titleY = _kingTitleY();
+  outText(opts.title, W / 2, titleY, opts.titleFill, opts.titleStroke, 8);
+
+  if (opts.sub && opts.timer > 40) {
+    ctx.font = `bold 15px ${FONT_MIN}`;
+    outText(opts.sub, W / 2, Math.max(H - 80, titleY + 40), opts.subFill, opts.subStroke, 4);
+  }
+  if (opts.timer > 90) _drawBottomPillBadge('CONTINUE');
+  ctx.restore();
+}
+
 function drawKingCharFlights() {
   if (_kingCharFlights.length === 0) return;
   ctx.save();
@@ -9638,30 +9672,17 @@ function _updateBossVictory() {
 
 function drawBossVictory() {
   if (phase !== 'bossVictory') return;
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, W, H);
-  if (_king) {
-    _drawKingBody();
-    drawKingCharFlights();
-  }
-  _drawVictorySteam();
-  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const titleY = _kingTitleY(); // 位置の意図は_kingTitleYのコメント参照
-  outText('こんがり キングギヨウザ！', W / 2, titleY, '#ffdd55', 'rgba(60,20,0,0.9)', 8);
-  /* 返却されたギヨウザ数の表示。位置・書式・出るタイミングは敗北画面の没収
-     メッセージ（drawBossDefeat）と対になるよう揃えてある。所持数表示自体も
-     coinsDispのカウントアップで増えていくが、それだけだと「なぜ増えたのか」が
-     分からないため理由を明示する */
-  if (_bossVictoryTimer > 40 && _bossVictoryWonCoins > 0) {
-    ctx.font = `bold 15px ${FONT_MIN}`;
-    outText(`ギヨウザ ${fmt(_bossVictoryWonCoins)}個が 解放された！`, W / 2, Math.max(H - 80, titleY + 40),
-      '#ffe9a8', 'rgba(60,20,0,0.85)', 4);
-  }
-  if (_bossVictoryTimer > 90) {
-    _drawBottomPillBadge('CONTINUE');
-  }
-  ctx.restore();
+  _drawKingOutcomeScreen({
+    veil: 'rgba(0,0,0,0.35)',
+    extra: _drawVictorySteam,
+    title: 'こんがり キングギヨウザ！',
+    titleFill: '#ffdd55', titleStroke: 'rgba(60,20,0,0.9)',
+    /* 返却されたギヨウザ数。所持数表示もcoinsDispのカウントアップで増えていくが、
+       それだけだと「なぜ増えたのか」が分からないため理由を明示する */
+    sub: _bossVictoryWonCoins > 0 ? `ギヨウザ ${fmt(_bossVictoryWonCoins)}個が 解放された！` : null,
+    subFill: '#ffe9a8', subStroke: 'rgba(60,20,0,0.85)',
+    timer: _bossVictoryTimer,
+  });
 }
 
 /* ════════════════ こんがり達成の退場演出（bossVictoryOutro） ════════════════
@@ -10612,37 +10633,20 @@ function _updateBossDefeat() {
 
 function drawBossDefeat() {
   if (phase !== 'bossDefeat') return;
-  ctx.save();
-  ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-  if (_king) {
-    _drawKingBody();
-    drawKingCharFlights();
-  }
-
-  /* 没収で所持ギヨウザが尽きた場合も、まずは通常の「こんがり しっぱい」＋キングが縮んで
-     ギヨウザ群へ戻っていく演出を見せ、そのあとで通常モードのコイン枯渇ゲームオーバー画面へ
-     進む。
-     coins<=0をここで早期分岐させて通常ゲームオーバー画面を先に出してはいけない。出口の
-     切り替えは_kingBattleEnd側で行う（コメント参照） */
-  ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const titleY = _kingTitleY();
-  outText('こんがり しっぱい……', W / 2, titleY, '#ff6655', 'rgba(40,0,0,0.9)', 8);
-  /* 没収個数メッセージは画面下端からの固定オフセットを基本にしつつ、ボスの拡大アニメ
-     （dscale→1）でtitleYが下がってきた場合はtitleYの下側に一定間隔を保つ側を優先する
-     （Math.max）。固定オフセットだけだとボスが十分に育った状態でtitleYがそのオフセットを
-     超え、見出しと文字列が重なる */
-  if (_bossDefeatTimer > 40) {
-    ctx.font = `bold 15px ${FONT_MIN}`;
+  /* 没収で所持ギヨウザが尽きた場合も、この「こんがり しっぱい」＋キングが縮んで
+     ギヨウザ群へ戻っていく演出を先に見せ、そのあとで通常モードのコイン枯渇ゲームオーバー
+     画面へ進む。coins<=0をここで早期分岐させて通常ゲームオーバー画面を先に出してはいけない。
+     出口の切り替えは_kingBattleEnd側で行う */
+  _drawKingOutcomeScreen({
+    veil: 'rgba(30,0,0,0.5)',
+    title: 'こんがり しっぱい……',
+    titleFill: '#ff6655', titleStroke: 'rgba(40,0,0,0.9)',
     /* 没収は個数の実数ではなく割合で表示する。_startBossDefeatの没収ロジック
        （Math.ceil(coins/2)）が常に「所持数の半分」である事実をそのまま文言にする */
-    outText('所持ギヨウザの半数が 吸収された……', W / 2, Math.max(H - 80, titleY + 40),
-      '#d8d8ff', 'rgba(0,0,0,0.85)', 4);
-  }
-  if (_bossDefeatTimer > 90) {
-    _drawBottomPillBadge('CONTINUE');
-  }
-  ctx.restore();
+    sub: '所持ギヨウザの半数が 吸収された……',
+    subFill: '#d8d8ff', subStroke: 'rgba(0,0,0,0.85)',
+    timer: _bossDefeatTimer,
+  });
 }
 
 function drawBossDefeatOutro() {
@@ -12116,6 +12120,54 @@ function _drawPillPath(bx, by, bw, bh) {
   ctx.closePath();
 }
 
+/* ── ピルバッジの共通描画 ──
+   画面上部・下部に出る通知バッジ（スローハンド／ミュージックボーナス／フィーバー／
+   CONTINUE等）は、寸法の決め方と描き順をここに集約する。
+   幅はテキストの実測に左右のパディングを足して決め、常に画面中央へ置く。
+   個別に書くと padX/padY や中央揃えの基準が少しずつずれ、上下に並んだときに揃わない。
+
+   opts:
+     fs        フォントサイズ（既定は上部バッジの標準サイズ）
+     padX/padY テキスト周囲の余白
+     y         バッジ上端のY。関数 `bh => Y` を渡すと高さから決められる（下端基準に使う）
+     fill      背景色 / stroke 枠色 / lw 枠の太さ / color 文字色
+     alpha     全体の不透明度
+     scale     バッジ中心を基準にした拡縮（ポップ・呼吸）
+     textDY    文字のベースライン微調整（小さいフォントでem中央と視覚中央がずれる分）
+   戻り値は実際に使った矩形（呼び出し側が続けて描き足せるように）*/
+function _drawPillBadge(text, opts) {
+  const fs   = opts.fs ?? (IS_PORTRAIT ? 13 : 14);
+  const padX = opts.padX ?? 18, padY = opts.padY ?? 7;
+  ctx.save();
+  if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
+  ctx.font = `bold ${fs}px ${FONT_MIN}`;
+  const bw = ctx.measureText(text).width + padX * 2;
+  const bh = fs + padY * 2;
+  const bx = (W - bw) / 2;
+  const by = typeof opts.y === 'function' ? opts.y(bh) : opts.y;
+
+  const sc = opts.scale ?? 1;
+  if (sc !== 1) {
+    ctx.translate(W / 2, by + bh / 2);
+    ctx.scale(sc, sc);
+    ctx.translate(-W / 2, -(by + bh / 2));
+  }
+
+  _drawPillPath(bx, by, bw, bh);
+  ctx.fillStyle = opts.fill;
+  ctx.fill();
+  ctx.strokeStyle = opts.stroke;
+  ctx.lineWidth = opts.lw ?? 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = opts.color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, W / 2, by + bh / 2 + (opts.textDY ?? 0));
+  ctx.restore();
+  return { bx, by, bw, bh };
+}
+
 /* ════════════════ Main draw ════════════════ */
 /* 前景レイヤー一式（暗幕→当たり演出→テキスト→全画面演出→バッジ類）。
    draw()に425行そのまま並んでいたうちの前景部分を切り出したもの。順序がそのまま
@@ -13127,6 +13179,76 @@ function _drawGameOverTitle(alpha, timer, canProceed) {
 }
 
 /* ── エンド画面: テキスト最前面 ── */
+/* ── 中当たり・小当たりの決着表示（drawEndScreen）──
+   段位（中当たり／小当たり）とかなの2行を、当たり種ごとの色と動きで見せる。
+   構造は9種で共通なので表に持たせ、当たり種を追加するときはここへ1行足すだけにする
+   （分岐を書き足す形にすると、行の配置やフォントを変えたときに直し漏れる）。
+   key        _outTextCached のキャッシュキー接頭辞（`_t` 見出し / `_s` かな）
+   tier/kana  2行の文言
+   stroke     見出しの縁取り色（かなは kanaStroke。同系でアルファだけ薄い）
+   glow       2行に共通のグロー色。tierGlowB / kanaGlowB がその強さ
+   motion     endTimer から求める変形。dx/dy=平行移動、sx/sy=拡縮（省略時は等倍）。
+              大当たり・超大当たりは光輪とグラデーションで構造から違うので表には載せない */
+const END_HIT_STYLES = {
+  gizagiza: { key: 'gz', tier: '小当たり', kana: 'ギ ザ ギ ザ',
+    tierFill: '#c0d8f0', kanaFill: '#e8f4ff',
+    stroke: 'rgba(0,20,60,0.9)',  kanaStroke: 'rgba(0,20,60,0.85)',
+    glow: '#c0d8f0', tierGlowB: 50, kanaGlowB: 20,
+    motion: t => { const p = 1 + 0.05 * Math.sin(t * 0.10); return { sx: p, sy: p }; } },
+
+  uyouyo:   { key: 'uy', tier: '中当たり', kana: 'ウ ヨ ウ ヨ',
+    tierFill: '#aaee66', kanaFill: '#ccff88',
+    stroke: 'rgba(0,40,0,0.9)',   kanaStroke: 'rgba(0,40,0,0.85)',
+    glow: '#7ec850', tierGlowB: 50, kanaGlowB: 20 },
+
+  /* ウザウザ: まとわりつく感じの細かい揺れ */
+  uzauza:   { key: 'uz', tier: '小当たり', kana: 'ウ ザ ウ ザ',
+    tierFill: '#ffaa00', kanaFill: '#ffcc44',
+    stroke: 'rgba(60,0,0,0.9)',   kanaStroke: 'rgba(60,0,0,0.85)',
+    glow: '#ff6600', tierGlowB: 40, kanaGlowB: 15,
+    motion: t => ({ dx: Math.sin(t * 2.1) * 4, dy: Math.cos(t * 1.7) * 3 }) },
+
+  /* ギウギウ: 縦だけ潰れる（ぎゅうぎゅう詰めの圧迫感） */
+  giugiu:   { key: 'gu', tier: '中当たり', kana: 'ギ ウ ギ ウ',
+    tierFill: Y,         kanaFill: '#fffde7',
+    stroke: 'rgba(0,0,0,0.9)',    kanaStroke: 'rgba(0,0,0,0.85)',
+    glow: Y, tierGlowB: 45, kanaGlowB: 18,
+    motion: t => ({ sy: 1 - Math.abs(Math.sin(t * 0.08)) * 0.08 }) },
+
+  /* ギギギギ: ガタガタ揺れる（毎フレーム乱数） */
+  gigigigi: { key: 'gg', tier: '小当たり', kana: 'ギ ギ ギ ギ',
+    tierFill: '#ddeeff', kanaFill: '#ffffff',
+    stroke: 'rgba(0,0,20,0.92)',  kanaStroke: 'rgba(0,0,20,0.88)',
+    glow: '#aaddff', tierGlowB: 40, kanaGlowB: 18,
+    motion: () => ({ dx: (Math.random() - 0.5) * 6, dy: (Math.random() - 0.5) * 4 }) },
+
+  /* ヨヨヨヨ: 上下にわずかに弾む */
+  yoyoyoyo: { key: 'yy', tier: '中当たり', kana: 'ヨ ヨ ヨ ヨ',
+    tierFill: '#55eedd', kanaFill: '#aaffee',
+    stroke: 'rgba(0,30,30,0.92)', kanaStroke: 'rgba(0,30,30,0.88)',
+    glow: '#44ddcc', tierGlowB: 45, kanaGlowB: 18,
+    motion: t => ({ dy: Math.abs(Math.sin(t * 0.15)) * 8 }) },
+
+  /* ウウウウ: ゆらゆら漂う */
+  uuuu:     { key: 'uu', tier: '中当たり', kana: 'ウ ウ ウ ウ',
+    tierFill: '#cce8ff', kanaFill: '#e8f4ff',
+    stroke: 'rgba(0,10,40,0.92)', kanaStroke: 'rgba(0,10,40,0.88)',
+    glow: '#aaccff', tierGlowB: 55, kanaGlowB: 20,
+    motion: t => ({ dx: Math.sin(t * 0.04) * 5, dy: Math.cos(t * 0.03) * 3 }) },
+
+  zazazaza: { key: 'zz', tier: '小当たり', kana: 'ザ ザ ザ ザ',
+    tierFill: '#88ccff', kanaFill: '#bbddff',
+    stroke: 'rgba(0,10,40,0.92)', kanaStroke: 'rgba(0,10,40,0.88)',
+    glow: '#66aaff', tierGlowB: 45, kanaGlowB: 18 },
+
+  /* ギョギョ: 横に伸び縮みしながらビクビク揺れる驚き */
+  gyogyo:   { key: 'gy', tier: '中当たり', kana: 'ギョ ギョ ！',
+    tierFill: '#ffee44', kanaFill: '#ffe066',
+    stroke: 'rgba(40,20,0,0.92)', kanaStroke: 'rgba(40,20,0,0.88)',
+    glow: '#ffcc00', tierGlowB: 55, kanaGlowB: 20,
+    motion: t => ({ dx: (Math.random() - 0.5) * 5, sx: 1 + Math.sin(t * 0.22) * 0.04 }) },
+};
+
 function drawEndScreen() {
   ctx.save();
   const alpha=Math.min(1,(endTimer-45)/35);
@@ -13199,98 +13321,17 @@ function drawEndScreen() {
       ctx.restore();
     }
 
-  /* ━━ ギザギザ 小当たり ━━ */
-  } else if (hitType === 'gizagiza') {
-    const pulse=1+0.05*Math.sin(endTimer*0.10);
-    ctx.save(); ctx.translate(W/2,cy); ctx.scale(pulse,pulse);
-    _outTextCached('gz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#c0d8f0', 'rgba(0,20,60,0.9)', _fs(10), '#c0d8f0', 50, 0, 0);
-    _outTextCached('gz_s', 'ギ ザ ギ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#e8f4ff', 'rgba(0,20,60,0.85)', _fs(7), '#c0d8f0', 20, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ウヨウヨ 中当たり ━━ */
-  } else if (hitType === 'uyouyo') {
-    ctx.save(); ctx.translate(W/2,cy);
-    _outTextCached('uy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#aaee66', 'rgba(0,40,0,0.9)', _fs(10), '#7ec850', 50, 0, 0);
-    _outTextCached('uy_s', 'ウ ヨ ウ ヨ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#ccff88', 'rgba(0,40,0,0.85)', _fs(7), '#7ec850', 20, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ウザウザ 小当たり ━━ */
-  } else if (hitType === 'uzauza') {
-    ctx.save(); ctx.translate(W/2,cy);
-    const wobbleX=Math.sin(endTimer*2.1)*4, wobbleY=Math.cos(endTimer*1.7)*3;
-    ctx.translate(wobbleX,wobbleY);
-    _outTextCached('uz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#ffaa00', 'rgba(60,0,0,0.9)', _fs(10), '#ff6600', 40, 0, 0);
-    _outTextCached('uz_s', 'ウ ザ ウ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#ffcc44', 'rgba(60,0,0,0.85)', _fs(7), '#ff6600', 15, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ギウギウ 中当たり ━━ */
-  } else if (hitType === 'giugiu') {
-    const squeeze = 1 - Math.abs(Math.sin(endTimer*0.08))*0.08;
-    ctx.save(); ctx.translate(W/2,cy); ctx.scale(1, squeeze);
-    _outTextCached('gu_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      Y, 'rgba(0,0,0,0.9)', _fs(10), Y, 45, 0, 0);
-    _outTextCached('gu_s', 'ギ ウ ギ ウ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#fffde7', 'rgba(0,0,0,0.85)', _fs(7), Y, 18, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ギギギギ 小当たり ━━ */
-  } else if (hitType === 'gigigigi') {
-    /* ガタガタ揺れる */
-    const jx = (Math.random()-0.5)*6, jy = (Math.random()-0.5)*4;
-    ctx.save(); ctx.translate(W/2+jx, cy+jy);
-    _outTextCached('gg_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#ddeeff', 'rgba(0,0,20,0.92)', _fs(10), '#aaddff', 40, 0, 0);
-    _outTextCached('gg_s', 'ギ ギ ギ ギ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#ffffff', 'rgba(0,0,20,0.88)', _fs(7), '#aaddff', 18, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ヨヨヨヨ 中当たり ━━ */
-  } else if (hitType === 'yoyoyoyo') {
-    /* 上下にわずかに弾む */
-    const bounce = Math.abs(Math.sin(endTimer*0.15)) * 8;
-    ctx.save(); ctx.translate(W/2, cy + bounce);
-    _outTextCached('yy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#55eedd', 'rgba(0,30,30,0.92)', _fs(10), '#44ddcc', 45, 0, 0);
-    _outTextCached('yy_s', 'ヨ ヨ ヨ ヨ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#aaffee', 'rgba(0,30,30,0.88)', _fs(7), '#44ddcc', 18, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ウウウウ 中当たり ━━ */
-  } else if (hitType === 'uuuu') {
-    /* ゆらゆら漂う */
-    const fx = Math.sin(endTimer*0.04)*5, fy = Math.cos(endTimer*0.03)*3;
-    ctx.save(); ctx.translate(W/2+fx, cy+fy);
-    _outTextCached('uu_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#cce8ff', 'rgba(0,10,40,0.92)', _fs(10), '#aaccff', 55, 0, 0);
-    _outTextCached('uu_s', 'ウ ウ ウ ウ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#e8f4ff', 'rgba(0,10,40,0.88)', _fs(7), '#aaccff', 20, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ザザザザ 小当たり ━━ */
-  } else if (hitType === 'zazazaza') {
-    ctx.save(); ctx.translate(W/2, cy);
-    _outTextCached('zz_t', '小当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#88ccff', 'rgba(0,10,40,0.92)', _fs(10), '#66aaff', 45, 0, 0);
-    _outTextCached('zz_s', 'ザ ザ ザ ザ', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#bbddff', 'rgba(0,10,40,0.88)', _fs(7), '#66aaff', 18, 0, _fy(78));
-    ctx.restore();
-
-  /* ━━ ギョギョ 中当たり ━━ */
-  } else if (hitType === 'gyogyo') {
-    /* ビクビク揺れる驚き演出 */
-    const shock = (Math.random() - 0.5) * 5;
-    const scaleX = 1 + Math.sin(endTimer * 0.22) * 0.04;
-    ctx.save(); ctx.translate(W/2 + shock, cy); ctx.scale(scaleX, 1);
-    _outTextCached('gy_t', '中当たり', `bold ${_fs(78)}px ${FONT_MIN}`,
-      '#ffee44', 'rgba(40,20,0,0.92)', _fs(10), '#ffcc00', 55, 0, 0);
-    _outTextCached('gy_s', 'ギョ ギョ ！', `bold ${_fs(38)}px ${FONT_MIN}`,
-      '#ffe066', 'rgba(40,20,0,0.88)', _fs(7), '#ffcc00', 20, 0, _fy(78));
+  /* ━━ 中当たり・小当たり9種（END_HIT_STYLES の表で描く） ━━ */
+  } else if (END_HIT_STYLES[hitType]) {
+    const st = END_HIT_STYLES[hitType];
+    const m  = st.motion ? st.motion(endTimer) : null;
+    ctx.save();
+    ctx.translate(W / 2 + (m?.dx ?? 0), cy + (m?.dy ?? 0));
+    if (m && (m.sx !== undefined || m.sy !== undefined)) ctx.scale(m.sx ?? 1, m.sy ?? 1);
+    _outTextCached(`${st.key}_t`, st.tier, `bold ${_fs(78)}px ${FONT_MIN}`,
+      st.tierFill, st.stroke, _fs(10), st.glow, st.tierGlowB, 0, 0);
+    _outTextCached(`${st.key}_s`, st.kana, `bold ${_fs(38)}px ${FONT_MIN}`,
+      st.kanaFill, st.kanaStroke, _fs(7), st.glow, st.kanaGlowB, 0, _fy(78));
     ctx.restore();
 
   /* ━━ ハズレ: drawMissPopup() で描画 ━━ */
@@ -13446,41 +13487,15 @@ function drawSlowHandBadge() {
     ? 1 + 1.4 * Math.pow(slowHandPopTimer / POP_FRAMES, 2)
     : 1;
 
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  const text  = '🐌  ス ロ ー ハ ン ド  発 動 中';
-  const fs    = IS_PORTRAIT ? 13 : 14;
-  ctx.font    = `bold ${fs}px ${FONT_MIN}`;
-  const tw    = ctx.measureText(text).width;
-  const padX  = 18, padY = 7;
-  const bw    = tw + padX * 2;
-  const bh    = fs + padY * 2;
-  const bx    = (W - bw) / 2;
-  const by    = IS_PORTRAIT ? 10 : 8;
-
-  /* スケール変形: バッジ中心を基準に拡縮 */
-  if (popScale !== 1) {
-    ctx.translate(W / 2, by + bh / 2);
-    ctx.scale(popScale, popScale);
-    ctx.translate(-W / 2, -(by + bh / 2));
-  }
-
-  /* 背景ピル */
-  _drawPillPath(bx, by, bw, bh);
-  ctx.fillStyle = 'rgba(20,10,60,0.82)';
-  ctx.fill();
-  ctx.strokeStyle = `rgba(160,130,255,${0.7 * alpha})`;
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-
-  /* テキスト */
-  ctx.fillStyle = '#e8d8ff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, by + bh / 2);
-
-  ctx.restore();
+  _drawPillBadge('🐌  ス ロ ー ハ ン ド  発 動 中', {
+    y: IS_PORTRAIT ? 10 : 8,
+    alpha, scale: popScale,
+    fill: 'rgba(20,10,60,0.82)',
+    /* 枠だけ alpha を二重に掛ける: 全体の globalAlpha に加えて枠を先に薄くすることで、
+       消え際に文字より枠が先に引くようにする */
+    stroke: `rgba(160,130,255,${0.7 * alpha})`, lw: 1.2,
+    color: '#e8d8ff',
+  });
 }
 
 function drawBeatBonusBadge() {
@@ -13491,28 +13506,15 @@ function drawBeatBonusBadge() {
   if (phase === 'bossOmen' || _isBossBattlePhase()) return;
   if (syncChain < BEAT_BONUS_CHAIN) return;
 
-  /* BETバー直下・同期メーターと同じ高さに配置（B案: 下部エリア） */
-  const by = IS_PORTRAIT ? P_BAR_Y + P_BAR_H + 2 : BAR_Y + BAR_H + 2;
-  const text = '♪BONUS READY';
-  const fs   = 9; // 2/3サイズ（キャンバス内に収める）
-  ctx.save();
-  ctx.font = `bold ${fs}px ${FONT_MIN}`;
-  const tw = ctx.measureText(text).width;
-  const padX = 12, padY = 4;
-  const bw = tw + padX * 2;
-  const bh = fs + padY * 2;
-  const bx = (W - bw) / 2;
-
-  /* 背景ピル */
-  _drawPillPath(bx, by, bw, bh);
-  ctx.fillStyle = 'rgba(10,20,10,0.85)'; ctx.fill();
-  ctx.strokeStyle = _RAINBOW_COLORS[_rainbowIdx()]; ctx.lineWidth = 1.5; ctx.stroke();
-
-  /* テキスト（+1: 9pxフォントのem中央と視覚的中央のずれを補正） */
-  ctx.fillStyle = '#fffde7';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, by + bh / 2 + 1);
-  ctx.restore();
+  _drawPillBadge('♪BONUS READY', {
+    /* BETバー直下・同期メーターと同じ高さ */
+    y: IS_PORTRAIT ? P_BAR_Y + P_BAR_H + 2 : BAR_Y + BAR_H + 2,
+    fs: 9, padX: 12, padY: 4, // 上部バッジの2/3サイズ（キャンバス内に収める）
+    fill: 'rgba(10,20,10,0.85)',
+    stroke: _RAINBOW_COLORS[_rainbowIdx()],
+    color: '#fffde7',
+    textDY: 1, // 9pxフォントのem中央と視覚的中央のずれを補正
+  });
 }
 
 /* ── フィーバーバナー共通描画
@@ -13599,35 +13601,14 @@ function drawFeverBadge() {
   if (isGameOver) return;
   if (!isFever) return;
 
-  const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 120);
-  ctx.save();
-  ctx.globalAlpha = pulse;
-
-  const text = '🔥  F E V E R  残り ' + feverTriesLeft + ' 回';
-  const fs   = IS_PORTRAIT ? 13 : 14;
-  ctx.font   = `bold ${fs}px ${FONT_MIN}`;
-  const tw   = ctx.measureText(text).width;
-  const padX = 18, padY = 7;
-  const bw   = tw + padX * 2;
-  const bh   = fs + padY * 2;
-  const bx   = (W - bw) / 2;
-  /* スローハンドバッジと同じ上端位置（フィーバー中はスローハンド非発動） */
-  const by   = IS_PORTRAIT ? 10 : 8;
-
-  /* 背景ピル */
-  _drawPillPath(bx, by, bw, bh);
-  ctx.fillStyle = 'rgba(80,20,0,0.88)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,160,0,0.85)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = '#ffe0a0';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, by + bh / 2);
-
-  ctx.restore();
+  _drawPillBadge('🔥  F E V E R  残り ' + feverTriesLeft + ' 回', {
+    /* スローハンドバッジと同じ上端位置（フィーバー中はスローハンド非発動） */
+    y: IS_PORTRAIT ? 10 : 8,
+    alpha: 0.85 + 0.15 * Math.sin(performance.now() / 120),
+    fill: 'rgba(80,20,0,0.88)',
+    stroke: 'rgba(255,160,0,0.85)',
+    color: '#ffe0a0',
+  });
 }
 
 /* ── 下部中央の呼吸ピルバッジ（「次へ進める」系の入力待ちを共通デザインで示す）。
@@ -13638,37 +13619,15 @@ function drawFeverBadge() {
 /* pulse: 0〜1を渡すとゆっくりした呼吸の代わりにビートで脈打つ（キング戦の「発射」用）。
    省略時は呼吸アニメーション */
 function _drawBottomPillBadge(text, bottomOffset = IS_PORTRAIT ? 12 : 10, pulse = null) {
-  const breath = pulse !== null ? 1 + 0.13 * pulse
-                                : 1 + 0.04 * Math.sin(performance.now() / 500);
-
-  const fs   = IS_PORTRAIT ? 13 : 14;
-  ctx.font   = `bold ${fs}px ${FONT_MIN}`;
-  const tw   = ctx.measureText(text).width;
-  const padX = 18, padY = 7;
-  const bw   = tw + padX * 2;
-  const bh   = fs + padY * 2;
-  const bx   = (W - bw) / 2;
-  const by   = H - bh - bottomOffset;
-
-  ctx.save();
-  ctx.translate(W / 2, by + bh / 2);
-  ctx.scale(breath, breath);
-  ctx.translate(-W / 2, -(by + bh / 2));
-
-  /* 背景ピル */
-  _drawPillPath(bx, by, bw, bh);
-  ctx.fillStyle = 'rgba(20,20,40,0.82)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(180,180,255,0.7)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = '#d8d8ff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, W / 2, by + bh / 2);
-
-  ctx.restore();
+  _drawPillBadge(text, {
+    /* 下端基準なので、高さが決まってから上端を求める */
+    y: bh => H - bh - bottomOffset,
+    scale: pulse !== null ? 1 + 0.13 * pulse
+                          : 1 + 0.04 * Math.sin(performance.now() / 500),
+    fill: 'rgba(20,20,40,0.82)',
+    stroke: 'rgba(180,180,255,0.7)',
+    color: '#d8d8ff',
+  });
 }
 
 /* ── CONTINUEバッジ（done phase・canRestart時に下部中央表示） ── */
