@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.39';
+const VERSION = 'v7.40';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2229,14 +2229,14 @@ function noteHz(note, octave) {
 
 /* ホワイトノイズバッファを事前生成する
    AudioContext.sampleRate が変わった場合（デバイス切替）に再生成するため毎回チェック */
+const _NOISE_BUFFER_SEC = 0.45; // 最長ノイズ(0.35s)より余裕を持った長さ
 function _buildNoiseBuffer() {
   if (!audioCtx) return;
   if (_noiseBuffer && _noiseBuffer.sampleRate === audioCtx.sampleRate) return;
-  const len  = Math.ceil(audioCtx.sampleRate * 0.45); // 最長ノイズ(0.35s)より余裕を持った長さ
-  const buf  = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-  _noiseBuffer = buf;
+  /* _noiseBuf は audioCtx かつ既存が有効なら使い回すので、上のガードを抜けた
+     （＝未生成かsampleRate不一致）時点で必ず新しいバッファが返る */
+  _noiseBuffer = null;
+  _noiseBuffer = _noiseBuf(audioCtx, _NOISE_BUFFER_SEC);
 }
 
 /* 基本オシレーター再生 */
@@ -5553,6 +5553,25 @@ function _updateAlways() {
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
 }
 
+/* phase ごとの update。ここに載っているphaseは自前のupdateへ委譲してそのまま終わり、
+   通常モードのトライ進行（ホイールの回転・矢の判定など）は走らない。
+   phaseを追加したらここへ1行足すこと。if連鎖で書くと、足したときに書き忘れても
+   何も起きない（通常モードの処理へ落ちる）ぶん気づきにくい。
+   startup / tapestart は通常モードの状態を共有していて委譲では書けないので、
+   update() 側の分岐に残してある。
+   参照している関数はすべて function 宣言で巻き上げられるため、この位置で構わない */
+const PHASE_UPDATERS = {
+  bossOmen:         _updateBossOmen,
+  boss:             _updateBossBattle,
+  bossShatter:      _updateKingReelShatter,
+  bossVictory:      _updateBossVictory,
+  bossVictoryOutro: _updateBossVictoryOutro,
+  trueEnding:       _updateTrueEnding,
+  bossDefeat:       _updateBossDefeat,
+  bossDefeatShrink: _updateBossDefeatShrink,
+  bossDefeatOutro:  _updateBossDefeatOutro,
+};
+
 function update() {
   _updateAlways();
   /* サウンドテスト・ドラムパッド中はゲームを進めない（音を鳴らすだけのモード）。
@@ -5586,42 +5605,10 @@ function update() {
     }
     return;
   }
-  if (phase === 'bossOmen') {
-    _updateBossOmen();
-    return;
-  }
-  if (phase === 'boss') {
-    _updateBossBattle();
-    return;
-  }
-  if (phase === 'bossShatter') {
-    _updateKingReelShatter();
-    return;
-  }
-  if (phase === 'bossVictory') {
-    _updateBossVictory();
-    return;
-  }
-  if (phase === 'bossVictoryOutro') {
-    _updateBossVictoryOutro();
-    return;
-  }
-  if (phase === 'trueEnding') {
-    _updateTrueEnding();
-    return;
-  }
-  if (phase === 'bossDefeat') {
-    _updateBossDefeat();
-    return;
-  }
-  if (phase === 'bossDefeatShrink') {
-    _updateBossDefeatShrink();
-    return;
-  }
-  if (phase === 'bossDefeatOutro') {
-    _updateBossDefeatOutro();
-    return;
-  }
+  /* 自前のupdateを持つphaseはここで委譲して終わる（PHASE_UPDATERS参照）。
+     以降は通常モードのトライ進行 */
+  const _pu = PHASE_UPDATERS[phase];
+  if (_pu) { _pu(); return; }
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
@@ -5746,16 +5733,29 @@ function spawnImpact(x, y) {
 
 /* ════════════════ 勝利エフェクト ════════════════ */
 
-function launchFireworks() {
-  const pal = [Y,'#fff8dc','#fffacd',YD,'#a8e6cf'];
-  for (let b = 0; b < 5; b++) {
-    const bx = 100+Math.random()*(W-200), by = 80+Math.random()*(H*0.55);
-    for (let i = 0; i < 32; i++) {
-      const a=(i/32)*Math.PI*2+Math.random()*0.4, spd=Math.random()*5+2;
-      spawnParticle(bx, by, Math.cos(a)*spd, Math.sin(a)*spd,
-        pal[Math.floor(Math.random()*pal.length)], 70+Math.random()*50, Math.random()*4.5+1.5);
+/* 打ち上げ花火。bursts発の炸裂を画面上部に散らし、1発あたり rays 本の火の粉を全方位へ飛ばす。
+   marginX/top/topRatio が炸裂位置の分布、spd/life/r が火の粉の初速・寿命・大きさで、
+   いずれも [最小値, 乱数幅] で与える。
+   共通particles配列へ積むので、物理と寿命は_updateAlwaysが面倒を見る */
+function _launchFireworkBurst(o) {
+  for (let b = 0; b < o.bursts; b++) {
+    const bx = o.marginX + Math.random() * (W - o.marginX * 2);
+    const by = o.top + Math.random() * (H * o.topRatio);
+    for (let i = 0; i < o.rays; i++) {
+      const a = (i / o.rays) * Math.PI * 2 + Math.random() * 0.4;
+      const spd = Math.random() * o.spd[1] + o.spd[0];
+      spawnParticle(bx, by, Math.cos(a) * spd, Math.sin(a) * spd,
+        o.pal[Math.floor(Math.random() * o.pal.length)],
+        o.life[0] + Math.random() * o.life[1], Math.random() * o.r[1] + o.r[0]);
     }
   }
+}
+function launchFireworks() {
+  _launchFireworkBurst({
+    pal: [Y,'#fff8dc','#fffacd',YD,'#a8e6cf'],
+    bursts: 5, rays: 32, marginX: 100, top: 80, topRatio: 0.55,
+    spd: [2, 5], life: [70, 50], r: [1.5, 4.5],
+  });
 }
 
 /* リーチ大当たり専用: 虹色10発一斉打ち上げ */
@@ -5775,16 +5775,13 @@ function launchReachFireworks() {
   }
 }
 
+/* ギザギザ用: 大当たりより控えめ（発数・本数・初速・寿命すべて小さめ、寒色系） */
 function launchGizaFireworks() {
-  const pal = ['#c0d8f0','#e8f4ff','#fff','#a0c8e8',YD];
-  for (let b = 0; b < 3; b++) {
-    const bx = 150+Math.random()*(W-300), by = 100+Math.random()*(H*0.45);
-    for (let i = 0; i < 22; i++) {
-      const a=(i/22)*Math.PI*2+Math.random()*0.4, spd=Math.random()*4+1.5;
-      spawnParticle(bx, by, Math.cos(a)*spd, Math.sin(a)*spd,
-        pal[Math.floor(Math.random()*pal.length)], 45+Math.random()*30, Math.random()*3+1);
-    }
-  }
+  _launchFireworkBurst({
+    pal: ['#c0d8f0','#e8f4ff','#fff','#a0c8e8',YD],
+    bursts: 3, rays: 22, marginX: 150, top: 100, topRatio: 0.45,
+    spd: [1.5, 4], life: [45, 30], r: [1, 3],
+  });
 }
 
 /* ════════════════ ウヨウヨ: うごめくアイテム ════════════════ */
@@ -11231,6 +11228,20 @@ function _dpBoundaryWinBeats(L) {
 
 const DP_QUANT_CHOICES = [0, 0.25, 0.5, 1];
 const DP_QUANT_LABEL = { 0: 'Q OFF', 0.25: 'Q 1/16', 0.5: 'Q 1/8', 1: 'Q 1/4' };
+/* 操作ボタンの表示名。状態で変わるものがあるのでループ状態 L を受け取る関数で持つ。
+   ボタンを足すときは _dpBuildLayout の配置とここの2箇所を対にすること
+   （描画側で id を分岐させると、配置だけ足して表示名を忘れたときに黙って空文字になる） */
+const DP_CTL_LABEL = {
+  rec:   () => 'REC',
+  play:  L => L.playing ? 'STOP' : 'PLAY',
+  click: () => 'CLICK',
+  bpmUp: () => 'TEMPO +',
+  bpmDn: () => 'TEMPO −',
+  bars:  L => `${L.bars} BAR${L.bars > 1 ? 'S' : ''}`,
+  quant: L => DP_QUANT_LABEL[L.quant],
+  undo:  () => 'UNDO',
+  clear: () => 'CLEAR',
+};
 const DP_BEATS_PER_BAR = 4;
 /* クリックの音量。パッドと同じ音源を使うが、伴走なので控えめにする */
 const DP_CLICK_VOL = 0.30, DP_CLICK_ACCENT_VOL = 0.50;
@@ -11650,14 +11661,7 @@ function drawDrumPad() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 10px sans-serif`;
     ctx.fillStyle = (red || on) ? '#fff8e0' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
-    const label = c.id === 'rec'   ? 'REC'
-                : c.id === 'play'  ? (LP.playing ? 'STOP' : 'PLAY')
-                : c.id === 'click' ? 'CLICK'
-                : c.id === 'bpmUp' ? 'TEMPO +'
-                : c.id === 'bpmDn' ? 'TEMPO −'
-                : c.id === 'bars'  ? `${LP.bars} BAR${LP.bars > 1 ? 'S' : ''}`
-                : c.id === 'quant' ? DP_QUANT_LABEL[LP.quant]
-                : c.id === 'undo'  ? 'UNDO' : 'CLEAR';
+    const label = DP_CTL_LABEL[c.id](LP);
     const lx = c.shape === 'midL' ? c.x + (c.w - DP_BTN_SKEW) / 2
              : c.shape === 'midR' ? c.x + DP_BTN_SKEW + (c.w - DP_BTN_SKEW) / 2
              : c.x + c.w / 2;
@@ -12239,8 +12243,13 @@ function _drawForeground() {
   drawContinueBadge();
 }
 
-function draw() {
-  /* 画面シェイク */
+/* 画面シェイクの合成結果。毎フレーム呼ばれるのでオブジェクトは使い回す
+   （_syncColorBuf と同じ流儀。ここで {x,y} を新造するとGCを毎フレーム誘発する） */
+const _shakeBuf = { x: 0, y: 0 };
+/* このフレームの画面シェイク量を合成して返す。各演出のシェイクは加算で重なる。
+   残量（_kingSiftShake / _kingImpactShake）の減衰は update() 側の担当で、ここでは読むだけ
+   （draw() の呼ばれ方はフレームレートと追いつき処理で変わるため） */
+function _computeScreenShake() {
   let shakeX = 0, shakeY = 0;
   if (hitType === 'gizagiza' && endTimer > 45) {
     const k = Math.min(1, (endTimer-45)/20);
@@ -12266,9 +12275,98 @@ function draw() {
     shakeX += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * k;
     shakeY += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * 1.6 * k;
   }
+  _shakeBuf.x = shakeX; _shakeBuf.y = shakeY;
+  return _shakeBuf;
+}
+
+/* particles: 色×アルファ4段階でバッチ化して1色1fill（GPUフラッシュ最大512→数十回に削減）
+   アルファは4段階量子化（フェード25フレームで十分滑らか） */
+function _drawParticles() {
+  if (particles.length === 0) return;
+  ctx.save();
+  for (const p of particles) {
+    const a = Math.min(0.999, p.life / 25);
+    p._ab = (a * 4) | 0; // 0-3
+  }
+  const nc = _partColorList.length;
+  for (let ab = 3; ab >= 0; ab--) {
+    ctx.globalAlpha = (ab + 1) / 4;
+    for (let ci = 0; ci < nc; ci++) {
+      let started = false;
+      for (let k = 0; k < particles.length; k++) {
+        const p = particles[k];
+        if (p._ab !== ab || p.ci !== ci) continue;
+        if (!started) { ctx.beginPath(); started = true; }
+        const r = Math.max(0.1, p.r);
+        ctx.moveTo(p.x + r, p.y);
+        ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+      }
+      if (started) { ctx.fillStyle = _partColorList[ci]; ctx.fill(); }
+    }
+  }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+/* ポーズオーバーレイ（暗幕＋PAUSED＋著作権表示） */
+function _drawPauseOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  /* 実績パネルが開いている間は "PAUSED" テキストを非表示（パネルが全面を覆うため） */
+  if (!showAchievements) {
+    ctx.fillStyle = 'rgba(245,208,32,0.95)';
+    ctx.font = `bold 36px ${FONT_MIN}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('PAUSED', W/2, H/2);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(245,208,32,0.4)';
+    ctx.fillText('© 2026 Michiyasu ODAKI', W/2, H - 24);
+  }
+  ctx.restore();
+}
+
+/* 画面の内枠に出る2種の演出。どちらも枠を1本描くだけなので同じ場所にまとめる */
+function _drawFrameEffects() {
+  /* フィーバー内枠: HSL色サイクル＋呼吸パルス */
+  if (isFever && phase !== 'startup') {
+    const t   = performance.now();
+    const hue = (t / 20) % 360;                      // 色相サイクル（約7秒で一周）
+    const pulse = 0.7 + 0.3 * Math.sin(t / 260);     // 呼吸（約1.6秒周期、min0.4〜max1.0）
+    const lw  = IS_PORTRAIT ? 5 : 7;
+    ctx.save();
+    ctx.strokeStyle = `hsla(${hue}, 100%, 62%, ${pulse})`;
+    ctx.lineWidth   = lw;
+    ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
+    ctx.restore();
+  }
+
+  /* ミュート時ビートパルス: 外枠の太さ変化。
+     bgmSourceがある（＝拍位置が実際に進んでいる）ときだけ描くこと。
+     getBeatPulseは_bgmAccumStepの積算に依存し、_bgmAccumStepはbgmSourceが無いと早期return
+     するため、ソースを破棄しているフェーズ（bossVictory / bossVictoryOutro / trueEnding、
+     NO_BGM_SOURCE_PHASES参照）ではパルスが最後の値のまま凍結する。その値が0以外だと
+     半透明の金枠が一定の太さで描かれ続け、外枠の色が変わったように見える
+     （ミュートを切り替えると出たり消えたりするのはこの枠の描画条件そのもの）。
+     実測: ソース破棄の瞬間のpulseが0.9344なら5.6px幅で固定表示され続ける */
+  if (audioMuted && phase !== 'startup' && bgmSource) {
+    const pulse = getBeatPulse();
+    if (pulse > 0) {
+      const lw = pulse * 6; // 最大6px
+      ctx.save();
+      ctx.strokeStyle = _BEAT_BORDER_COLORS[Math.min(31,pulse*31|0)];
+      ctx.lineWidth = lw;
+      ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
+      ctx.restore();
+    }
+  }
+}
+
+function draw() {
+  const shake = _computeScreenShake();
 
   ctx.save();
-  ctx.translate(shakeX, shakeY);
+  ctx.translate(shake.x, shake.y);
 
   /* グレースケールフィルター（CSSをcanvas要素に適用）
      ctx.filterはiOS Safari<18未サポートのため、canvas.style.filterを使用
@@ -12334,32 +12432,7 @@ function draw() {
   /* 飛ぶ矢 (3D遠近法) */
   if (phase==='shooting') drawArrow3D();
 
-  /* particles: 色×アルファ4段階でバッチ化して1色1fill（GPUフラッシュ最大512→数十回に削減）
-     アルファは4段階量子化（フェード25フレームで十分滑らか） */
-  if (particles.length > 0) {
-    ctx.save();
-    for (const p of particles) {
-      const a = Math.min(0.999, p.life / 25);
-      p._ab = (a * 4) | 0; // 0-3
-    }
-    const nc = _partColorList.length;
-    for (let ab = 3; ab >= 0; ab--) {
-      ctx.globalAlpha = (ab + 1) / 4;
-      for (let ci = 0; ci < nc; ci++) {
-        let started = false;
-        for (let k = 0; k < particles.length; k++) {
-          const p = particles[k];
-          if (p._ab !== ab || p.ci !== ci) continue;
-          if (!started) { ctx.beginPath(); started = true; }
-          const r = Math.max(0.1, p.r);
-          ctx.moveTo(p.x + r, p.y);
-          ctx.arc(p.x, p.y, r, 0, Math.PI*2);
-        }
-        if (started) { ctx.fillStyle = _partColorList[ci]; ctx.fill(); }
-      }
-    }
-    ctx.globalAlpha=1; ctx.restore();
-  }
+  _drawParticles();
 
   /* BETバー: ボス戦闘中はこんがりゲージに差し替え（同じ位置・寸法を共有） */
   if (!_isBossBattlePhase()) {
@@ -12381,24 +12454,7 @@ function draw() {
   drawSoundTest();
   drawDrumPad();
 
-  /* ── ポーズオーバーレイ ── */
-  if (isPaused) {
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, W, H);
-    /* 実績パネルが開いている間は "PAUSED" テキストを非表示（パネルが全面を覆うため） */
-    if (!showAchievements) {
-      ctx.fillStyle = 'rgba(245,208,32,0.95)';
-      ctx.font = `bold 36px ${FONT_MIN}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('PAUSED', W/2, H/2);
-      ctx.font = '11px sans-serif';
-      ctx.fillStyle = 'rgba(245,208,32,0.4)';
-      ctx.fillText('© 2026 Michiyasu ODAKI', W/2, H - 24);
-    }
-    ctx.restore();
-  }
+  if (isPaused) _drawPauseOverlay();
 
   /* 実績バナー・オーバーレイ（ポーズ暗幕の上に表示） */
   drawAchBanner();
@@ -12407,38 +12463,7 @@ function draw() {
   /* ── 最前面のボタン群（トロフィー・真エンディング再生・全画面・ミュート・ポーズ） ── */
   _drawTopButtons();
 
-  /* ── フィーバー内枠エフェクト: HSL色サイクル＋呼吸パルス ── */
-  if (isFever && phase !== 'startup') {
-    const t   = performance.now();
-    const hue = (t / 20) % 360;                        // 色相サイクル（約7秒で一周）
-    const pulse = 0.7 + 0.3 * Math.sin(t / 260);     // 呼吸（約1.6秒周期、min0.4〜max1.0）
-    const lw  = IS_PORTRAIT ? 5 : 7;
-    ctx.save();
-    ctx.strokeStyle = `hsla(${hue}, 100%, 62%, ${pulse})`;
-    ctx.lineWidth   = lw;
-    ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
-    ctx.restore();
-  }
-
-  /* ── ミュート時ビートパルス: 外枠の太さ変化 ──
-     bgmSourceがある（＝拍位置が実際に進んでいる）ときだけ描くこと。
-     getBeatPulseは_bgmAccumStepの積算に依存し、_bgmAccumStepはbgmSourceが無いと早期return
-     するため、ソースを破棄しているフェーズ（bossVictory / bossVictoryOutro / trueEnding、
-     NO_BGM_SOURCE_PHASES参照）ではパルスが最後の値のまま凍結する。その値が0以外だと
-     半透明の金枠が一定の太さで描かれ続け、外枠の色が変わったように見える
-     （ミュートを切り替えると出たり消えたりするのはこの枠の描画条件そのもの）。
-     実測: ソース破棄の瞬間のpulseが0.9344なら5.6px幅で固定表示され続ける */
-  if (audioMuted && phase !== 'startup' && bgmSource) {
-    const pulse = getBeatPulse();
-    if (pulse > 0) {
-      const lw = pulse * 6; // 最大6px
-      ctx.save();
-      ctx.strokeStyle = _BEAT_BORDER_COLORS[Math.min(31,pulse*31|0)];
-      ctx.lineWidth = lw;
-      ctx.strokeRect(lw / 2, lw / 2, W - lw, H - lw);
-      ctx.restore();
-    }
-  }
+  _drawFrameEffects();
 
   ctx.restore(); // end shake
 
@@ -12452,6 +12477,31 @@ function draw() {
 }
 
 /* ════════════════ 描画関数群 ════════════════ */
+
+/* ── BETの中央ラベル（"BET" ＋ 数字の横並び）──
+   縦横で gap とラベルのフォントサイズだけが違う。合計幅から左端を求めて中央へ置く。
+   数字側はプリレンダ済みOC（_ensureBetTextOC）を貼る。
+   ラベル幅 _cachedBetLabelW は起動時に画面向きのフォントで一度だけ計測してある
+   （_initBetLabelWidth）ので、labelFs を変えるときはそちらも合わせること。
+   -4 は数字OCの左に入る余白ぶんの詰め */
+function _drawBetCenterLabel(cx, cy, gap, labelFs) {
+  ctx.textBaseline = 'middle';
+  const wBet = _cachedBetLabelW;  // 起動時に計測済み
+  const wNum = _cachedBetNumW;    // bet変化時のみ再計測済み
+  const startX = cx - (wBet + gap + wNum) / 2;
+  ctx.fillStyle = Y;
+  ctx.textAlign = 'left';
+  ctx.font = `bold ${labelFs}px ${FONT_MIN}`;
+  ctx.fillText('BET', startX, cy);
+  const oc = _ensureBetTextOC();
+  if (oc) {
+    ctx.drawImage(oc, 0, 0, oc.width, _BET_TEXT_H * _dpr,
+      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, oc.width / _dpr, _BET_TEXT_H);
+  } else {
+    ctx.font = _BET_FONT;
+    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
+  }
+}
 
 /* ── BETボタン描画ヘルパー ── */
 function _drawBetBtn(rect, label, canChange, fontSize) {
@@ -12724,25 +12774,7 @@ function drawBottomBar() {
   _drawBetBtn(BET_DEC_BTN, '◀', canDec, 26);
   _drawBetBtn(BET_INC_BTN, '▶', canInc, 26);
 
-  /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
-  ctx.textBaseline = 'middle';
-  const gap = 10;
-  const wBet = _cachedBetLabelW;  // 事前計測済み
-  const wNum = _cachedBetNumW;    // bet変化時のみ再計測済み
-  const totalW = wBet + gap + wNum;
-  const startX = cx - totalW / 2;
-  ctx.fillStyle = Y;
-  ctx.textAlign = 'left';
-  ctx.font = `bold 28px ${FONT_MIN}`;
-  ctx.fillText('BET', startX, cy);
-  const _bOC = _ensureBetTextOC();
-  if (_bOC) {
-    ctx.drawImage(_bOC, 0, 0, _bOC.width, _BET_TEXT_H * _dpr,
-      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, _bOC.width / _dpr, _BET_TEXT_H);
-  } else {
-    ctx.font = _BET_FONT;
-    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
-  }
+  _drawBetCenterLabel(cx, cy, 10, 28);
 
   /* バージョン表示 */
   ctx.font = '11px monospace';
@@ -12779,26 +12811,7 @@ function drawPortraitBottomBar() {
   _drawBetBtn(decRect, '◀', canDec, 22);
   _drawBetBtn(incRect, '▶', canInc, 22);
 
-  /* 中央: "BET" ＋ 数字 横並び（合計幅で中央揃え） */
-  const cx = W / 2, cy = btnY + btnH / 2;
-  ctx.textBaseline = 'middle';
-  const gap = 8;
-  const wBet = _cachedBetLabelW;  // 事前計測済み
-  const wNum = _cachedBetNumW;    // bet変化時のみ再計測済み
-  const totalW = wBet + gap + wNum;
-  const startX = cx - totalW / 2;
-  ctx.fillStyle = Y;
-  ctx.textAlign = 'left';
-  ctx.font = `bold 24px ${FONT_MIN}`;
-  ctx.fillText('BET', startX, cy);
-  const _bOCp = _ensureBetTextOC();
-  if (_bOCp) {
-    ctx.drawImage(_bOCp, 0, 0, _bOCp.width, _BET_TEXT_H * _dpr,
-      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, _bOCp.width / _dpr, _BET_TEXT_H);
-  } else {
-    ctx.font = _BET_FONT;
-    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
-  }
+  _drawBetCenterLabel(W / 2, btnY + btnH / 2, 8, 24);
 
   /* バージョン */
   ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
@@ -13059,6 +13072,25 @@ function _titleCachePrune() {
 }
 /* outText + shadowBlur 相当をキャッシュ付きで描く。(x,y) はテキスト中心。
    注意: 呼び出し時に ctx.shadowBlur が 0 であること（drawImage にも影が乗るため） */
+/* グロー付きテキストを焼くためのOCを用意する（_outTextCached / _bakeGlowStroke 共通）。
+   テキストを実測し、グローと縁取りがはみ出すぶんの余白を四方に足した大きさで確保して、
+   中央揃え・_dpr スケール済みのコンテキストを返す。
+   余白 glowB*1.6 は shadowBlur の実効的な広がりの目安で、切れると角が四角く落ちる。
+   呼び出し側は返された c に色と影を設定して text を w/2, h/2 へ描く */
+function _mkTextOC(text, font, lw, glowB) {
+  ctx.save(); ctx.font = font;
+  const tw = Math.ceil(ctx.measureText(text).width);
+  ctx.restore();
+  const fs  = parseInt(font.match(/(\d+)px/)[1], 10);
+  const pad = Math.ceil(glowB * 1.6 + lw + 8);
+  const w = tw + pad * 2, h = fs + pad * 2;
+  const oc = _mkCache(w * _dpr, h * _dpr);
+  const c  = oc.getContext('2d');
+  c.scale(_dpr, _dpr);
+  c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+  return { oc, c, w, h };
+}
+
 function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
   if (!_CACHE_OK) {
     ctx.font = font;
@@ -13070,16 +13102,7 @@ function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
   }
   let e = _titleOCCache.get(key);
   if (!e) {
-    ctx.save(); ctx.font = font;
-    const tw = Math.ceil(ctx.measureText(text).width);
-    ctx.restore();
-    const fs  = parseInt(font.match(/(\d+)px/)[1], 10);
-    const pad = Math.ceil(glowB * 1.6 + lw + 8);
-    const w = tw + pad * 2, h = fs + pad * 2;
-    const oc = _mkCache(w * _dpr, h * _dpr);
-    const c  = oc.getContext('2d');
-    c.scale(_dpr, _dpr);
-    c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+    const { oc, c, w, h } = _mkTextOC(text, font, lw, glowB);
     /* outText と同じ順序: 影付き stroke → 影付き fill（グローの重なりを再現） */
     c.shadowColor = glowC; c.shadowBlur = glowB;
     c.lineWidth = lw; c.strokeStyle = stroke;
@@ -13097,17 +13120,8 @@ function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
 /* 超大当たり専用: フィル色がアニメーションするため「グロー+縁取り」だけ焼く。
    shadowOffset トリックで stroke/fill 両方の影のみ抽出し、フィルは毎フレーム上描きする */
 function _bakeGlowStroke(key, text, font, stroke, lw, glowC, glowB) {
-  ctx.save(); ctx.font = font;
-  const tw = Math.ceil(ctx.measureText(text).width);
-  ctx.restore();
-  const fs  = parseInt(font.match(/(\d+)px/)[1], 10);
-  const pad = Math.ceil(glowB * 1.6 + lw + 8);
-  const w = tw + pad * 2, h = fs + pad * 2;
+  const { oc, c, w, h } = _mkTextOC(text, font, lw, glowB);
   const OFF = 4096; // 本体を画面外へ追い出して影だけスプライト内に落とす
-  const oc = _mkCache(w * _dpr, h * _dpr);
-  const c  = oc.getContext('2d');
-  c.scale(_dpr, _dpr);
-  c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
   c.shadowColor = glowC; c.shadowBlur = glowB; c.shadowOffsetX = OFF;
   c.lineWidth = lw; c.strokeStyle = stroke;
   c.strokeText(text, w / 2 - OFF, h / 2);
@@ -13846,8 +13860,9 @@ function drawStartup() {
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
     ctx.fillText('「ギヨウザ」のパッケージを', W / 2, cy + 14);
     ctx.fillText('モチーフにしたルーレットゲーム', W / 2, cy + 34);
-    /* スタートボタン */
-    const bx = W/2 - 120, by = cy + 68, bw = 240, bh = 52;
+    /* スタートボタン。矩形は必ず STARTUP_BTN（ヒット判定と同じ値）から取ること。
+       ここで座標を直書きすると、STARTUP_BTN を動かしたときに見た目と当たり判定がずれる */
+    const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
     ctx.globalAlpha = 0.75 + 0.25 * pulse;
     roundRect(bx, by, bw, bh, 10);
     ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
