@@ -537,7 +537,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.53';
+const VERSION = 'v7.54';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4190,6 +4190,25 @@ function _drawPressFlash(rect, r = 6) {
 function _drawPressFlashPath(rect, path) {
   const k = _pressLevel(rect);
   if (k > 0) _drawFlashPath(k, path);
+}
+/* 円いボタン（ドラムパッドのジョグ）用。矩形の当たり判定を流用すると、
+   円の外側にある四隅を押しても光ってしまう。
+   走査を_pressLevelと共有しないのは、当たり判定を関数で渡す形にすると
+   押されていない間もフレームごとに無名関数を作ることになるため */
+function _pressLevelCircle(cx, cy, r) {
+  if (_presses.length === 0) return 0;
+  const now = performance.now();
+  let best = 0;
+  for (let i = _presses.length - 1; i >= 0; i--) {
+    const p = _presses[i];
+    const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
+    if (k > best && Math.hypot(p.x - cx, p.y - cy) <= r) best = k;
+  }
+  return best;
+}
+function _drawPressFlashCircle(cx, cy, r) {
+  const k = _pressLevelCircle(cx, cy, r);
+  if (k > 0) _drawFlashPath(k, () => { ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); });
 }
 /* ポーズ中はrAFが止まっていて光が減衰しないため、押下が残っている間だけ
    draw()の末尾から次のフレームを取りに行く */
@@ -11080,6 +11099,7 @@ const DP_PAD_GAP = 8;
    パッドだけフレームで数えるのは、光が「発音」に紐づいていて映像が進んでいない間は
    消えないほうが正しいため（_dpDrawPads は再生中の自動発光にも同じ光を使う） */
 const DP_FLASH_FRAMES = Math.round(BTN_PRESS_FLASH_SEC * 60);
+const DP_JOG_BEZEL = 7;        // ジョグ外周の縁の幅（当たり判定もここまで）
 const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
 const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量の基準（左2列は逆回り。_dpHit参照）
 const DP_JOG_REF_DUR = 0.22;   // 回し量の基準になる音長（普通の打点1発ぶん）
@@ -11213,7 +11233,7 @@ function _dpBuildLayout() {
   /* ジョグ（丸ロゴ）はこの画面の主役。SP-404の上部ディスプレイくらいの
      存在感が要るので、パネルの高さはロゴの直径で決まる大きさにする */
   const jr = wide ? 104 : 78;
-  const jogD = (jr + 7) * 2;
+  const jogD = (jr + DP_JOG_BEZEL) * 2;
   const lcdH = wide ? 60 : 58;
   const ctlH = 26, ctlGap = 6;   // ルーパー操作ボタンの行（LCDとジョグの間）
   const headH = 34;   // 銘板（機種名の2行）が入る最上段の高さ
@@ -11273,6 +11293,7 @@ function _dpBuildLayout() {
            plate, lcd, ctls, jog, body, size,
            flash: new Float32Array(DRUM_PADS.length),
            lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0,
+           tap: { last: 0, iv: [] },   // タップテンポの系列（_dpTapTempo参照）
            loop: _dpLoopNew() };
 }
 
@@ -11342,6 +11363,13 @@ const DP_SLOTS_PER_BEAT = 480;
    鳴らないよう上限を置く */
 const DP_LATE_TOL_SEC  = 0.12;
 const DP_BPM_MIN = 40, DP_BPM_MAX = 200, DP_BPM_STEP = 1;
+/* タップテンポ（ジョグを叩いた間隔からBPMを決める）。
+   間隔が空いたら別の系列として数え直す。区切りは最小BPMの1拍(40BPM=1500ms)より
+   長く取らないと、ゆっくり叩いているだけで毎回1打目に戻ってしまう */
+const DP_TAP_TIMEOUT_MS = 2000; // これ以上空いたら系列の切れ目
+const DP_TAP_MIN_MS     = 150;  // これより短い間隔は捨てる（400BPM相当。同時押しの二重発火よけを兼ねる）
+const DP_TAP_KEEP       = 8;    // 平均に使う間隔の本数（4/4で2小節ぶん）
+const DP_TAP_OUTLIER    = 0.5;  // 平均から±50%外れた間隔は打ち直しとみなす
 /* TEMPO±の長押し。1押し1BPMだと40→200に160回かかるので、押しっぱなしで
    連続変化させる。押した直後は動かさず（単押しと区別）、しばらくすると
    ゆっくり流れ、さらに押し続けると加速する */
@@ -11554,9 +11582,15 @@ function _dpLoopTick() {
      次の周の記録に落ちる。その1〜2発が次の切り替わりでtakeを置き換えてしまい、
      「打ち込んだのに1音しか入らない」状態になる */
   if (L.rec) {
+    /* 周の境目はスロット割りで決まるのでテンポには依らないが、ここでは秒に直して
+       数えている。テンポを変えると head を置き直すぶん境目の時刻がずれ、
+       **既に跨いだ境目がもう一度未来に現れる**ことがある(最大でも先読みの長さぶん)。
+       周回番号を戻さない（増えたときだけ進める）ことで、ひとつの境目で
+       録りかけ(take)が二度確定するのを防ぐ。番号を数え直して控え直す方法では、
+       跨ぎ直しそのものは止められない */
     const kNow = Math.floor((now - L.head) / _dpLoopDur(L));
-    if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
-    L.lastK = kNow;
+    if (L.lastK === null) L.lastK = kNow;
+    else if (kNow > L.lastK) { _dpLoopPromote(L); L.lastK = kNow; }
     /* **録音中は次の周へ踏み込まない。**
        録りかけ(take)の中身が決まるのは周の境目（_dpLoopPromote）なので、境目より先を
        予約すると「まだ決まっていないもの」を予約することになる。しかもカーソルは
@@ -11565,7 +11599,7 @@ function _dpLoopTick() {
        重ね録りで土台のレイヤーがまばらな場合、カーソルは次の音まで一気に飛ぶため、
        打ち込んだシーケンスの冒頭が数拍ぶん丸ごと落ちる（次の周からは正しく鳴る）。
        境目で頭打ちにすれば、次の周の予約は必ず promote のあとになる */
-    until = Math.min(until, L.head + (kNow + 1) * _dpLoopDur(L));
+    until = Math.min(until, L.head + (L.lastK + 1) * _dpLoopDur(L));
   }
   /* 遅れたぶんは DP_LATE_TOL_SEC までさかのぼって拾う（それ以上は捨てる） */
   const minSlot = Math.ceil((now - DP_LATE_TOL_SEC - L.head) / slotDur);
@@ -11683,9 +11717,11 @@ function _dpLoopClear() {
 
 /* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
    （拍で記録しているのでパターンはそのまま伸び縮みする） */
-function _dpLoopSetBpm(delta) {
+/* BPMを決める唯一の入口（TEMPO±もタップテンポもここを通す）。
+   再生中の置き換えは繊細で、別経路で書き直すと下に書いた欠陥が再発する */
+function _dpLoopApplyBpm(bpm) {
   const L = _dp.loop;
-  const next = Math.max(DP_BPM_MIN, Math.min(DP_BPM_MAX, L.bpm + delta));
+  const next = Math.max(DP_BPM_MIN, Math.min(DP_BPM_MAX, Math.round(bpm)));
   if (next === L.bpm) return;
   if (L.playing && audioCtx) {
     /* **カーソル(schedSlot)は動かさない。** スロットは head からの拍数であって秒ではないので、
@@ -11703,9 +11739,43 @@ function _dpLoopSetBpm(delta) {
     const schedUntil = L.head + L.schedSlot * _dpSlotDur(L);
     L.bpm = next;
     L.head = schedUntil - L.schedSlot * _dpSlotDur(L);
+    /* head が動くと、既に跨いだ周の境目が未来へ移ることがある（_dpLoopTick の
+       周回番号の扱いを参照）。境目の位置そのものが変わるのは避けられないので、
+       二度跨いでも二度確定しない側で受ける */
   } else {
     L.bpm = next;
   }
+}
+function _dpLoopSetBpm(delta) { _dpLoopApplyBpm(_dp.loop.bpm + delta); }
+
+/* タップテンポ。ジョグを叩いた間隔の平均からBPMを決める。
+   2打目から反映し、以降は叩くたびに平均を取り直して寄せていく。
+
+   時刻は**実時間**で測る。測っているのは指の間隔であって音の時刻ではないので
+   audio clock は使わない。フレームカウンタも使えない（rAFが止まる場面がある）。
+   入力イベントの発生時刻をそのまま受け取るのは、ハンドラへ届くまでの遅延の
+   **ばらつき**がそのままBPMの誤差になるため（一定ぶんの遅れは間隔で相殺される）。
+
+   倍・半分への折り返しはしない。系列の切れ目が2秒なので30BPM未満は元々入らず、
+   意図してゆっくり叩いたときに勝手に倍テンポへ飛ぶほうが害が大きい */
+function _dpTapTempo(atMs) {
+  const T = _dp.tap;
+  const gap = atMs - T.last;
+  T.last = atMs;
+  if (gap < DP_TAP_MIN_MS) return;                     // 同時押し・二度打ちは1打に潰す
+  if (gap > DP_TAP_TIMEOUT_MS) { T.iv = []; return; }  // 系列の切れ目。1打目は起点にするだけ
+  if (T.iv.length) {
+    const mean = T.iv.reduce((a, b) => a + b, 0) / T.iv.length;
+    if (Math.abs(gap - mean) > mean * DP_TAP_OUTLIER) T.iv = []; // 別のテンポで叩き直した
+  }
+  T.iv.push(gap);
+  if (T.iv.length > DP_TAP_KEEP) T.iv.shift();
+  _dpLoopApplyBpm(60000 / (T.iv.reduce((a, b) => a + b, 0) / T.iv.length));
+}
+/* タップの系列が生きているか（LCDの表示を切り替える条件） */
+function _dpTapLive() {
+  const T = _dp && _dp.tap;
+  return !!(T && T.iv.length && performance.now() - T.last < DP_TAP_TIMEOUT_MS);
 }
 
 /* 小節数の切り替え。**打ち込みには一切触れない**。
@@ -11773,7 +11843,7 @@ function _dpHit(i) {
   }
 }
 
-function _drumPadTouch(x, y) {
+function _drumPadTouch(x, y, inputPerfMs) {
   if (!_dp) return;
   if (hitTest(DP_BACK_BTN, x, y)) { _exitDrumPad(); return; }
   if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
@@ -11787,6 +11857,18 @@ function _drumPadTouch(x, y) {
     if (c.id === 'bpmDn') { _dpLoopSetBpm(-DP_BPM_STEP); _dpHoldBegin(-DP_BPM_STEP, c); }
     if (c.id === 'bars')  _dpLoopCycleBars();
     if (c.id === 'quant') _dpLoopCycleQuant();
+    return;
+  }
+  /* ジョグ（丸ロゴ）はタップテンポの入力。円で判定するのは、外接矩形で取ると
+     円の外の四隅を叩いても効いてしまうため */
+  const J = _dp.jog;
+  if (Math.hypot(x - J.x, y - J.y) <= J.r + DP_JOG_BEZEL) {
+    _dpTapTempo(inputPerfMs !== undefined ? inputPerfMs : performance.now());
+    /* 押した側へ回す（実物のプラッタを手で押したときの動き）。
+       量は位置によらず1打ぶんで固定にする。中心からの距離に比例させると
+       中心付近を狙う人には手応えがほとんど返らない。タップは音を鳴らさないので、
+       返す反応の強さは叩いた場所によらず一定であるべき */
+    _dp.jogSpin += (x < J.x ? -1 : 1) * DP_JOG_KICK;
     return;
   }
   for (const p of _dp.pads) if (hitTest(p, x, y)) { _dpHit(p.idx); return; }
@@ -11869,10 +11951,14 @@ function _dpDrawLcd(o) {
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
-  ctx.fillText(o.lastTag ? `VOICE / ${o.lastTag}` : 'VOICE', L.x + 10, L.y + 17);
+  /* タップ中は大きい行をBPMに明け渡す。停止中のタップは音が鳴らないので、
+     指を置いているジョグの傍で数字が追えないと、テンポが動いたか分からない。
+     直前に鳴らしたパッド名を見ている場面ではないので、隠しても困らない */
+  const tapping = _dpTapLive();
+  ctx.fillText(tapping ? 'TAP TEMPO' : o.lastTag ? `VOICE / ${o.lastTag}` : 'VOICE', L.x + 10, L.y + 17);
   ctx.font = `bold ${L.h >= 60 ? 26 : 22}px sans-serif`;
   ctx.fillStyle = '#9ff2a8';
-  ctx.fillText(o.lastName || '- - -', L.x + 10, L.y + L.h - 12);
+  ctx.fillText(tapping ? `${LP.bpm} BPM` : (o.lastName || '- - -'), L.x + 10, L.y + L.h - 12);
   ctx.textAlign = 'right';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = LP.rec ? '#ff8a7a' : 'rgba(159,242,168,0.55)';
@@ -11915,9 +12001,9 @@ function _dpDrawCtls(o) {
 function _dpDrawJog(o) {
   const J = o.jog, LP = o.loop;
   ctx.fillStyle = '#0a1109';
-  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + DP_JOG_BEZEL, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.35)'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(J.x, J.y, J.r + DP_JOG_BEZEL, 0, Math.PI * 2); ctx.stroke();
   if (LP.playing && audioCtx) {
     const bp = _dpBeatsPerLoop(LP), pos = _dpLoopBeatPos(LP);
     /* 小節の区切りを目盛りで出す（何小節のパターンかが一目で分かる） */
@@ -11932,10 +12018,16 @@ function _dpDrawJog(o) {
     ctx.strokeStyle = LP.rec ? '#e0483c' : Y;
     ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(J.x, J.y, J.r + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / bp));
+    ctx.arc(J.x, J.y, J.r + DP_JOG_BEZEL, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / bp));
     ctx.stroke();
   }
   _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
+  _drawPressFlashCircle(J.x, J.y, J.r + DP_JOG_BEZEL);
+  /* 叩けることを示す銀板の印字。ジョグ上の空きに置く */
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `9px sans-serif`;
+  ctx.fillStyle = 'rgba(245,208,32,0.45)';
+  ctx.fillText('TAP TEMPO', J.x, J.y - (J.r + DP_JOG_BEZEL) - 7);
 }
 
 /* パッド（焼き込み済みを転写し、叩いた光だけ上に重ねる） */
@@ -14621,7 +14713,7 @@ function _handleTopButtons(x, y) {
    isTouch: STARTと真エンディング再生をtouchendへ回すか（iOS都合。_onTouchStart参照） */
 function _handleGameButtons(x, y, inputPerfMs, isTouch) {
   if (phase === 'soundTest') { _soundTestClick(x, y); return; }
-  if (phase === 'drumPad')   { _drumPadTouch(x, y); return; }
+  if (phase === 'drumPad')   { _drumPadTouch(x, y, inputPerfMs); return; }
   if (phase === 'startup') {
     if (hitTest(ACH_TROPHY, x, y)) { showAchievements = !showAchievements; return; }
     if (trueEndingSeen && hitTest(TRUE_ENDING_BTN, x, y)) {
@@ -14724,7 +14816,7 @@ function _onTouchStart(e) {
   if (phase === 'drumPad') {
     for (const tc of e.changedTouches) {
       const q = touchToCanvas(tc);
-      _drumPadTouch(q.x, q.y);
+      _drumPadTouch(q.x, q.y, inputPerfMs);
     }
     return;
   }
