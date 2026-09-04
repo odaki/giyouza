@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.43';
+const VERSION = 'v7.44';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1987,6 +1987,12 @@ function _scheduleBossBgmRenders(immediate = false) {
     _bossBgmNextTier === 0 ? (near ? _BOSS_BGM_NEAR_DELAY_MS : _BOSS_BGM_FIRST_DELAY_MS)
                            : _BOSS_BGM_GAP_MS);
 }
+
+/* AudioContext は最初のユーザーアクティベーション（touchstart / mousedown / keydown）内で
+   生成する。ジェスチャー内の new AudioContext() は iOS が即 running にするため、
+   ページロード時生成（suspended → 2タップ必要）の問題を回避できる。
+   renderBGMBuffer() はジングル（約5.7秒）より先に完了するため BGM 再生に間に合う。
+   _unlockAudio() / _onFirstGesture() / 各ボタンハンドラが初回ジェスチャーで呼ぶ。 */
 
 function getAudioCtx() {
   if (!audioCtx) {
@@ -14025,107 +14031,108 @@ function _gameLoop(t) {
 }
 _rafId = requestAnimationFrame(_gameLoop);
 
-/* AudioContext は最初のユーザーアクティベーション（touchstart / mousedown / keydown）内で
-   生成する。ジェスチャー内の new AudioContext() は iOS が即 running にするため、
-   ページロード時生成（suspended → 2タップ必要）の問題を回避できる。
-   renderBGMBuffer() はジングル（約5.7秒）より先に完了するため BGM 再生に間に合う。
-   _unlockAudio() / _onFirstGesture() / 各ボタンハンドラが初回ジェスチャーで呼ぶ。 */
+/* ポーズ突入: 描画と音を止め、復帰に必要な位置・時刻を控える。
+   AudioContext自体は動かし続ける（iOS Safari: audioCtx.suspend()禁止） */
+function _enterPause() {
+  cancelAnimationFrame(_rafId);
+  /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
+     逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
+  _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
+  _kingSeqFlush(); // キング戦の再生予約を畳む（_kingSeqFlush の定義部参照）
+  /* ポーズ中はrAFを止めるので stall の計測が止まる。バックグラウンド→他アプリ→
+     復帰はこの区間で起きるため、突入時の時計を控えて解除時に突き合わせる
+     （_markPauseCtxClock / _foldPauseCtxStall 参照） */
+  _markPauseCtxClock();
+  /* BGM・ジングル・restartタイマーを一括停止し再生位置を記録する。
+     AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
+     ジングル中(bgmSource=null)でもここで止めることで、サスペンド状態のコンテキストで
+     ジングルが完了してstartBGM()が呼ばれる競合を防ぐ。 */
+  if (audioCtx) {
+    if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
+    stopJingle(); // ジングル中ポーズ: バックグラウンドで走り続けてstartBGMを呼ぶのを防ぐ
+    /* bgmSource があれば現在位置を保存、なければ先頭(0)から再開 */
+    _pauseBgmPos  = bgmSource ? _bgmAccumAudioTime : 0;
+    _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
+    _destroyBGMSource(_GAIN_RAMP_SEC); // 段差を作らずに止める（上記参照）
+  }
+  applyMuteGain();
+  draw(); // オーバーレイを即座に描画
+}
+
+/* ポーズ解除: 控えておいた位置・時刻から描画と音を復帰させる */
+function _exitPause() {
+  if (_arrowProgressAtPause >= 0 && phase === 'shooting') {
+    _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
+    _arrowProgressAtPause = -1;
+  }
+  /* ポーズ中にAudioContextが死んでいないかを、突入時の時計と突き合わせて判定する。
+     _resumeAudioCtx がこの結果を見て再作成するかを決める */
+  _foldPauseCtxStall();
+  _rafId = requestAnimationFrame(_gameLoop);
+  if (audioCtx) {
+    const _doResumeBGM = () => {
+      /* masterGain 経由でサイレントバッファを再生して AVAudioSession をアクティブ化する */
+      try {
+        const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        const _s = audioCtx.createBufferSource();
+        _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
+      } catch(_e) {}
+      applyMuteGain();
+      _beatPulseCacheFrame = -1;
+      /* bossVictory（勝利ファンファーレでbgmSourceを破棄済み）・trueEnding（専用
+         オシレーターテーマのみでbgmSource自体を使わない）は、ポーズ解除してもBGMループを
+         再開してはいけないフェーズ。
+         phaseを見ずに_bgmIsBossの値だけでバッファを選んで再生すると、これらのフェーズ中に
+         ポーズ→解除したときに（直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
+         鳴り出す（NO_BGM_SOURCE_PHASES参照） */
+      /* 同じ理由でサウンドテスト・ドラムパッドも除外する。これらはPAUSEの
+         対象外だが、画面回転で入ったPAUSEをフォアグラウンド復帰で自動解除する
+         経路（_autoPauseExempt参照）があり、そこからここへ来られる */
+      if (_noAutoBgmPhase()) return;
+      /* ポーズ時に鳴っていたのがボスBGM（暗黒版バッファ）だった場合は、
+         再開後もボス用バッファを使い回す（_bgmIsBoss参照）。
+         これを省略すると _createBGMSource() のデフォルト引数（通常バッファ）が
+         使われてしまい、ボス戦中にポーズ→再開すると音色が通常BGMに戻ってしまう。
+         地鳴りの現在の段階（_bossBgmTier）も維持し、ポーズ→再開で
+         マイルド化が振り出しに戻らないようにする（水平展開） */
+      const _resumeBgmBuf = _currentBgmBuffer();
+      if (!_resumeBgmBuf) { return; }
+      /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
+      setTimeout(() => {
+        if (isPaused || NO_BGM_SOURCE_PHASES.has(phase)) return;
+        _destroyBGMSource();
+        /* 再生位置(offset)を求めるループ長は、これから鳴らすバッファ自身から
+           決める（グローバルの_bgmIsBossを見に行かない）。ボスのループ長は
+           通常と異なるため、ここが実際のバッファと食い違うと
+           再開位置がずれる。_createBGMSource側も同じくbufferから導出するので、
+           両者が同じ根拠で必ず一致する */
+        const _resumeIsBoss = (_resumeBgmBuf !== bgmBuffer);
+        const _quant  = _resumeIsBoss ? _bgmQuantizedLoopDurBoss : _bgmQuantizedLoopDur;
+        const loopDur = _quant > 0 ? _quant : (_resumeIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR);
+        const offset  = _pauseBgmPos % loopDur;
+        const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf);
+        if (src) {
+          const t = audioCtx.currentTime;
+          src.start(t, offset);
+          bgmPhaseRef = t - _pauseBgmPos;
+          _bgmAccumLastWall = t;
+          _bgmAccumLastPerf = performance.now() / 1000;
+          /* 再開位置(offset)の波形の値は0とは限らないため、いきなり音量1で
+             鳴らし始めると段差になる。数msで立ち上げて段差を消す */
+          bgmGain.gain.cancelScheduledValues(t);
+          bgmGain.gain.setValueAtTime(0, t);
+          bgmGain.gain.linearRampToValueAtTime(1, t + _GAIN_RAMP_SEC);
+        }
+      }, 100);
+    };
+    _resumeAudioCtx(_doResumeBGM);
+  }
+}
 
 function togglePause() {
   if (phase === 'startup') return;
   isPaused = !isPaused;
-  if (isPaused) {
-    cancelAnimationFrame(_rafId);
-    /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
-       逆算して再設定することで performance.now() の経過でarrowProgressが飛び過ぎるのを防ぐ */
-    _arrowProgressAtPause = (phase === 'shooting') ? arrowProgress : -1;
-    _kingSeqFlush(); // キング戦の再生予約を畳む（_kingSeqFlush の定義部参照）
-    /* ポーズ中はrAFを止めるので stall の計測が止まる。バックグラウンド→他アプリ→
-       復帰はこの区間で起きるため、突入時の時計を控えて解除時に突き合わせる
-       （_markPauseCtxClock / _foldPauseCtxStall 参照） */
-    _markPauseCtxClock();
-    /* BGM・ジングル・restartタイマーを一括停止し再生位置を記録する。
-       AudioContextは動かし続ける（iOS Safari: audioCtx.suspend()禁止）。
-       ジングル中(bgmSource=null)でもここで止めることで、サスペンド状態のコンテキストで
-       ジングルが完了してstartBGM()が呼ばれる競合を防ぐ。 */
-    if (audioCtx) {
-      if (bgmRestartTimer) { clearTimeout(bgmRestartTimer); bgmRestartTimer = null; }
-      stopJingle(); // ジングル中ポーズ: バックグラウンドで走り続けてstartBGMを呼ぶのを防ぐ
-      /* bgmSource があれば現在位置を保存、なければ先頭(0)から再開 */
-      _pauseBgmPos  = bgmSource ? _bgmAccumAudioTime : 0;
-      _pauseBgmRate = bgmSource ? _bgmRateTo : 1.0;
-      _destroyBGMSource(_GAIN_RAMP_SEC); // 段差を作らずに止める（上記参照）
-    }
-    applyMuteGain();
-    draw(); // オーバーレイを即座に描画
-  } else {
-    if (_arrowProgressAtPause >= 0 && phase === 'shooting') {
-      _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
-      _arrowProgressAtPause = -1;
-    }
-    /* ポーズ中にAudioContextが死んでいないかを、突入時の時計と突き合わせて判定する。
-       _resumeAudioCtx がこの結果を見て再作成するかを決める */
-    _foldPauseCtxStall();
-    _rafId = requestAnimationFrame(_gameLoop);
-    if (audioCtx) {
-      const _doResumeBGM = () => {
-        /* masterGain 経由でサイレントバッファを再生して AVAudioSession をアクティブ化する */
-        try {
-          const _b = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-          const _s = audioCtx.createBufferSource();
-          _s.buffer = _b; _s.connect(masterGain); _s.start(audioCtx.currentTime);
-        } catch(_e) {}
-        applyMuteGain();
-        _beatPulseCacheFrame = -1;
-        /* bossVictory（勝利ファンファーレでbgmSourceを破棄済み）・trueEnding（専用
-           オシレーターテーマのみでbgmSource自体を使わない）は、ポーズ解除してもBGMループを
-           再開してはいけないフェーズ。
-           phaseを見ずに_bgmIsBossの値だけでバッファを選んで再生すると、これらのフェーズ中に
-           ポーズ→解除したときに（直前の_bgmIsBossの値次第で）通常BGMまたはボスBGMが誤って
-           鳴り出す（NO_BGM_SOURCE_PHASES参照） */
-        /* 同じ理由でサウンドテスト・ドラムパッドも除外する。これらはPAUSEの
-           対象外だが、画面回転で入ったPAUSEをフォアグラウンド復帰で自動解除する
-           経路（_autoPauseExempt参照）があり、そこからここへ来られる */
-        if (_noAutoBgmPhase()) return;
-        /* ポーズ時に鳴っていたのがボスBGM（暗黒版バッファ）だった場合は、
-           再開後もボス用バッファを使い回す（_bgmIsBoss参照）。
-           これを省略すると _createBGMSource() のデフォルト引数（通常バッファ）が
-           使われてしまい、ボス戦中にポーズ→再開すると音色が通常BGMに戻ってしまう。
-           地鳴りの現在の段階（_bossBgmTier）も維持し、ポーズ→再開で
-           マイルド化が振り出しに戻らないようにする（水平展開） */
-        const _resumeBgmBuf = _currentBgmBuffer();
-        if (!_resumeBgmBuf) { return; }
-        /* BGM再起動を100ms遅らせてiOSのAudio Sessionが完全に安定してから音を出す */
-        setTimeout(() => {
-          if (isPaused || NO_BGM_SOURCE_PHASES.has(phase)) return;
-          _destroyBGMSource();
-          /* 再生位置(offset)を求めるループ長は、これから鳴らすバッファ自身から
-             決める（グローバルの_bgmIsBossを見に行かない）。ボスのループ長は
-             通常と異なるため、ここが実際のバッファと食い違うと
-             再開位置がずれる。_createBGMSource側も同じくbufferから導出するので、
-             両者が同じ根拠で必ず一致する */
-          const _resumeIsBoss = (_resumeBgmBuf !== bgmBuffer);
-          const _quant  = _resumeIsBoss ? _bgmQuantizedLoopDurBoss : _bgmQuantizedLoopDur;
-          const loopDur = _quant > 0 ? _quant : (_resumeIsBoss ? BGM_LOOP_DUR_BOSS : BGM_LOOP_DUR);
-          const offset  = _pauseBgmPos % loopDur;
-          const src     = _createBGMSource(_pauseBgmRate, _resumeBgmBuf);
-          if (src) {
-            const t = audioCtx.currentTime;
-            src.start(t, offset);
-            bgmPhaseRef = t - _pauseBgmPos;
-            _bgmAccumLastWall = t;
-            _bgmAccumLastPerf = performance.now() / 1000;
-            /* 再開位置(offset)の波形の値は0とは限らないため、いきなり音量1で
-               鳴らし始めると段差になる。数msで立ち上げて段差を消す */
-            bgmGain.gain.cancelScheduledValues(t);
-            bgmGain.gain.setValueAtTime(0, t);
-            bgmGain.gain.linearRampToValueAtTime(1, t + _GAIN_RAMP_SEC);
-          }
-        }, 100);
-      };
-      _resumeAudioCtx(_doResumeBGM);
-    }
-  }
+  if (isPaused) _enterPause(); else _exitPause();
 }
 
 function onShoot(_inputPerfMs){
