@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.42';
+const VERSION = 'v7.43';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11028,16 +11028,12 @@ function _dpBuildPadSprite(pad, size) {
   const oc = _mkCache(size * _dpr, size * _dpr);
   const c = oc.getContext('2d');
   c.scale(_dpr, _dpr);
-  const g = c.createLinearGradient(0, 0, 0, size);
-  g.addColorStop(0, '#2b3f34');
-  g.addColorStop(0.55, '#1d2c24');
-  g.addColorStop(1, '#131e18');
-  c.fillStyle = g;
-  _dpRoundPath(c, 1, 1, size - 2, size - 2, 10); c.fill();
-  c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 1.5;
-  _dpRoundPath(c, 3, 3, size - 6, size - 6, 8); c.stroke();
-  c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 1;
-  _dpRoundPath(c, 0.5, 0.5, size - 1, size - 1, 10); c.stroke();
+  /* 面の色と描き順は操作ボタンと共通（_dpDrawFace）。輪郭はパッド固有の寸法で引く */
+  _dpDrawFace(c, 0, size, {
+    fill:  () => _dpRoundPath(c, 1,   1,   size - 2, size - 2, 10),
+    bevel: () => _dpRoundPath(c, 3,   3,   size - 6, size - 6, 8),
+    edge:  () => _dpRoundPath(c, 0.5, 0.5, size - 1, size - 1, 10),
+  });
   c.textAlign = 'center'; c.textBaseline = 'middle';
   c.font = `bold ${Math.round(size * 0.155)}px sans-serif`;
   c.fillStyle = 'rgba(245,208,32,0.92)';
@@ -11584,19 +11580,43 @@ function _updateDrumPad() {
   if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
 }
 
-function drawDrumPad() {
-  if (phase !== 'drumPad' || !_dp) return;
-  const o = _dp;
-  ctx.save();
-  /* 筐体 */
+/* パッド・操作ボタンに共通の「面」の作り: 上が明るく下が暗い縦グラデ＋内側の白ベベル＋
+   外側の影。16パッドと6つの操作ボタンで同じ族に見せるため、色と描き順をここに集約する
+   （別々に書くとどちらかを触ったときに揃わなくなる）。
+   path は3層ぶんの輪郭を引く関数の組 {fill, bevel, edge}。パッドと操作ボタンでは
+   面の形も各層のオフセットも違う（パッドは角丸長方形、操作ボタンはロゴの左右で形が変わる
+   多角形＝_dpBtnPoly参照）ので、幾何は呼び出し側が持ち、共通なのは色と描き順だけにする。
+   tone: 'off'=消灯 / 'on'=点灯（金）/ 'rec'=録音中（赤） */
+const DP_FACE_TONES = {
+  off: ['#2b3f34', '#1d2c24', '#131e18'],
+  on:  ['#d9b23a', '#b08c14', '#7d6205'],
+  rec: ['#d8564a', '#b32e22', '#7d1d15'],
+};
+function _dpDrawFace(c, y, h, path, tone = 'off') {
+  const col = DP_FACE_TONES[tone];
+  const g = c.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, col[0]); g.addColorStop(0.55, col[1]); g.addColorStop(1, col[2]);
+  c.lineJoin = 'round';
+  c.fillStyle = g;
+  path.fill(); c.fill();
+  c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 1.5;
+  path.bevel(); c.stroke();
+  c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 1;
+  path.edge(); c.stroke();
+}
+
+/* 筐体（背景＋パネルの外枠） */
+function _dpDrawBody(o) {
   ctx.fillStyle = '#0b120e';
   ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#101b15';
   roundRect(o.body.x, o.body.y, o.body.w, o.body.h, 12); ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.30)'; ctx.lineWidth = 1;
   roundRect(o.body.x, o.body.y, o.body.w, o.body.h, 12); ctx.stroke();
+}
 
-  /* 銘板（機種名のみ。ロゴはジョグで大きく見せるので重ねて出さない） */
+/* 銘板（機種名のみ。ロゴはジョグで大きく見せるので重ねて出さない） */
+function _dpDrawPlate(o) {
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.font = `bold 13px sans-serif`;
   ctx.fillStyle = Y;
@@ -11604,15 +11624,15 @@ function drawDrumPad() {
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(245,208,32,0.45)';
   ctx.fillText('TR / TB DRUM PADS', o.plate.x, o.plate.y + 7);
+}
 
-  /* LCD窓（最後に叩いた音色） */
-  const L = o.lcd;
+/* LCD窓。左に最後に叩いた音色、右にループの状態（状態名／テンポ・レイヤー数） */
+function _dpDrawLcd(o) {
+  const L = o.lcd, LP = o.loop;
   ctx.fillStyle = '#0a2413';
   roundRect(L.x, L.y, L.w, L.h, 5); ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 2;
   roundRect(L.x, L.y, L.w, L.h, 5); ctx.stroke();
-  const LP = o.loop;
-  const _lpState = LP.rec ? 'REC' : LP.playing ? 'PLAY' : 'STOP';
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
@@ -11620,54 +11640,47 @@ function drawDrumPad() {
   ctx.font = `bold ${L.h >= 60 ? 26 : 22}px sans-serif`;
   ctx.fillStyle = '#9ff2a8';
   ctx.fillText(o.lastName || '- - -', L.x + 10, L.y + L.h - 12);
-  /* 右側はループの状態: 状態名／長さ・レイヤー数 */
   ctx.textAlign = 'right';
   ctx.font = `9px sans-serif`;
   ctx.fillStyle = LP.rec ? '#ff8a7a' : 'rgba(159,242,168,0.55)';
-  ctx.fillText(_lpState, L.x + L.w - 10, L.y + 17);
+  ctx.fillText(LP.rec ? 'REC' : LP.playing ? 'PLAY' : 'STOP', L.x + L.w - 10, L.y + 17);
   ctx.fillStyle = 'rgba(159,242,168,0.55)';
   ctx.fillText(`${LP.bpm}BPM  x${LP.layers.length}`, L.x + L.w - 10, L.y + L.h - 12);
+}
 
-  /* 操作ボタン。実機の面ボタンと同じ族に見えるよう、パッドと同じ作り
-     （上が明るく下が暗い縦グラデ＋内側の白ベベル＋外側の影）を小さく作る。
-     角丸は小さめ（楕円のピルにはしない）。
-     REC（録音中）とCLICK（ON）は点いた状態を持つ */
-  const _hasPat = _dpLoopHasPattern(LP);
+/* 操作ボタン。REC（録音中）・CLICK（ON）・Q（ON）は点いた状態を持ち、
+   UNDO/CLEAR は打ち込みが無いとき暗くする（押しても効かないことを見せる） */
+function _dpDrawCtls(o) {
+  const LP = o.loop;
+  const hasPat = _dpLoopHasPattern(LP);
   for (const c of o.ctls) {
-    const on  = (c.id === 'rec' && LP.rec) || (c.id === 'click' && LP.click) ||
-                (c.id === 'quant' && LP.quant > 0);
-    const red = (c.id === 'rec' && LP.rec);
-    const live = (c.id === 'undo' || c.id === 'clear') ? _hasPat : true;
-    /* 面の作りは16パッドと同じ（上が明るく下が暗い縦グラデ＋内側の白ベベル＋
-       外側の影）。形だけがロゴの左右で変わる（_dpBtnPoly参照） */
-    const g = ctx.createLinearGradient(0, c.y, 0, c.y + c.h);
-    if (red)      { g.addColorStop(0, '#d8564a'); g.addColorStop(0.55, '#b32e22'); g.addColorStop(1, '#7d1d15'); }
-    else if (on)  { g.addColorStop(0, '#d9b23a'); g.addColorStop(0.55, '#b08c14'); g.addColorStop(1, '#7d6205'); }
-    else          { g.addColorStop(0, '#2b3f34'); g.addColorStop(0.55, '#1d2c24'); g.addColorStop(1, '#131e18'); }
-    const face = inset => c.shape
+    const on   = (c.id === 'rec' && LP.rec) || (c.id === 'click' && LP.click) ||
+                 (c.id === 'quant' && LP.quant > 0);
+    const red  = (c.id === 'rec' && LP.rec);
+    const live = (c.id === 'undo' || c.id === 'clear') ? hasPat : true;
+    /* 形だけがロゴの左右で変わる（_dpBtnPoly参照）。面の作りはパッドと同じ */
+    const at = inset => c.shape
       ? _dpRoundPoly(_dpBtnPoly(c, inset), 6)
       : roundRect(c.x + inset, c.y + inset, c.w - inset * 2, c.h - inset * 2, 5);
-    ctx.lineJoin = 'round';
-    ctx.fillStyle = g;
-    face(0); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1.5;
-    face(2); ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1;
-    face(0.5); ctx.stroke();
+    _dpDrawFace(ctx, c.y, c.h,
+      { fill: () => at(0), bevel: () => at(2), edge: () => at(0.5) },
+      red ? 'rec' : on ? 'on' : 'off');
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 10px sans-serif`;
     ctx.fillStyle = (red || on) ? '#fff8e0' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
-    const label = DP_CTL_LABEL[c.id](LP);
+    /* 平行四辺形は左右の辺が傾いているので、文字の中心を面の重心へ寄せる */
     const lx = c.shape === 'midL' ? c.x + (c.w - DP_BTN_SKEW) / 2
              : c.shape === 'midR' ? c.x + DP_BTN_SKEW + (c.w - DP_BTN_SKEW) / 2
              : c.x + c.w / 2;
-    ctx.fillText(label, lx, c.y + c.h / 2 + 0.5);
+    ctx.fillText(DP_CTL_LABEL[c.id](LP), lx, c.y + c.h / 2 + 0.5);
   }
+}
 
-  /* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる。
-     外周のリングはループの再生位置（真上から時計回りに1周＝ループ1周）。
-     ロゴ自体の回転（打鍵に反応）とは別の層なので衝突しない */
-  const J = o.jog;
+/* ジョグ（丸いギヨウザロゴ）。叩くたびに回り、減衰して止まる。
+   外周のリングはループの再生位置（真上から時計回りに1周＝ループ1周）。
+   ロゴ自体の回転（打鍵に反応）とは別の層なので衝突しない */
+function _dpDrawJog(o) {
+  const J = o.jog, LP = o.loop;
   ctx.fillStyle = '#0a1109';
   ctx.beginPath(); ctx.arc(J.x, J.y, J.r + 7, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = 'rgba(245,208,32,0.35)'; ctx.lineWidth = 2;
@@ -11690,8 +11703,10 @@ function drawDrumPad() {
     ctx.stroke();
   }
   _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
+}
 
-  /* パッド（焼き込み済みを転写し、叩いた光だけ上に重ねる） */
+/* パッド（焼き込み済みを転写し、叩いた光だけ上に重ねる） */
+function _dpDrawPads(o) {
   for (const p of o.pads) {
     ctx.drawImage(_dpPadSprites[p.idx], p.x, p.y, p.w, p.h);
     const f = o.flash[p.idx];
@@ -11707,7 +11722,20 @@ function drawDrumPad() {
       ctx.restore();
     }
   }
+}
 
+/* 描く順は筐体 → 銘板 → LCD → 操作ボタン → ジョグ → パッド。
+   区画の分け方は _dpBuildLayout が組み立てる構造と同じにしてある */
+function drawDrumPad() {
+  if (phase !== 'drumPad' || !_dp) return;
+  const o = _dp;
+  ctx.save();
+  _dpDrawBody(o);
+  _dpDrawPlate(o);
+  _dpDrawLcd(o);
+  _dpDrawCtls(o);
+  _dpDrawJog(o);
+  _dpDrawPads(o);
   ctx.restore();
 }
 
