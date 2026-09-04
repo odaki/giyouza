@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.41';
+const VERSION = 'v7.42';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1868,7 +1868,7 @@ function _createMasterLimiter(ctx) {
    getAudioCtx() と _recreateAudioGraph()（iOS interrupted からの復帰）の
    2箇所がそれぞれ独立にこの配線を持っていたため、ノードを1つ挟むだけでも
    片方を直し忘れると「復帰後だけ音色が違う」という再現しにくい不具合になる。
-   _bgmIsBoss の残留バグ（project_king_battle_7_4_bgm メモ参照）と同じ構図
+   「状態を作る箇所が2つある」ことが原因の欠陥クラス（_bgmIsBoss の残留バグと同じ構図）
    なので、最初から配線を1箇所に集約する */
 function _buildBgmGainChain(ctx, outNode) {
   bgmGain = ctx.createGain();
@@ -3454,6 +3454,23 @@ function _rampGain(param, to, sec = _GAIN_RAMP_SEC) {
   param.linearRampToValueAtTime(to, now + sec);
 }
 
+/* bgmGain を今この瞬間の値へ固定する（ランプではなく即時）。
+   予約（テープ演出のレートランプに伴う音量予約など）が残っていると setValueAtTime だけでは
+   後から上書きされるので、cancelScheduledValues と必ずセットにする。
+
+   **0にしたら必ず1へ戻すこと。** bgmGain は起動ジングルの出力先でもあるため
+   （scheduleJingle参照）、0のまま次のSTARTを迎えるとオリエンタルリフとカウントインが
+   無音のまま進み、startBGM()が1へ戻した瞬間に通常BGMだけ唐突に鳴り出す。
+
+   audioCtxが無い（音を使わない起動）なら何もしない。bgmGainはaudioCtxと対で作られるので
+   片方だけ存在することはない（_buildBgmGainChain参照） */
+function _setBgmGainNow(v) {
+  if (!audioCtx || !bgmGain) return;
+  const t = audioCtx.currentTime;
+  bgmGain.gain.cancelScheduledValues(t);
+  bgmGain.gain.setValueAtTime(v, t);
+}
+
 function applyMuteGain() {
   if (!masterGain || !audioCtx) return;
   /* ポーズ中は MUTE 状態に関わらず無音を維持する */
@@ -3487,9 +3504,7 @@ function startBGM() {
   }
   bgmPendingStart = false;
   if (bgmSource) return; // すでに再生中
-  /* bgmGain は常に1（ミュートは masterGain が担う） */
-  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  _setBgmGainNow(1); // bgmGain は常に1（ミュートは masterGain が担う）
   const src = _createBGMSource(1.0, buf);
   if (src) { src.start(); bgmPhaseRef = audioCtx.currentTime; _bgmAccumReset(); }
   grayRateTarget = 1.0; grayRateCur = 1.0; // 通常BGM開始時はグレースケール即時解除
@@ -3553,9 +3568,7 @@ function stopBGMTape(durationMs = 1300) {
 function _stopBossBGMForVictory(fadeMs = 120) {
   if (!audioCtx || !bgmGain) return;
   const t = audioCtx.currentTime;
-  bgmGain.gain.cancelScheduledValues(t);
-  bgmGain.gain.setValueAtTime(bgmGain.gain.value, t);
-  bgmGain.gain.linearRampToValueAtTime(0, t + fadeMs / 1000);
+  _rampGain(bgmGain.gain, 0, fadeMs / 1000); // 現在値から保持してフェード
   const capturedSrc = bgmSource;
   setTimeout(() => { if (bgmSource === capturedSrc) _destroyBGMSource(); }, fadeMs + 30);
 }
@@ -3564,8 +3577,7 @@ function _stopBossBGMForVictory(fadeMs = 120) {
    既存ソースがあればその位置から加速、なければ新規作成 */
 function startBGMTape(durationMs = 1400) {
   if (!audioCtx) return;
-  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  _setBgmGainNow(1);
   const t = audioCtx.currentTime;
   /* ボスBGM（暗黒版バッファ）で鳴っている場合は既存ソースを使い回せない
      （AudioBufferSourceNodeのbufferはstart()前しか差し替えられないため）。
@@ -3603,8 +3615,7 @@ function startBGMTape(durationMs = 1400) {
    作り直す（レンダリング未完でbossBgmBufferがまだ無い場合は通常BGMで代用） */
 function startBossBGMTape(durationMs = 1400) {
   if (!audioCtx || !bossBgmBuffer) { startBGMTape(durationMs); return; }
-  bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-  bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  _setBgmGainNow(1);
   const t = audioCtx.currentTime;
   const startRate = bgmSource ? _getBgmRateJS() : 0.001;
   const src = _createBGMSource(startRate, bossBgmBuffer); // _bgmIsBoss/loopEndはbufferから自動導出
@@ -10098,10 +10109,7 @@ function _startTrueEnding(replay) {
     /* ここはランプにしない。直後に _destroyBGMSource() でソースごと止めるので
        ランプが渡り切らず意味が無い（この経路は「フェードを挟まず即座に無音化」が
        意図。上のコメント参照）。鳴り続けるソースの音量を動かす経路とは別物 */
-    if (bgmGain && audioCtx) {
-      bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-      bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
-    }
+    _setBgmGainNow(0);
     _destroyBGMSource();
   }
   phase = 'trueEnding';
@@ -10454,10 +10462,7 @@ function _finishTrueEnding() {
   if (!_trueEndingIsReplay) _cleanupKingBattleState();
   _trueEnding = null;
   phase = 'startup';
-  if (bgmGain && audioCtx) {
-    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-    bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
-  }
+  _setBgmGainNow(1);
 }
 
 /* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
@@ -10760,14 +10765,11 @@ function _soundTestUnlocked() { return trueEndingSeen || SOUND_TEST_FORCE; }
    ジングルだけ聞こえない、という不具合を実際に出した。ゲーム本編へ戻ったあとの
    開始ジングルも同じ経路なので、モードを出るときにも1へ戻っている必要がある */
 function _stStopAll() {
-  if (bgmGain && audioCtx) {
-    bgmGain.gain.cancelScheduledValues(audioCtx.currentTime);
-    bgmGain.gain.setValueAtTime(0, audioCtx.currentTime);
-  }
+  _setBgmGainNow(0);
   _destroyBGMSource();      // フェード無しで即座に破棄（上のコメント参照）
   stopJingle();
   _stopTrueEndingTheme(0.2); // こちらは専用gain経由なので余韻を残して落とす
-  if (bgmGain && audioCtx) bgmGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  _setBgmGainNow(1);        // 戻し忘れると次に鳴らすものが無音になる（_setBgmGainNow参照）
   _stNowPlaying = -1;
   grayRateTarget = 1.0; grayRateCur = 1.0;
 }
