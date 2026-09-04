@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.48';
+const VERSION = 'v7.49';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11340,8 +11340,6 @@ function _dpQuantBeat(L, beat, len) {
 /* 拍位置 → スロット番号（整数）。発音時刻はこの整数からしか作らない */
 function _dpSlotOf(beat) { return Math.round(beat * DP_SLOTS_PER_BEAT); }
 function _dpSlotDur(L) { return _dpBeatDur(L) / DP_SLOTS_PER_BEAT; }
-/* 絶対時刻 t が何スロット目か（切り上げ）。カーソルを時刻から引き直すときに使う */
-function _dpSlotAt(L, t) { return Math.ceil((t - L.head) / _dpSlotDur(L)); }
 
 /* 現在の拍位置（0〜beatsPerLoop）。停止中は0 */
 function _dpLoopBeatPos(L) {
@@ -11575,16 +11573,22 @@ function _dpLoopSetBpm(delta) {
   const L = _dp.loop;
   const next = Math.max(DP_BPM_MIN, Math.min(DP_BPM_MAX, L.bpm + delta));
   if (next === L.bpm) return;
-  const pos = _dpLoopBeatPos(L);
   if (L.playing && audioCtx) {
-    /* 予約済みの「絶対時刻」を保ったまま、新しいテンポのスロット番号へ引き直す。
-       巻き戻してはいけない: 既にWeb Audioへ渡した先読みぶんは取り消せないので、
-       同じ音が二度鳴るだけになる。長押しで毎秒何十回も呼ばれる経路でもある。
-       結果として先読みの残り（最大 DP_SCHED_AHEAD）が旧テンポ、その先が新テンポになる */
+    /* **カーソル(schedSlot)は動かさない。** スロットは head からの拍数であって秒ではないので、
+       テンポが変わっても「次に出すのはどの音か」は変わらない。
+       動かしてよいのは head だけで、いま予約済みの境目（＝新テンポが効き始める時刻）が
+       ずれないように置き直す。こうすると
+         ・境目より手前（既にWeb Audioへ渡したぶん）は旧テンポのまま鳴り切る
+         ・境目からは新テンポで、拍の並びは途切れずに続く
+       が同時に成り立つ。
+
+       カーソルを絶対時刻へ変換してスロットへ戻す（往復させる）ことはしない。
+       切り上げで元のスロットより先に着地するため、まだ出していない音を1つ飛び越す。
+       長押しで毎秒何十回も呼ばれる経路なので、1回ごとに1音ずつ先へずれて
+       数秒ぶんの無音になる。 */
     const schedUntil = L.head + L.schedSlot * _dpSlotDur(L);
     L.bpm = next;
-    L.head = audioCtx.currentTime - pos * _dpBeatDur(L);
-    L.schedSlot = Math.max(0, _dpSlotAt(L, schedUntil));
+    L.head = schedUntil - L.schedSlot * _dpSlotDur(L);
   } else {
     L.bpm = next;
   }
