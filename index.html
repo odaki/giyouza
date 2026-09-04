@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.47';
+const VERSION = 'v7.48';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11223,6 +11223,17 @@ const DP_LOOP_TICK_MS  = 25;    // スケジューラの起動間隔
    1周は最短でも1.2秒（200BPM・1小節）なので実用上の問題にならない */
 const DP_SCHED_AHEAD   = 0.45;
 const DP_LOOP_MAX_EV   = 512;   // 総イベント数の上限（スケジューラとメモリの歯止め）
+/* 予約の刻み。発音時刻は必ず「head + 整数スロット × スロット長」で求め、足し算で積まない。
+
+   時刻をfloatで積むと、周の先頭を2通りの経路で求めることになる（掛け算で出した base と、
+   前の周の終わりに長さを足した値）。この2つは1 ULPずれるので、0拍の音の時刻がわずかに
+   「予約済み位置」より手前に落ちて捨てられる。テンポによっては周の1〜4割で頭が消える
+   （60/bpm×4×bars が2進数で正確に表せる120や160BPMだけ無事、という形で出る）。
+   カーソルを整数にすれば、この比較そのものが無くなる。
+
+   480はMIDIのticks per beatと同じ発想。クオンタイズの刻み（1・1/2・1/4拍）を割り切り、
+   クオンタイズOFFの生の打鍵も 1/480拍（120BPMで0.26ms）まで保てる */
+const DP_SLOTS_PER_BEAT = 480;
 /* tickが遅れたときに、その間に来るはずだった音をどこまで拾うか（秒）。
    描画が重いフレームなどでtickが1回飛ぶと、飛んだ区間の音が丸ごと捨てられる。周の頭は
    ちょうど予約の再開位置に当たるため真っ先に落ち、「たまに冒頭の一音が鳴らない」として出る。
@@ -11310,19 +11321,27 @@ function _dpLoopNew() {
      良ければRECを終える、という手順になる。RECを終えた時点のtakeが確定する */
   return { playing: false, rec: false, bpm: 120, bars: 2, quant: 0,
            layers: [], take: null, takeLen: 0, pass: null, pending: [], passDirty: false, lastK: null,
-           head: 0, schedTo: 0, clickTo: 0, sched: null, viz: [], click: false };
+           head: 0, schedSlot: 0, sched: null, viz: [], click: false };
 }
 function _dpBeatDur(L) { return 60 / L.bpm; }
 function _dpBeatsPerLoop(L) { return L.bars * DP_BEATS_PER_BAR; }
 function _dpLoopDur(L) { return _dpBeatsPerLoop(L) * _dpBeatDur(L); }
 /* 再生時の拍位置。クオンタイズONなら刻みへ丸める（記録側は触らない）。
-   丸めた結果がループ末尾を越えたら先頭へ回す */
-function _dpQuantBeat(L, beat) {
+   折り返しは**そのパターン自身の長さ(len)**で行う。再生中の小節数で折り返すと、
+   同じパターンでも小節数を変えるたびに末尾の音の行き先が変わってしまう
+   （2小節では頭へ回るのに4小節では回らない、という食い違いになる）。
+   ループなので、末尾へ丸まった音は毎周の先頭で鳴る＝musicallyはこれが正しい */
+function _dpQuantBeat(L, beat, len) {
   if (!L.quant) return beat;
-  const bp = _dpBeatsPerLoop(L);
   const q = Math.round(beat / L.quant) * L.quant;
-  return q >= bp ? 0 : q;
+  return q >= len ? 0 : q;
 }
+
+/* 拍位置 → スロット番号（整数）。発音時刻はこの整数からしか作らない */
+function _dpSlotOf(beat) { return Math.round(beat * DP_SLOTS_PER_BEAT); }
+function _dpSlotDur(L) { return _dpBeatDur(L) / DP_SLOTS_PER_BEAT; }
+/* 絶対時刻 t が何スロット目か（切り上げ）。カーソルを時刻から引き直すときに使う */
+function _dpSlotAt(L, t) { return Math.ceil((t - L.head) / _dpSlotDur(L)); }
 
 /* 現在の拍位置（0〜beatsPerLoop）。停止中は0 */
 function _dpLoopBeatPos(L) {
@@ -11388,62 +11407,86 @@ function _dpLoopPromote(L) {
   L.pending = [];
 }
 
-/* パターン再生。schedToまで予約済みとして、先読み窓に入った音を予約する。
-   窓は絶対時刻で見るので、重ね録りした音も最短で次のtickから鳴り始める */
+/* この周ぶんの発音を「スロット番号 → 鳴らすパッド」の形に組む。スロット昇順。
+   ここで小節数ぶんの繰り返しとクオンタイズを済ませ、スケジューラ側は整数だけを扱う。
+
+   小節数を変えても打ち込みには触れない。本来の長さ(len)より短くしたときははみ出したぶんを
+   鳴らさず、長くしたときは本来の長さぶんを繰り返して埋める（2小節のパターンを4小節にすると
+   2回鳴る）。クオンタイズは繰り返しを足す**前**に、パターン自身の長さで掛ける
+   （_dpQuantBeat参照。後から掛けると小節数によって末尾の音の行き先が変わる） */
+function _dpLoopSteps(L, bpNow) {
+  const steps = [];
+  for (const [evs, len] of _dpLoopSets(L, bpNow)) {
+    if (!(len > 0)) continue;
+    for (const ev of evs) {
+      const q = _dpQuantBeat(L, ev.beat, len);
+      for (let off = 0; ev.beat + off < bpNow; off += len) {
+        if (q + off >= bpNow) continue; // 丸めで後ろへ出たぶんはこの周には無い
+        steps.push({ slot: _dpSlotOf(q + off), i: ev.i, click: 0 });
+      }
+    }
+  }
+  if (L.click) {
+    for (let b = 0; b < bpNow; b++) {
+      steps.push({ slot: _dpSlotOf(b), i: -1, click: b % DP_BEATS_PER_BAR === 0 ? 2 : 1 });
+    }
+  }
+  steps.sort((a, b) => a.slot - b.slot);
+  return steps;
+}
+
+/* パターン再生。**予約済み位置は整数スロットで持つ**（L.schedSlot）。
+   先読み窓に入ったスロットを順に予約し、窓の外へ出た最初のスロットをそのまま次の起点にする。
+   時刻の比較で境目を判定しないので、周の頭が1 ULPの差で落ちることが起きない
+   （DP_SLOTS_PER_BEAT の定義部にこの欠陥の説明がある）。 */
 function _dpLoopTick() {
   const L = _dp && _dp.loop;
   if (!L || !audioCtx || !L.playing) return;
-  const dur = _dpLoopDur(L), beat = _dpBeatDur(L), bpNow = _dpBeatsPerLoop(L);
+  const bpNow = _dpBeatsPerLoop(L);
+  const slotDur = _dpSlotDur(L);
+  const slotsPerLoop = bpNow * DP_SLOTS_PER_BEAT;
   const now = audioCtx.currentTime, until = now + DP_SCHED_AHEAD;
-  /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置(schedTo)は先読みぶん
-     最大0.25秒先を指しているので、そちらで判定すると周の変わり目が0.25秒早まり、周の
-     終わり際に叩いたぶんが次の周の記録に落ちる。その1〜2発が次の切り替わりでtakeを
-     置き換えてしまい、「打ち込んだのに1音しか入らない」状態になる */
+  /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置は先読みぶん先を指している
+     ので、そちらで判定すると周の変わり目が先読み時間だけ早まり、周の終わり際に叩いたぶんが
+     次の周の記録に落ちる。その1〜2発が次の切り替わりでtakeを置き換えてしまい、
+     「打ち込んだのに1音しか入らない」状態になる */
   if (L.rec) {
-    const kNow = Math.floor((now - L.head) / dur);
+    const kNow = Math.floor((now - L.head) / _dpLoopDur(L));
     if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
     L.lastK = kNow;
   }
   /* 遅れたぶんは DP_LATE_TOL_SEC までさかのぼって拾う（それ以上は捨てる） */
-  if (L.schedTo < now - DP_LATE_TOL_SEC) L.schedTo = now - DP_LATE_TOL_SEC;
+  const minSlot = Math.ceil((now - DP_LATE_TOL_SEC - L.head) / slotDur);
+  if (L.schedSlot < minSlot) L.schedSlot = minSlot;
+
+  const steps = _dpLoopSteps(L, bpNow);
+  if (steps.length === 0) return;
+
+  let k = Math.floor(L.schedSlot / slotsPerLoop);
   let guard = 0;
-  while (L.schedTo < until && guard++ < 64) {
-    /* 予約済み位置がちょうど周の境目に乗ると、割り算の丸めで (schedTo-head)/dur が整数の
-       わずか手前になり、floorが1つ前の周を指す。するとその周の残り区間は長さ0になり、
-       予約が1歩も進まないまま空回りする。やがて遅延許容の巻き戻しでschedToが境目を飛び越し、
-       **周の頭の音だけが毎回落ちる**。
-       テンポを変えるとschedToを現在時刻に置き直すため、この一致が起きやすくなる。
-       極小の下駄を履かせて、境目はその周の先頭として扱う */
-    const k = Math.floor((L.schedTo - L.head) / dur + 1e-9);
-    const base = L.head + k * dur;            // この周の先頭（絶対時刻）
-    const segEnd = Math.min(until, base + dur);
-    /* 録音中のtakeも鳴らす（打ち込んだものが次の周から返ってくる）。
-       ただしこの周に叩き直しが始まっていたら、古いtakeは引っ込める。
-       そうしないと叩き直しの最中に旧シーケンスと二重に聴こえて判断できない */
-    /* 小節数を変えても打ち込みには触れない。本来の長さより短くしたときは
-       はみ出したぶんを鳴らさず、長くしたときは本来の長さぶんを繰り返して
-       埋める（2小節のパターンを4小節にすると2回鳴る） */
-    for (const [evs, len] of _dpLoopSets(L, bpNow)) {
-      for (const ev of evs) {
-        for (let off = 0; ev.beat + off < bpNow; off += len) {
-          const t = base + _dpQuantBeat(L, ev.beat + off) * beat;
-          if (t >= L.schedTo && t < segEnd) {
-            const at = Math.max(t, now); // 少し遅れていても捨てずに即座に鳴らす
-            _dpVoice(ev.i, at);
-            L.viz.push({ i: ev.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
-          }
-          if (len <= 0) break;
-        }
+  while (guard++ < 64) {
+    const baseSlot = k * slotsPerLoop;
+    if (L.head + baseSlot * slotDur >= until) break; // この周は丸ごと窓の外
+    let done = false, emitted = -1;
+    for (const st of steps) {
+      const g = baseSlot + st.slot;
+      if (g < L.schedSlot) continue;             // 予約済み
+      const t = L.head + g * slotDur;            // 時刻は必ず原点から1回の掛け算で作る
+      if (t >= until) { L.schedSlot = g; done = true; break; } // 次はここから
+      const at = Math.max(t, now);               // 少し遅れていても捨てずに即座に鳴らす
+      if (st.click) _dpClickVoice(at, st.click === 2);
+      else {
+        _dpVoice(st.i, at);
+        L.viz.push({ i: st.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
       }
+      emitted = g;
     }
-    if (L.click) {
-      const bp = _dpBeatsPerLoop(L);
-      for (let b = 0; b < bp; b++) {
-        const t = base + b * beat;
-        if (t >= L.schedTo && t < segEnd) _dpClickVoice(Math.max(t, now), b % DP_BEATS_PER_BAR === 0);
-      }
-    }
-    L.schedTo = segEnd;
+    /* カーソルの前進はこの周を出し切ってから。1つ出すたびに g+1 へ進めると、
+       同じスロットに複数の音がある場合（末尾の音がクオンタイズで頭へ回って
+       元からある頭の音と重なる、など）に2つ目以降が予約済み扱いで落ちる */
+    if (emitted >= 0) L.schedSlot = emitted + 1;
+    if (done) break;
+    k++;
   }
 }
 
@@ -11465,7 +11508,7 @@ function _dpLoopStart() {
   const L = _dp.loop;
   if (!audioCtx) getAudioCtx();
   L.head = audioCtx ? audioCtx.currentTime : 0;
-  L.schedTo = L.head;
+  L.schedSlot = 0;
   L.playing = true;
   _dpLoopStartSched();
 }
@@ -11511,7 +11554,9 @@ function _dpLoopUndo() {
   const L = _dp.loop;
   if (L.rec && ((L.take && L.take.length) || (L.pass && L.pass.length) || L.pending.length)) {
     L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
-    if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
+    /* 予約位置は巻き戻さない。既にWeb Audioへ渡した先読みぶんは取り消せないので、
+       巻き戻すと同じ音が二度鳴るだけになる（_dpLoopSetBpm のコメントと同じ理由）。
+       捨てた録りかけは先読みの残り（最大 DP_SCHED_AHEAD）ぶんで鳴り止む */
     return;
   }
   if (L.layers.length === 0) return;
@@ -11531,13 +11576,17 @@ function _dpLoopSetBpm(delta) {
   const next = Math.max(DP_BPM_MIN, Math.min(DP_BPM_MAX, L.bpm + delta));
   if (next === L.bpm) return;
   const pos = _dpLoopBeatPos(L);
-  L.bpm = next;
   if (L.playing && audioCtx) {
+    /* 予約済みの「絶対時刻」を保ったまま、新しいテンポのスロット番号へ引き直す。
+       巻き戻してはいけない: 既にWeb Audioへ渡した先読みぶんは取り消せないので、
+       同じ音が二度鳴るだけになる。長押しで毎秒何十回も呼ばれる経路でもある。
+       結果として先読みの残り（最大 DP_SCHED_AHEAD）が旧テンポ、その先が新テンポになる */
+    const schedUntil = L.head + L.schedSlot * _dpSlotDur(L);
+    L.bpm = next;
     L.head = audioCtx.currentTime - pos * _dpBeatDur(L);
-    /* ここで予約位置(schedTo)を巻き戻さない。巻き戻しても既にWeb Audioへ
-       渡した先読みぶんは取り消せないので、同じ音が二度鳴るだけになる。
-       長押しで毎秒何十回も呼ばれる経路なので、そのまま先へ進ませ、
-       先読みの残り（最大0.25秒）が旧テンポ、その先が新テンポになるようにする */
+    L.schedSlot = Math.max(0, _dpSlotAt(L, schedUntil));
+  } else {
+    L.bpm = next;
   }
 }
 
@@ -11549,7 +11598,9 @@ function _dpLoopCycleBars() {
   const L = _dp.loop;
   const i = DP_BARS_CHOICES.indexOf(L.bars);
   L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
-  if (L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
+  /* 予約位置は巻き戻さない（UNDO・テンポ変更と同じ理由）。スロット番号は
+     headからの拍数で決まり小節数に依存しないので、そのまま使える。
+     新しい小節数は先読みの残りが尽きた時点から効く */
 }
 
 /* クオンタイズの刻みを巡回する（OFF → 1/16 → 1/8 → 1/4 → OFF）。
@@ -11563,7 +11614,7 @@ function _dpLoopCycleQuant() {
 function _dpLoopToggleClick() {
   const L = _dp.loop;
   L.click = !L.click;
-  if (L.click && L.playing && audioCtx) L.schedTo = audioCtx.currentTime;
+  /* 予約位置は巻き戻さない（上と同じ理由）。次の先読み窓からクリックが乗る */
 }
 
 function _dpHit(i) {
