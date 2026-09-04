@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.49';
+const VERSION = 'v7.50';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -11212,7 +11212,11 @@ function _exitDrumPad() {
    再生はrAFではなく音声クロックの先読みスケジューラ（ジングル・キング戦
    シーケンサと同じ作法）。再生位置は毎tick audioCtx.currentTime から計算する。
    カウンタを積む書き方だとバックグラウンド復帰で位置がずれる。 */
-const DP_LOOP_TICK_MS  = 25;    // スケジューラの起動間隔
+/* スケジューラの起動間隔。録音中は周の境目で予約を頭打ちにするため（_dpLoopTick参照）、
+   境目の音はこの間隔ぶんだけ遅れて予約されうる。人の打鍵のゆらぎ（20〜30ms）より
+   十分小さくしておく。1回の実測は現実的な打ち込みで0.006ms・上限近くでも0.113msなので、
+   毎秒100回でも0.6〜11msにしかならない */
+const DP_LOOP_TICK_MS  = 10;
 /* 先読み時間。BGM用のSCHEDULE_AHEAD(0.25秒)をそのまま使っていたが、
    tickが遅れると「遅れたぶん」ではなく「先読み窓を外れたぶん」が丸ごと落ちる。
    16パッドとロゴを毎フレーム描く画面なので、重いフレームやタイマーの間引きで
@@ -11443,7 +11447,8 @@ function _dpLoopTick() {
   const bpNow = _dpBeatsPerLoop(L);
   const slotDur = _dpSlotDur(L);
   const slotsPerLoop = bpNow * DP_SLOTS_PER_BEAT;
-  const now = audioCtx.currentTime, until = now + DP_SCHED_AHEAD;
+  const now = audioCtx.currentTime;
+  let until = now + DP_SCHED_AHEAD;
   /* 周の切り替わりの判定は「いま鳴っている位置」で行う。予約位置は先読みぶん先を指している
      ので、そちらで判定すると周の変わり目が先読み時間だけ早まり、周の終わり際に叩いたぶんが
      次の周の記録に落ちる。その1〜2発が次の切り替わりでtakeを置き換えてしまい、
@@ -11452,6 +11457,15 @@ function _dpLoopTick() {
     const kNow = Math.floor((now - L.head) / _dpLoopDur(L));
     if (L.lastK !== null && kNow !== L.lastK) _dpLoopPromote(L);
     L.lastK = kNow;
+    /* **録音中は次の周へ踏み込まない。**
+       録りかけ(take)の中身が決まるのは周の境目（_dpLoopPromote）なので、境目より先を
+       予約すると「まだ決まっていないもの」を予約することになる。しかもカーソルは
+       そのとき手元にあったステップ表の上を進むので、あとから増えた音は
+       カーソルより後ろに現れて二度と鳴らない。
+       重ね録りで土台のレイヤーがまばらな場合、カーソルは次の音まで一気に飛ぶため、
+       打ち込んだシーケンスの冒頭が数拍ぶん丸ごと落ちる（次の周からは正しく鳴る）。
+       境目で頭打ちにすれば、次の周の予約は必ず promote のあとになる */
+    until = Math.min(until, L.head + (kNow + 1) * _dpLoopDur(L));
   }
   /* 遅れたぶんは DP_LATE_TOL_SEC までさかのぼって拾う（それ以上は捨てる） */
   const minSlot = Math.ceil((now - DP_LATE_TOL_SEC - L.head) / slotDur);
