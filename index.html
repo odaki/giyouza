@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.40';
+const VERSION = 'v7.41';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -820,6 +820,18 @@ function _itemAlloc() {
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
    モジュールスコープ定数なので毎フレーム新しいクロージャが生成されない */
 const _deadify      = o => { o._dead = true; };
+/* プール由来のオブジェクトを持つ配列を空にする。**返却してから空にする**という
+   不変条件をここに閉じ込める。
+   片方だけ書くと、返さなかったスロットが生きたまま残って再利用されず、_itemAlloc等が
+   新規生成を続けてプールが際限なく伸びる（iOS Safariのメモリを圧迫して処理落ち・音途切れに
+   なる欠陥クラス）。配列を捨てる場所では必ずこれを通すこと。
+   release は既定で _deadify。ghosts のようにキャンバスを別プールへ返す必要があるものは
+   専用の返却手続きを渡す。
+   `arr = _releaseAll(arr)` の形で使い、返却と空にするのを1文にする */
+function _releaseAll(arr, release = _deadify) {
+  if (arr) for (const o of arr) release(o);
+  return [];
+}
 /* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
    Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
 function _insertionSortY(a) {
@@ -4292,7 +4304,7 @@ function initGame() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   _resetFeverState();
-  for (const g of items) g._dead = true; items = [];
+  items = _releaseAll(items);
   init(true);
 }
 
@@ -4346,7 +4358,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   _resetFeverState();
-  for (const g of items) g._dead = true; items = [];
+  items = _releaseAll(items);
   lsSave();
   _restartToTapestart();
 }
@@ -4514,8 +4526,7 @@ function _clearCrossTrialOverlays() {
    キングギヨウザ画面の下に前の演出が透けて残る。
    片方だけで後始末すると、hitType別の演出（ギョギョの魚など）が消し漏れる */
 function _clearTrialFxState() {
-  for (const p of particles) p._dead = true; // プールに返却してからクリア（リーク防止）
-  particles = [];
+  particles = _releaseAll(particles);
   hitType       = 'none';
   _activeEffect = null;
   endTimer   = 0;
@@ -4529,19 +4540,13 @@ function _clearTrialFxState() {
   betLocked   = false;
   _betUnlockAt = performance.now() + BGM_BEAT * 1000 * BET_UNLOCK_BEATS; // 解放は2拍強あと（_betControlsEnabled参照）
   isMissResult = false;
-  for (const g of worms) g._dead = true; // プールに返却してからクリア（リーク防止）
-  worms      = [];
-  for (const o of uzaTexts)   o._dead = true; // プールに返却してからクリア（リーク防止）
-  uzaTexts   = [];
-  for (const o of gigiSparks) o._dead = true;
-  gigiSparks  = [];
-  for (const g of yoyos) g._dead = true;
-  yoyos       = [];
-  for (const g of ghosts) _releaseGhost(g); // キャンバスをプールへ返却
-  ghosts      = [];
-  for (const o of rainDrops)  o._dead = true;
-  rainDrops   = [];
-  gyogyoFish  = [];
+  worms      = _releaseAll(worms);
+  uzaTexts   = _releaseAll(uzaTexts);
+  gigiSparks = _releaseAll(gigiSparks);
+  yoyos      = _releaseAll(yoyos);
+  ghosts     = _releaseAll(ghosts, _releaseGhost); // キャンバスをプールへ返す
+  rainDrops  = _releaseAll(rainDrops);
+  gyogyoFish = []; // プール由来ではない（毎回リテラルで作る）ので返却は不要
 }
 
 function init(fromStartup, fromGameOver) {
@@ -5786,8 +5791,7 @@ function launchGizaFireworks() {
 
 /* ════════════════ ウヨウヨ: うごめくアイテム ════════════════ */
 function initWorms() {
-  for (const g of worms) g._dead = true;
-  worms = [];
+  worms = _releaseAll(worms);
   for (let i = 0; i < 10; i++) setTimeout(() => spawnWorm(), i * 300);
 }
 
@@ -5917,10 +5921,7 @@ function flushItems() {
 /* addOnly=true のとき既存アイテムを保持して追加（フィーバー連続大当たり用）。
    上限200を超えないようキャップする。 */
 function initItems(burst = 70, addOnly = false, max = 200) {
-  if (!addOnly) {
-    for (const g of items) g._dead = true; // 既存をプールに返却
-    items = [];
-  }
+  if (!addOnly) items = _releaseAll(items);
   /* 最初に中央からどさっとまとめて投下 */
   const FEVER_MAX = max;
   const toAdd = addOnly ? Math.min(burst, FEVER_MAX - items.length) : burst;
@@ -6231,7 +6232,7 @@ function drawItems() {
 /* ════════════════ ウザウザ: ウザいテキスト大量発生 ════════════════ */
 const UZA_WORDS = ['ウザ','うざっ','ウザい','うざい','ウザっ！','うざ…','ウザすぎ','うわウザ'];
 
-function initUzaTexts() { for (const o of uzaTexts) o._dead = true; uzaTexts = []; }
+function initUzaTexts() { uzaTexts = _releaseAll(uzaTexts); }
 
 function updateUzaTexts() {
   /* 徐々に増える間隔: 最初は5フレームに1個、後は2フレームに1個 */
@@ -6277,8 +6278,7 @@ function drawUzaTexts() {
 
 /* ════════════════ ギウギウ: ぎゅうぎゅう詰め ════════════════ */
 function initGiugiu() {
-  for (const g of items) g._dead = true;
-  items = [];
+  items = _releaseAll(items);
   /* 外周リングから中央へ向かって一斉に投下 */
   const N = _itemBurst(PAYOUT_RATE.hitMed);
   const R = Math.hypot(W, H) * 0.55;
@@ -6422,8 +6422,7 @@ function drawGigigigi() {
 
 /* ════════════════ ヨヨヨヨ: ヨーヨー ════════════════ */
 function initYoyoyoyo() {
-  for (const g of yoyos) g._dead = true;
-  yoyos = [];
+  yoyos = _releaseAll(yoyos);
   const count = MEDIUM_EFFECT_GYOZA_N;
   /* 横に等間隔で並べるため、1レーンの幅は画面幅÷個数。縦画面（W=420）では
      20個だと1レーン21pxとギヨウザの見た目幅（約44px）より狭くなるが、
@@ -6487,8 +6486,7 @@ const _freeGhostCanvases = [];
 const _releaseGhost = g => { if (g._oc) { _freeGhostCanvases.push(g._oc); g._oc = null; } };
 
 function initUuuu() {
-  for (const g of ghosts) _releaseGhost(g);
-  ghosts = [];
+  ghosts = _releaseAll(ghosts, _releaseGhost);
 }
 
 /* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
@@ -6629,7 +6627,7 @@ function drawUuuu(list, outroTimer) {
 }
 
 /* ════════════════ ザザザザ: 雨 ════════════════ */
-function initZazazaza() { for (const o of rainDrops) o._dead = true; rainDrops = []; }
+function initZazazaza() { rainDrops = _releaseAll(rainDrops); }
 
 function updateZazazaza() {
   const rate = endTimer < 80 ? 4 : endTimer < 180 ? 10 : 20;
@@ -7154,7 +7152,7 @@ function _startBossOmen() {
   /* 事前構築の作り置きはプールへ返す（タイマー駆動をやめたので打ち切り処理は不要） */
   _releaseWheelOCs(_pendingWheels); _pendingWheels = null;
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
-  for (const g of items) g._dead = true; items = [];
+  items = _releaseAll(items);
   /* トライ横断で見せている表示物（ポップアップ・フィーバーバナー・JUST!ラベル）は
      phaseを見ずに描かれるため、暗転下に透けたりキング画面に重なったりする。
      寿命の分類は_clearCrossTrialOverlaysのコメント参照 */
@@ -7215,8 +7213,7 @@ function _updateBossOmen() {
     }
     if (o.timer > 110) {
       o.step = 6; o.timer = 0; o.flash = 1;
-      for (const g of o.items) g._dead = true;
-      o.items = [];
+      o.items = _releaseAll(o.items);
       grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
       playSE('kingAppear'); // バーン+ドラの派手な一撃（_playDoraHit参照）
     }
@@ -7284,17 +7281,14 @@ function _cleanupKingBattleState() {
   _kingAccentRecoil = 0;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
-  if (_omen) { for (const g of _omen.items) g._dead = true; }
-  _omen = null;
-  if (_defeatOutro) { for (const g of _defeatOutro.items) g._dead = true; }
-  _defeatOutro = null;
-  /* 達成側の退場演出も同様にプールへ返却する（水平展開。返し忘れると
-     _itemAllocのプールが枯れてリークになる） */
+  /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
+  if (_omen)        _omen.items        = _releaseAll(_omen.items);
+  if (_defeatOutro) _defeatOutro.items = _releaseAll(_defeatOutro.items);
   if (_victoryOutro) {
-    for (const g of _victoryOutro.items) g._dead = true;
-    if (_victoryOutro.seedItem) _victoryOutro.seedItem._dead = true;
+    _victoryOutro.items = _releaseAll(_victoryOutro.items);
+    if (_victoryOutro.seedItem) _deadify(_victoryOutro.seedItem); // 舞い上がらずに残る1個
   }
-  _victoryOutro = null;
+  _omen = null; _defeatOutro = null; _victoryOutro = null;
 }
 
 function _kingBattleEnd() {
@@ -9728,8 +9722,8 @@ function _startBossVictoryOutro() {
    （_pendingTrueEnding参照） */
 function _finishBossVictoryOutro() {
   if (_victoryOutro) {
-    for (const g of _victoryOutro.items) g._dead = true; // プールへ返却（リーク防止）
-    if (_victoryOutro.seedItem) _victoryOutro.seedItem._dead = true;
+    _victoryOutro.items = _releaseAll(_victoryOutro.items);
+    if (_victoryOutro.seedItem) _deadify(_victoryOutro.seedItem);
     _victoryOutro = null;
   }
   if (_pendingTrueEnding) { _pendingTrueEnding = false; _startTrueEnding(false); }
@@ -13915,7 +13909,7 @@ coinsDisp = coins; _lastCoinsDispCached = -1; // startup時はスナップ
 isGameOver = false;
 phase = 'startup';
 wheels = WXS.map((x, i) => createWheel(x, WYS[i])); // ホイールだけ初期化（背景描画用）
-particles = [];
+particles = _releaseAll(particles); // 起動時は空だが、配列を捨てる場所は例外なくここを通す
 
 let _rafId;
 /* フレーム時間計測（ポーズ画面診断用） */
