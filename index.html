@@ -223,7 +223,7 @@ function drawCheatPanel() {
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
     ctx.fillStyle = '#fff';
     ctx.fillText(CHEAT_PANEL_BTNS[i].label, r.x + r.w / 2, r.y + r.h / 2);
-    _drawPressFlash(r, () => { ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); });
+    _drawPressFlash(r, 0); // 面が直角なので光も直角
   }
   ctx.restore();
 }
@@ -537,7 +537,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.52';
+const VERSION = 'v7.53';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4121,28 +4121,46 @@ function hitTest(rect, x, y) {
    押下はフレームループの外（入力ハンドラ）で起きるので、フレーム数ではなく実時間で持つ。
    見せ方は16パッドの発音フラッシュ（_dpDrawPads）と同じ「金色の被せ＋温白の縁」に揃える。 */
 const BTN_PRESS_FLASH_SEC = 0.16;
+const PRESS_TRACK_MAX = 8; // 同時に見る指の数の上限（ドラムパッドの多点打ちで足りる数）
 const _presses = [];
 function _markPress(x, y) {
   _presses.push({ x, y, t: performance.now() });
-  if (_presses.length > 8) _presses.shift();
+  if (_presses.length > PRESS_TRACK_MAX) _presses.shift();
+}
+/* そのイベントで**新たに触れた**点だけを控える。触れ続けている指を含めると、
+   別の指を置くたびに押しっぱなしのボタン（TEMPOの長押しなど）が光り直す */
+function _markPressTouches(e) {
+  for (const tc of e.changedTouches) {
+    const q = touchToCanvas(tc);
+    _markPress(q.x, q.y);
+  }
 }
 /* 長押しのリピートなど、座標を持たない経路から光らせるとき用（矩形の中心を押したことにする） */
 function _markPressRect(r) { _markPress(r.x + r.w / 2, r.y + r.h / 2); }
+/* 期限切れを捨てる。draw()の冒頭で1回だけ呼ぶ。
+   掃除を_pressLevelに同居させると、どのボタンが先に描かれるかで捨てる時点が変わる
+   （読み取りの関数は読むだけに保つ） */
+function _expirePresses() {
+  const dead = performance.now() - BTN_PRESS_FLASH_SEC * 1000;
+  let n = 0;
+  while (n < _presses.length && _presses[n].t <= dead) n++; // 時刻順に積まれている
+  if (n) _presses.splice(0, n);
+}
 /* 0（消えている）〜1（押した瞬間）。同じ矩形に複数の指が入っていれば一番新しいものを使う */
 function _pressLevel(rect) {
+  if (_presses.length === 0) return 0; // 押されていないのが常態。ボタンの数だけ回さない
   const now = performance.now();
   let best = 0;
   for (let i = _presses.length - 1; i >= 0; i--) {
     const p = _presses[i];
     const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
-    if (k <= 0) { _presses.splice(0, i + 1); break; } // 時刻順なので、これより前は全て期限切れ
     if (k > best && hitTest(rect, p.x, p.y)) best = k;
   }
   return best;
 }
 /* 光そのもの。k は 0（消えている）〜1（点いた瞬間）、path は面の輪郭を引く関数。
    16パッドの発音フラッシュもボタンの押下フラッシュもここを通す（見せ方を1か所に持つ） */
-function _drawFlashOverlay(k, path) {
+function _drawFlashPath(k, path) {
   ctx.save();
   ctx.globalAlpha = k * 0.7;
   ctx.fillStyle = Y;
@@ -4152,24 +4170,32 @@ function _drawFlashOverlay(k, path) {
   path(); ctx.stroke();
   ctx.restore();
 }
-/* pathFn は面の輪郭を引く関数。省略時はボタンの矩形（角丸6）。
+/* 直角のときに roundRect(...,0) を使わないのは、角に長さ0の曲線が挟まって
+   縁の継ぎ目の画素が ctx.rect と食い違うため（線の継ぎ方は呼び出し元の
+   ctx.lineJoin をそのまま継ぐので、どちらで引いたかが見た目に出る） */
+function _drawFlashRect(k, x, y, w, h, r) {
+  _drawFlashPath(k, r > 0 ? () => roundRect(x, y, w, h, r)
+                          : () => { ctx.beginPath(); ctx.rect(x, y, w, h); });
+}
+/* 押下の光。r は光の角丸半径で、**そのボタンの面と同じ値**を渡す（違うと縁がずれる）。
    ボタンの絵の**上**に重ねる（面の下に敷くと、金色のアイコンや文字が光に溶けて消える）。
+   輪郭を関数ではなく矩形＋半径で受けるのは、光っていない間に無名関数を作らないため
+   （サウンドテストの項目のように、1画面で数十個が毎フレーム通る）。
    **押しても何も起きない状態のボタンでは呼ばないこと。** 光ると「効いた」と誤解させる */
-function _drawPressFlash(rect, pathFn) {
+function _drawPressFlash(rect, r = 6) {
   const k = _pressLevel(rect);
-  if (k <= 0) return;
-  _drawFlashOverlay(k, pathFn || (() => roundRect(rect.x, rect.y, rect.w, rect.h, 6)));
+  if (k > 0) _drawFlashRect(k, rect.x, rect.y, rect.w, rect.h, r);
 }
-/* 期限内の押下が1つでも残っているか。ポーズ中はrAFが止まっていて光が減衰しないため、
-   draw()の末尾がこれを見て自前で次のフレームを取りに行く（_pumpPressFlash） */
-function _pressesAlive() {
-  const now = performance.now();
-  for (const p of _presses) if (now - p.t < BTN_PRESS_FLASH_SEC * 1000) return true;
-  return false;
+/* 矩形でないボタン（ドラムパッドの平行四辺形）用。path は面の輪郭を引く関数 */
+function _drawPressFlashPath(rect, path) {
+  const k = _pressLevel(rect);
+  if (k > 0) _drawFlashPath(k, path);
 }
+/* ポーズ中はrAFが止まっていて光が減衰しないため、押下が残っている間だけ
+   draw()の末尾から次のフレームを取りに行く */
 let _pressFlashRaf = 0;
 function _pumpPressFlash() {
-  if (!isPaused || _pressFlashRaf || !_pressesAlive()) return;
+  if (!isPaused || _pressFlashRaf || _presses.length === 0) return;
   _pressFlashRaf = requestAnimationFrame(() => { _pressFlashRaf = 0; draw(); });
 }
 
@@ -11032,7 +11058,7 @@ function drawSoundTest() {
     ctx.font = `bold 11px sans-serif`;
     ctx.fillStyle = enabled ? '#fff' : 'rgba(255,255,255,0.35)';
     ctx.fillText(label, it.x + it.w / 2, it.y + it.h / 2);
-    if (enabled) _drawPressFlash(it, () => { ctx.beginPath(); ctx.rect(it.x, it.y, it.w, it.h); });
+    if (enabled) _drawPressFlash(it, 0); // 面が直角なので光も直角
   }
   ctx.restore();
 }
@@ -11050,7 +11076,10 @@ function drawSoundTest() {
    まま・再生時に丸めるだけの非破壊方式にする（_dpQuantBeat参照。OFFに戻せば叩いたままの
    演奏が戻る）。 */
 const DP_PAD_GAP = 8;
-const DP_FLASH_FRAMES = 10;    // 叩いた光の減衰（フレーム）
+/* 叩いた光の減衰。長さはボタンの押下フラッシュと同じ（60fps換算のフレーム数）。
+   パッドだけフレームで数えるのは、光が「発音」に紐づいていて映像が進んでいない間は
+   消えないほうが正しいため（_dpDrawPads は再生中の自動発光にも同じ光を使う） */
+const DP_FLASH_FRAMES = Math.round(BTN_PRESS_FLASH_SEC * 60);
 const DP_JOG_DAMP = 0.94;      // ジョグの回転減衰
 const DP_JOG_KICK = 0.10;      // 1打ぶんの回し量の基準（左2列は逆回り。_dpHit参照）
 const DP_JOG_REF_DUR = 0.22;   // 回し量の基準になる音長（普通の打点1発ぶん）
@@ -11866,9 +11895,8 @@ function _dpDrawCtls(o) {
     const at = inset => c.shape
       ? _dpRoundPoly(_dpBtnPoly(c, inset), 6)
       : roundRect(c.x + inset, c.y + inset, c.w - inset * 2, c.h - inset * 2, 5);
-    _dpDrawFace(ctx, c.y, c.h,
-      { fill: () => at(0), bevel: () => at(2), edge: () => at(0.5) },
-      red ? 'rec' : on ? 'on' : 'off');
+    const face = { fill: () => at(0), bevel: () => at(2), edge: () => at(0.5) };
+    _dpDrawFace(ctx, c.y, c.h, face, red ? 'rec' : on ? 'on' : 'off');
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = `bold 10px sans-serif`;
     ctx.fillStyle = (red || on) ? '#fff8e0' : live ? 'rgba(245,208,32,0.9)' : 'rgba(245,208,32,0.3)';
@@ -11877,7 +11905,7 @@ function _dpDrawCtls(o) {
              : c.shape === 'midR' ? c.x + DP_BTN_SKEW + (c.w - DP_BTN_SKEW) / 2
              : c.x + c.w / 2;
     ctx.fillText(DP_CTL_LABEL[c.id](LP), lx, c.y + c.h / 2 + 0.5);
-    if (live) _drawPressFlash(c, () => at(0)); // 押下の光は面と同じ形で被せる
+    if (live) _drawPressFlashPath(c, face.fill); // 押下の光は面と同じ輪郭で被せる
   }
 }
 
@@ -11915,8 +11943,7 @@ function _dpDrawPads(o) {
   for (const p of o.pads) {
     ctx.drawImage(_dpPadSprites[p.idx], p.x, p.y, p.w, p.h);
     const f = o.flash[p.idx];
-    if (f > 0) _drawFlashOverlay(f / DP_FLASH_FRAMES,
-      () => roundRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2, 10));
+    if (f > 0) _drawFlashRect(f / DP_FLASH_FRAMES, p.x + 1, p.y + 1, p.w - 2, p.h - 2, 10);
   }
 }
 
@@ -12578,6 +12605,7 @@ function _drawFrameEffects() {
 }
 
 function draw() {
+  _expirePresses(); // 押下の光の期限切れを1フレーム1回まとめて捨てる
   const shake = _computeScreenShake();
 
   ctx.save();
@@ -12729,7 +12757,7 @@ function _drawBetBtn(rect, label, canChange, fontSize) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = canChange ? Y : 'rgba(180,180,180,0.35)';
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
-  if (canChange) _drawPressFlash(rect); // 変えられない状態で光ると「効いた」と誤解させる
+  if (canChange) _drawPressFlash(rect, 8); // 変えられない状態で光ると「効いた」と誤解させる
 }
 
 function drawWheel(i) {
@@ -14102,7 +14130,7 @@ function drawStartup() {
   ctx.font = `bold 22px ${FONT_MIN}`;
   ctx.fillStyle = '#fff';
   ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
-  _drawPressFlash(STARTUP_BTN, () => roundRect(bx, by, bw, bh, 10));
+  _drawPressFlash(STARTUP_BTN, 10);
 
   ctx.restore();
 }
@@ -14680,7 +14708,7 @@ function _onTouchStart(e) {
   /* 入力物理発生時刻（performance.now() 基準 ms） */
   const inputPerfMs = e.timeStamp;
   const pt = touchToCanvas(e.touches[0]);
-  _markPress(pt.x, pt.y); // 押した点を控える（_drawPressFlash が各ボタンで拾う）
+  _markPressTouches(e); // 押した点を控える（_drawPressFlash が各ボタンで拾う）
   if (_handleTopButtons(pt.x, pt.y)) return;
   /* すべてのタッチで AudioContext をアンロックする。
      iOS Safari: touchstart はユーザーアクティベーションとして認定される。
@@ -14696,7 +14724,6 @@ function _onTouchStart(e) {
   if (phase === 'drumPad') {
     for (const tc of e.changedTouches) {
       const q = touchToCanvas(tc);
-      _markPress(q.x, q.y); // 指の数だけ控える（同時押しでもそれぞれ光る）
       _drumPadTouch(q.x, q.y);
     }
     return;
