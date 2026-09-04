@@ -536,7 +536,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.45';
+const VERSION = 'v7.46';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5601,6 +5601,25 @@ function _updateAlways() {
    startup / tapestart は通常モードの状態を共有していて委譲では書けないので、
    update() 側の分岐に残してある。
    参照している関数はすべて function 宣言で巻き上げられるため、この位置で構わない */
+/* phase ごとの全画面演出の描画。PHASE_UPDATERS と対で持つ:
+   phaseを追加したら「update をどうするか」と「何を描くか」の両方がここに並ぶので、
+   片方だけ足して気づかない状態になりにくい。
+   bossShatter は的の破片だけが違って本体とゲージは戦闘中と同じなので、drawBossBattle が
+   2つのphaseを受け持つ（関数側のガードも同じ2つを見ている）。
+   各関数は自前でも phase を確認するので、表と関数のどちらか片方が欠けても
+   誤って描かれることはない */
+const PHASE_DRAWERS = {
+  bossOmen:         drawBossOmen,
+  boss:             drawBossBattle,
+  bossShatter:      drawBossBattle,
+  bossVictory:      drawBossVictory,
+  bossVictoryOutro: drawBossVictoryOutro,
+  trueEnding:       drawTrueEnding,
+  bossDefeat:       drawBossDefeat,
+  bossDefeatShrink: drawBossDefeatShrink,
+  bossDefeatOutro:  drawBossDefeatOutro,
+};
+
 const PHASE_UPDATERS = {
   bossOmen:         _updateBossOmen,
   boss:             _updateBossBattle,
@@ -12271,14 +12290,8 @@ function _drawForeground() {
      ここは通常モードのfx/whl/txtプローブの範囲外なので、独立して計測する
      （戦闘中に全プローブが0.0なのにgapが50msという実機データの死角だった） */
   const _tKing = PERF_ON ? performance.now() : 0;
-  drawBossOmen();
-  drawBossBattle();
-  drawBossVictory();
-  drawBossVictoryOutro();
-  drawTrueEnding();
-  drawBossDefeat();
-  drawBossDefeatShrink();
-  drawBossDefeatOutro();
+  const _pd = PHASE_DRAWERS[phase];
+  if (_pd) _pd();
   if (PERF_ON) _perfMark('king', _tKing);
 
   /* ビートシンクメーター＋JUST演出（通常のシンク統計はボス戦では無関係のため非表示） */
@@ -13909,17 +13922,6 @@ function drawStartup() {
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
     ctx.fillText('「ギヨウザ」のパッケージを', W / 2, cy + 14);
     ctx.fillText('モチーフにしたルーレットゲーム', W / 2, cy + 34);
-    /* スタートボタン。矩形は必ず STARTUP_BTN（ヒット判定と同じ値）から取ること。
-       ここで座標を直書きすると、STARTUP_BTN を動かしたときに見た目と当たり判定がずれる */
-    const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
-    ctx.globalAlpha = 0.75 + 0.25 * pulse;
-    roundRect(bx, by, bw, bh, 10);
-    ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
-    ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.font = `bold 22px ${FONT_MIN}`;
-    ctx.fillStyle = '#fff';
-    ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
   } else {
     /* タイトル */
     ctx.font = `900 54px ${FONT_MIN}`;
@@ -13932,20 +13934,21 @@ function drawStartup() {
     ctx.font = `16px ${FONT_MIN}`;
     ctx.fillStyle = 'rgba(245,208,32,0.6)';
     ctx.fillText('「ギヨウザ」のパッケージをモチーフにしたルーレットゲーム', W / 2, H / 2 + 2);
-    /* スタートボタン */
-    const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
-    ctx.globalAlpha = 0.75 + 0.25 * pulse;
-    roundRect(bx, by, bw, bh, 10);
-    ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
-    ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.font = `bold 22px ${FONT_MIN}`;
-    ctx.fillStyle = '#fff';
-    ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
   }
 
-  ctx.restore();
+  /* スタートボタン（縦横共通）。矩形は必ず STARTUP_BTN から取ること。ここで座標を直書き
+     すると、STARTUP_BTN を動かしたときに見た目と当たり判定（handleGameClick）がずれる */
+  const { x:bx, y:by, w:bw, h:bh } = STARTUP_BTN;
+  ctx.globalAlpha = 0.75 + 0.25 * pulse;
+  roundRect(bx, by, bw, bh, 10);
+  ctx.fillStyle = 'rgba(180,130,0,0.9)'; ctx.fill();
+  ctx.strokeStyle = Y; ctx.lineWidth = 2; ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.font = `bold 22px ${FONT_MIN}`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('▶  ス タ ー ト', bx + bw / 2, by + bh / 2);
 
+  ctx.restore();
 }
 
 /* ════════════════ Loop / Input ════════════════ */
