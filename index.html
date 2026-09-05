@@ -537,7 +537,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.54';
+const VERSION = 'v7.55';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2075,6 +2075,9 @@ function _recreateAudioGraph() {
   _audioRecreateCount++;
   /* 新しいContextでは測り直す。残すと直後の判定が「まだ止まっている」と誤認する */
   _ctxStallSec = 0; _ctxStallLastCtx = null; _pauseCtxTime = null;
+  /* 旧Contextの時刻を持っている再生位置は、ここで新しい時計へ載せ替える。
+     ジングル（上）と同じ理由で、置き去りにすると二度と鳴らない */
+  _dpLoopRebaseClock();
   _updateBgmQuantizedLoopDur();
   _updateBeatDisplayAdvance();
   setTimeout(_updateBeatDisplayAdvance, 500);
@@ -3718,13 +3721,40 @@ function _autoPauseExempt() {
   return phase === 'startup' || phase === 'soundTest' || phase === 'drumPad';
 }
 
+/* 背面から戻ったあと、最初のユーザー操作で音声を立て直す。
+
+   iOSでは中断からの復帰（AudioContextの作り直し）がユーザージェスチャーの中でしか
+   効かない。そのためゲーム本編では「復帰＝PAUSE解除のタップ」に一本化してあるが、
+   自動PAUSEしないフェーズ（_autoPauseExempt）にはその入口が無い。印だけ付けておき、
+   次にどこかを触った時点でここが立て直す。
+   これが無いと復帰の経路がミュートの往復しか残らず、背面から戻したあと
+   ドラムパッドもサウンドテストも無音のままになる。
+
+   _unlockAudio() では足りない。あちらは resume() を呼ぶだけで、
+   interrupted なContextも「stateはrunningだが時計が止まっている」Contextも
+   作り直さない（後者では入口の早期returnで何もせずに戻る） */
+let _audioNeedsRecover = false;
+function _recoverAudioIfNeeded() {
+  if (!_audioNeedsRecover) return;
+  _audioNeedsRecover = false;
+  if (audioCtx) _resumeAudioCtx(_resumeAudioAfterInterrupt);
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    if (!isPaused && !_autoPauseExempt()) togglePause();
+    if (!_autoPauseExempt()) { if (!isPaused) togglePause(); return; }
+    /* 自動PAUSEしないフェーズ。背面にいる間にctx時計が進んだかを測れるよう
+       (壁時計, ctx時計) を控え、次の操作で立て直す印を付ける。
+       stall計は rAF が止まると進まないので、この区間は控えた値の突き合わせでしか測れない */
+    _markPauseCtxClock();
+    _audioNeedsRecover = true;
   } else if (isPaused && _autoPauseExempt()) {
     /* 対象外フェーズなのにPAUSE中＝別経路（画面回転など）で入っている。
-       解除ボタンが無いので復帰時に自動で戻す */
+       解除ボタンが無いので復帰時に自動で戻す。立て直しはPAUSE解除側が行う */
+    _audioNeedsRecover = false;
     togglePause();
+  } else if (_audioNeedsRecover) {
+    _foldPauseCtxStall(); // 背面にいた間の停止をstall計へ畳む（次の操作の判定材料）
   }
   /* フォアグラウンド復帰時の resume() は削除。
      interrupted 状態を suspended に変えてしまい、PAUSEボタンの
@@ -11659,6 +11689,22 @@ function _dpLoopStart() {
   _dpLoopStartSched();
 }
 
+/* AudioContextを作り直すと時計が0へ戻る。ループの起点(head)は旧Contextの時刻なので、
+   そのままでは予約位置が遥か未来と判定され、以後1音も鳴らない。
+   新しい時計の現在時刻を起点に置き直し、パターンの先頭から鳴らし直す。
+   録りかけ(pass/pending)と発光の予約(viz)は、失われた時間軸の上で採ったものなので捨てる。
+   確定済みのレイヤーは拍で持っているので影響を受けない */
+function _dpLoopRebaseClock() {
+  const L = _dp && _dp.loop;
+  if (!L || !audioCtx) return;
+  L.head = audioCtx.currentTime;
+  L.schedSlot = 0;
+  L.lastK = L.rec ? 0 : null;
+  if (L.rec) { L.pass = []; L.passDirty = false; }
+  L.pending = [];
+  L.viz = [];
+}
+
 /* 録音を終える。この時点で採用されているtakeを1レイヤーとして確定する */
 function _dpLoopCommit(L) {
   /* 先取りぶんも取りこぼさない（周の頭で確定した場合） */
@@ -14772,6 +14818,7 @@ canvas.addEventListener('mousedown', e=>{
   const cx = (e.clientX - _canvasRect.left) * (W / _canvasRect.width);
   const cy = (e.clientY - _canvasRect.top)  * (H / _canvasRect.height);
   _markPress(cx, cy); // 押した点を控える（_drawPressFlash が各ボタンで拾う）
+  _recoverAudioIfNeeded(); // 背面から戻った直後なら、ここで音声を立て直す
   if (_handleTopButtons(cx, cy)) return;
   _handleGameButtons(cx, cy, inputPerfMs, false);
 });
@@ -14801,6 +14848,7 @@ function _onTouchStart(e) {
   const inputPerfMs = e.timeStamp;
   const pt = touchToCanvas(e.touches[0]);
   _markPressTouches(e); // 押した点を控える（_drawPressFlash が各ボタンで拾う）
+  _recoverAudioIfNeeded(); // 背面から戻った直後なら、ここで音声を立て直す
   if (_handleTopButtons(pt.x, pt.y)) return;
   /* すべてのタッチで AudioContext をアンロックする。
      iOS Safari: touchstart はユーザーアクティベーションとして認定される。
