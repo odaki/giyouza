@@ -86,12 +86,19 @@ canvas:focus-visible { outline: none; }
    ■ 永続化             localStorage 読み書き・スキーマチェック
    ■ Startup Jingle     スタートジングルスケジューラ
    ■ Init               ゲーム初期化・リセット
+   ■ 中当たり退場        アウトロ（中当たりエフェクトの引き上げ）
    ■ コイン・BET        clampBet・changeBet・calcPayout
    ■ Update             毎フレーム状態更新
    ■ 勝利エフェクト      花火・ウヨウヨ・落下ギヨウザ・ウザウザ
                         ギウギウ・ギギギギ・ヨヨヨヨ・ウウウウ
                         ザザザザ・ギョギョ
    ■ 画面エフェクト      ギザギザ・ウザウザフラッシュ
+   ■ キング 出現予告     こんがり蓄積からの登場演出
+   ■ キング 戦闘        コール＆レスポンス・的（ミニリール）・勝敗
+   ■ こんがり達成退場    bossVictoryOutro
+   ■ 真エンディング      テーマ曲・エンドロール
+   ■ サウンドテスト      SE/BGM の試聴一覧
+   ■ ドラムパッド        4x4パッド・パターンシーケンサ（ルーパー）
    ■ 吉祥雲 / 獅子
    ■ Draw helpers       outText・easeOutBack・roundRect・_drawBtnBg
    ■ Main draw          draw() メインループ描画
@@ -366,8 +373,8 @@ function drawPerf() {
     /* 割り込み（他アプリが音を鳴らす）からの復帰を切り分けるための行。
        re   = AudioContextを作り直した回数。0のまま音が出ないなら割り込みを検知できていない
        sr   = 現在／最初のsampleRate。変わっていれば復帰時にデバイスが切り替わっている
-       bgm  = 鳴らすべきバッファの有無（n=通常, b0..=ボスの段階）。× なら _doResumeBGM が
-              黙って return する条件に当たっている
+       bgm  = 鳴らすべきバッファの有無（n=通常, b0..=ボスの段階）。× なら
+              _resumeBgmFromPause が黙って return する条件に当たっている
        src  = bgmSource の有無。isBoss = 最後に作ったソースがボス用だったか */
     `re ${_audioRecreateCount} sr ${audioCtx ? (audioCtx.sampleRate/1000).toFixed(1) : '-'}k` +
       `/${_audioSampleRateAtFirst ? (_audioSampleRateAtFirst/1000).toFixed(1) : '-'}k` +
@@ -537,15 +544,15 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.55';
+const VERSION = 'v7.56';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
 const YD  = '#c8a800';
 const GN  = '#0f5c22';
 
-/* canvasのfont指定で使う明朝ファミリ。88箇所に直書きされていたものを一本化
-   （CSS側のbody指定はフォールバックを含む別の並びである点に注意: 変更時は両方見る） */
+/* canvasのfont指定で使う明朝ファミリ。フォント名は必ずここを通す（直書きしない）。
+   CSS側のbody指定はフォールバックを含む別の並びなので、変更時は両方見ること */
 const FONT_MIN = "'Hiragino Mincho ProN',serif";
 
 /* ホイールハブグラジェント: 全ホイール・全トライ共通（毎トライの生成＆GCを排除）
@@ -1597,7 +1604,7 @@ function onBeatGrid() {
    サブフレーム補間が常に0へクランプされる判定バイアスを生む */
 
 /* ビジュアルビート表示用の「今聴いている音声時刻」を取得する。
-   audioCtx.currentTime は outputLatency 分だけ未来の予約時刻であり、
+   audioCtx.currentTime は出力遅延の分だけ未来の予約時刻であり、
    ビジュアルタイミング基準として使うと遅延する。
    getOutputTimestamp().contextTime は現在スピーカーから出ている音の時刻なので
    これを基準に描画パイプライン遅延（≈2フレーム）だけ先読みすれば視覚と音が一致する。 */
@@ -1610,9 +1617,10 @@ let _hwLatency = 0; // 実効出力遅延のキャッシュ（毎フレーム読
 let _hwLatEff = null, _hwLatSrc = '-'; // ?perf表示用: 推定の生値と採用元（挙動には影響しない）
 let _latencyRefreshCnt = 0; // 定期再計測用フレームカウンタ（経路変更追従・演出系なのでフレーム基準で可）
 /* 手動遅延補正（?lat=ms URLパラメータ、負値も可）:
-   iOS Safari は outputLatency 未実装（WebKitにFIXMEあり）のため、AirPods 等
-   Bluetooth の出力遅延（150〜250ms）を検出できない。ビートリングと音のズレを
-   感じる場合に ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
+   出力遅延の自動検出（_updateBeatDisplayAdvance）は2つの経路のどちらかが効けば
+   当たるが、両方とも空振りする環境がありうる。AirPods 等 Bluetooth の出力遅延
+   （150〜250ms）を取り逃がすとビートリングと音がずれるので、そう感じたときに
+   ?lat=180 のように指定して較正する（値はリングを遅らせる方向） */
 const _LATENCY_TRIM = _dbgNum('lat', 0) / 1000;
 /* 判定の既定バイアス: 人間はビートに合わせてタップすると平均20〜40ms先行して
    叩く傾向（negative mean asynchrony）があるため、判定グリッドを既定で早める。
@@ -1648,9 +1656,12 @@ function _shootSEPad() {
 function _updateBeatDisplayAdvance() {
   if (!audioCtx) return;
   let hw = (audioCtx.outputLatency ?? 0) + (audioCtx.baseLatency ?? 0);
-  /* outputLatency 未実装環境（Safari）向け: getOutputTimestamp から実効出力遅延を推定。
-     currentTime（スケジュール済み時刻）− contextTime（今スピーカーから出ている音の時刻）
-     が Bluetooth を含む出力チェーン遅延。取得できて hw より大きければ採用する */
+  /* **`outputLatency` が実装されている前提でも未実装の前提でも書かないこと。**
+     同じ iOS Safari でも、`outputLatency` に 163ms を申告する世代と、0 を返して
+     `getOutputTimestamp` 側の推定でしか掴めない世代の両方が実在する。
+     そこで2つの経路を両方求め、**大きい方**を採る。
+     推定の中身は currentTime（スケジュール済み時刻）− contextTime（今スピーカーから
+     出ている音の時刻）で、これが Bluetooth を含む出力チェーン遅延にあたる */
   _hwLatSrc = 'base';
   if (typeof audioCtx.getOutputTimestamp === 'function' && audioCtx.state === 'running') {
     const ts = audioCtx.getOutputTimestamp();
@@ -1866,11 +1877,11 @@ function _createMasterLimiter(ctx) {
 }
 
 /* BGM系の接続を組む: bgmGain → bgmToneShelf → masterGain。
-   getAudioCtx() と _recreateAudioGraph()（iOS interrupted からの復帰）の
-   2箇所がそれぞれ独立にこの配線を持っていたため、ノードを1つ挟むだけでも
-   片方を直し忘れると「復帰後だけ音色が違う」という再現しにくい不具合になる。
-   「状態を作る箇所が2つある」ことが原因の欠陥クラス（_bgmIsBoss の残留バグと同じ構図）
-   なので、最初から配線を1箇所に集約する */
+   AudioContext を作る経路は getAudioCtx() と _recreateAudioGraph()（iOS interrupted
+   からの復帰）の2つあるが、**配線はここ1箇所にしか書かない**。
+   両方に配線を持たせると、ノードを1つ挟むだけでも片方を直し忘れて
+   「復帰後だけ音色が違う」という再現しにくい不具合になる
+   （「状態を作る箇所が2つある」ことが原因の欠陥クラス。_bgmIsBoss も同じ構図） */
 function _buildBgmGainChain(ctx, outNode) {
   bgmGain = ctx.createGain();
   bgmGain.gain.value = 1;
@@ -2227,9 +2238,9 @@ function _unlockAudio() {
 }
 function _unlockAudioImpl() {
   /* AVAudioSessionの昇格（_elevateAudioSession）はここでは呼ばない。
-     成功するまでの間は1回あたり最大55msかかることが実機計測で分かったため、
-     入力処理より後ろ＝touchstartハンドラの最後（finally）へ移した。
-     ジェスチャー内であることは変わらないので昇格の条件は満たす */
+     昇格は成功するまで1回あたり最大55msかかる（実機計測）ので、入力処理より手前で
+     呼ぶとタップのたびにその分の引っかかりが出る。呼ぶ場所は touchstart ハンドラの
+     最後（finally）——そこでもジェスチャー内であることは変わらず、昇格の条件を満たす */
   if (!audioCtx) getAudioCtx();
   /* スピーカールート未確立、または suspended の場合にバッファを再生する。
      ジェスチャー内で生成した AudioContext は即 running になるが、
@@ -2554,9 +2565,9 @@ const BGM_LOOP_DUR_BOSS = BGM_BEAT * 0.5 * BGM_MEL_BOSS.length; // 16拍 ≈6.31
    f0→f1へ指数スライドさせつつ、ゲイン包絡線envで鳴らして止める。
    env: [経過秒, 値, 種別] の列。種別 'set'=setValueAtTime /
    'lin'=linearRamp / 省略=exponentialRamp。
-   キック・和太鼓・SE（ズコー/スローハンド）が同一構造のosc+gain手組みを
-   それぞれコピーして持っていたのを統合した（ボス戦の音色追加で同構造が
-   5箇所に増えたため。パラメータはすべて既存値をそのまま移設） */
+   キック・和太鼓・SE（ズコー/スローハンド）・ボス戦の音色は、いずれも
+   「osc → gain、周波数をスライドさせて減衰させる」という同じ骨格を持つ。
+   骨格をここへ集約し、音色ごとの違いは引数だけで表す */
 function _playSlideOsc(ctx, dest, t, type, f0, f1, slideDur, env, stopAt) {
   const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -3756,10 +3767,10 @@ document.addEventListener('visibilitychange', () => {
   } else if (_audioNeedsRecover) {
     _foldPauseCtxStall(); // 背面にいた間の停止をstall計へ畳む（次の操作の判定材料）
   }
-  /* フォアグラウンド復帰時の resume() は削除。
-     interrupted 状態を suspended に変えてしまい、PAUSEボタンの
-     interrupted 検知ブランチ（AudioContext 再作成）が動かなくなるため。
-     PAUSEボタンのタッチイベント内で resume()/再作成を確実に行う。 */
+  /* **ここで resume() を呼んではいけない。** interrupted を suspended に変えてしまい、
+     「interrupted なら作り直す」という判定（_resumeAudioCtx）が動かなくなる。
+     実際の立て直しはユーザージェスチャーの中で行う——自動PAUSEするフェーズは
+     PAUSE解除のタップ、それ以外は次の操作（_recoverAudioIfNeeded）が担う。 */
 });
 
 function toggleMute() {
@@ -3783,7 +3794,7 @@ function toggleMute() {
      キング戦系のBGMはテンポ（BOSS_BGM_RATE）・地鳴りの段階差し替え・テープ停止まで
      戦闘側の経路が一括で持っており、ミュート操作から素の startBGM（レート1.0・
      bgmPhaseRefリセット・グレースケール即時解除）を割り込ませてよい状態が無い。
-     復帰の入口はPAUSE解除（_doResumeBGM）に一本化する */
+     復帰の入口はPAUSE解除（_resumeBgmFromPause）に一本化する */
   if (!audioMuted && !_noAutoBgmPhase() && audioCtx && !bgmSource && !jingleScheduler) {
     startBGM();
   }
@@ -4411,7 +4422,7 @@ function playStartJingle(onEnd) {
      予約でき、resume() 完了後に正しく再生される。iOS で resume() Promise が次の
      ユーザージェスチャーまで解決しない場合でも即座にジングルを開始するため state チェック不要。 */
   if (!audioCtx) { onEnd && onEnd(); return; }
-  /* bgmSource がすでに存在する場合: ensureAudioRunning の非同期コールバックが
+  /* bgmSource がすでに存在する場合: _resumeAudioCtx の非同期コールバックが
      ゲームオーバー→リセット後に遅れて届いた可能性がある（競合状態）。
      BGM はすでに起動済みなのでジングルを再生しない。 */
   if (bgmSource) { return; }
@@ -4876,8 +4887,8 @@ const _WHEEL_OC_R = WR + 4;
 /* セグメント・文字・ハブを OffscreenCanvas に事前描画する共通ビルダー。
    文字は mid + π/2 回転させてホイール中心が文字の下方になるようにする。
    毎フレームの描画コストをなくし drawImage 1回に置き換える。
-   通常ホイール（_buildWheelOC）とキング的（_buildKingReelOC）で同一の描画
-   構造をコピーして持っていたのを統合した。差分はoptで注入する:
+   通常ホイール（_buildWheelOC）とキング的（_buildKingReelOC）は同一の描画構造を持つ。
+   共通部分をここに置き、差分はoptで注入する:
      r       : ホイール半径
      ocR     : OCの論理半径（r+余白）
      pool    : 返却済みOCの再利用プール
@@ -5421,10 +5432,9 @@ function drawKingReel(w, active, idx) {
 
 /* ════════════════ Update ════════════════ */
 /* 4本目が着弾した瞬間の確定処理（当たり型の判定・フィーバー・king値・配当・実績・ハズレ）。
-   update()のshooting分岐に157行そのまま埋まっていたぶんを関数として切り出したもの。
-   ここを読むだけで「1トライの結果がどう決まるか」が追えるようにするのが目的で、
-   処理内容と順序は変えていない（順序には意味がある: フィーバー終了判定→アイテム投下→
-   配当計算→ゲームオーバー判定→ハズレ判定→保存、の順に依存関係がある）。 */
+   ここを読むだけで「1トライの結果がどう決まるか」が追える形にまとめてある。
+   **順序には意味がある**: フィーバー終了判定→アイテム投下→配当計算→ゲームオーバー判定→
+   ハズレ判定→保存、の順に依存関係があるので、並べ替えると結果が変わる。 */
 /* フィーバーの終了判定。大当たり以外で即終了、大当たりならトライ数を1消費して
    0になったら完走。どちらの終わり方かは feverEndedReason に残し、配当（フル連チャンは×2）と
    バナー文言の両方がこれを見る。
@@ -7352,7 +7362,8 @@ function _maybeStartBossOmen() {
 
 function _startBossOmen() {
   pendingShoot = false;
-  /* 事前構築の作り置きはプールへ返す（タイマー駆動をやめたので打ち切り処理は不要） */
+  /* 事前構築の作り置きはプールへ返す。事前構築は入力を基準に進める作りで
+     （_pendingWheels の定義部参照）タイマーを持たないので、打ち切り処理は要らない */
   _releaseWheelOCs(_pendingWheels); _pendingWheels = null;
   if (_omenGhost) { _freeGhostCanvases.push(_omenGhost.oc); _omenGhost = null; }
   items = _releaseAll(items);
@@ -7485,7 +7496,7 @@ function _noBgmResumePhase() {
 /* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
    通常モード復帰（_kingBattleEnd、勝敗問わず・2回目以降の無演出勝利含む）と、
    真エンディング終了後の復帰（_finishTrueEnding、常にstartupへ戻る）の
-   両方から呼ぶ共通処理として切り出した */
+   両方から呼ぶ共通処理 */
 function _cleanupKingBattleState() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null; _kingLasers = []; _kingCharFlights = [];
@@ -7905,7 +7916,7 @@ const KING_MARK_RESIDUAL_ALPHA = 0.14;
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
 /* KING_RESULT_MIN_WAIT: 4本確定後、結果表示を最小何フレーム保持するか。
-   通常モードの的判定（phase==='done'のminWait、2582行目付近）と同じ考え方:
+   通常モードの的判定（update() の phase==='done' 分岐の minWait）と同じ考え方:
    ハズレは短く、当たりは少し長く。実際の解放はここに onBeatGrid() の
    BGM拍グリッド同期を重ねる（_updateBossBattle）ため、体感の待ち時間は
    通常モードの「ハズレ次弾」と揃う */
@@ -8011,7 +8022,7 @@ let _kingCrackKinLastMs = -Infinity;
    小節には固定せず量子化グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
 
-   打ち込み: 5タップは生・即時。マーク4回はクローズハイハット(kingShoot)、発射は
+   打ち込み: 5タップは生・即時。マーク4回はクローズハイハット(kingMark)、発射は
      オープンハイハット(kingFire)で撃った合図を音でも立てる。
      プレイヤーの入力そのものは決して補正しない（発射SEをビートへスナップさせない）。
      各タップの時刻は _bgmJudgePos → スロットへ量子化して記録する。
@@ -8392,7 +8403,7 @@ function _renderKingBody() {
   }
   if (pct <= 0 && activeCount === 0 && settledCount === 0) return _bossOC.oc; // 未被弾: 素のスプライトをそのまま使う
   /* 再合成スキップの条件は pct 一致だけでは不十分: 直前のフレームでまだフェード中の
-     焦げ跡が残っていた（_toneHadActive）場合、今回activeCountが0になっていても「焦げ跡を
+     焦げ跡が残っていた（_toneHadActive）場合、このフレームでactiveCountが0でも「焦げ跡を
      残痕アルファまで落とし切る」1回の再合成をしないと、消える途中の焦げ跡が残ったまま
      キャッシュされ、ボスが直前フレームの絵で固まる。settledCountの増加も同様に再合成
      トリガーにする（新たに永続痕入りした焦げ跡を反映するため） */
@@ -9503,8 +9514,8 @@ function _updateBossBattle() {
    文字自体の大きさもJUSTでKING_CHAR_JUST_FONT_SCALE倍にする（焦げ跡側は常に一定サイズで、
    文字の大きさとは別物）。
    フォントサイズが1文字ごとに変わるため ctx.font はループ内で設定する */
-/* キング本体を現在の表示姿勢（dbx/dby/dscale）で1枚描く。決着まわりの4つの
-   描画関数が同じ4行を持っていたのを一本化した。alphaを渡すとその不透明度で描く
+/* キング本体を現在の表示姿勢（dbx/dby/dscale）で1枚描く。決着まわりの4つの描画関数は
+   いずれもここを通す（姿勢の適用を1箇所に持つ）。alphaを渡すとその不透明度で描く
    （クロスフェード用。省略時は呼び出し側の状態のまま） */
 function _drawKingBody(alpha) {
   if (!_king) return;
@@ -9670,8 +9681,7 @@ function drawBossBattle() {
   }
   /* 決定文字の飛翔（ボス本体の上に描く＝飛んで/跳ね返って見える） */
   drawKingCharFlights();
-  /* こんがりミニリール4連（旧: 砲台）。破砕演出中は的の絵柄の代わりに
-     飛び散る破片を描く */
+  /* こんがりミニリール4連。破砕演出中は的の絵柄の代わりに飛び散る破片を描く */
   if (phase === 'boss') {
     for (let i = 0; i < 4; i++) drawKingReel(_king.reels[i], i === _king.reelIdx, i);
   } else {
@@ -11503,7 +11513,7 @@ function _dpQuantBeat(L, beat, len) {
 function _dpSlotOf(beat) { return Math.round(beat * DP_SLOTS_PER_BEAT); }
 function _dpSlotDur(L) { return _dpBeatDur(L) / DP_SLOTS_PER_BEAT; }
 
-/* 現在の拍位置（0〜beatsPerLoop）。停止中は0 */
+/* 現在の拍位置（0〜_dpBeatsPerLoop(L)）。停止中は0 */
 function _dpLoopBeatPos(L) {
   if (!L.playing || !audioCtx) return 0;
   const bp = _dpBeatsPerLoop(L);
@@ -11747,7 +11757,7 @@ function _dpLoopUndo() {
   if (L.rec && ((L.take && L.take.length) || (L.pass && L.pass.length) || L.pending.length)) {
     L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
     /* 予約位置は巻き戻さない。既にWeb Audioへ渡した先読みぶんは取り消せないので、
-       巻き戻すと同じ音が二度鳴るだけになる（_dpLoopSetBpm のコメントと同じ理由）。
+       巻き戻すと同じ音が二度鳴るだけになる（_dpLoopApplyBpm のコメントと同じ理由）。
        捨てた録りかけは先読みの残り（最大 DP_SCHED_AHEAD）ぶんで鳴り止む */
     return;
   }
@@ -12305,9 +12315,8 @@ function _drawBtnBg(rect, active) {
 /* ── 画面最前面のボタン群 ──────────────────────────────
    トロフィー・真エンディング再生・全画面・ミュート・ポーズの5つ。いずれも
    「背景(_drawBtnBg) → 中心へ移動 → アイコンのベクタ描画」という同じ骨格なので、
-   骨格を_drawTopBtnに、造形だけを各アイコン関数に分ける。
-   draw()に154行そのまま並んでいたものを移した（draw()には骨格だけを残す、という
-   _drawForegroundの分割方針に揃える）。アイコンは毎フレームその場で無名関数を
+   骨格を_drawTopBtnに、造形だけを各アイコン関数に分ける（draw()には骨格だけを置く、
+   という_drawForegroundと同じ分け方）。アイコンは毎フレームその場で無名関数を
    作らずに済むよう名前付き関数で渡す（描画ループでの割り当てを増やさない） */
 function _drawTopBtn(rect, active, drawIcon) {
   ctx.save();
@@ -12560,9 +12569,9 @@ function _drawPillBadge(text, opts) {
 
 /* ════════════════ Main draw ════════════════ */
 /* 前景レイヤー一式（暗幕→当たり演出→テキスト→全画面演出→バッジ類）。
-   draw()に425行そのまま並んでいたうちの前景部分を切り出したもの。順序がそのまま
-   重なり順なので、並べ替えは見た目の変更になる。draw()側には
-   「背景・盤面 → _drawForeground() → ポーズ/デバッグ表示」という骨格だけを残す。 */
+   **並び順がそのまま重なり順**なので、並べ替えは見た目の変更になる。
+   draw()側には「背景・盤面 → _drawForeground() → ポーズ/デバッグ表示」という
+   骨格だけを置く。 */
 function _drawForeground() {
   /* 1. オーバーレイ（ハズレは暗幕なし） */
   if (phase==='done'&&endTimer>45&&!isMissResult&&!isGameOver&&hitType!=='none') drawEndOverlay();
@@ -12903,10 +12912,10 @@ function drawWheel(i) {
   /* ビート拍動: アクティブホイールの強調度をキックに合わせてパルス */
   const bp = active ? getBeatPulse() : 0; // 0-1、ビート直後=1
   ctx.save(); ctx.translate(w.x,w.y);
-  /* グロー光輪: セグメント描画前に1回だけ shadowBlur を使用し GPUブラーパスを集約
-     旧: 各セグメントのfill/stroke/strokeText/fillText すべてに shadowBlur が効いて
-         8〜12セグ × 4操作 = 32〜48 GPU ブラーパス/フレーム → Input Delay 17〜27ms の原因
-     新: 外周リングを1ストロークするだけ = 1 GPU ブラーパス/フレーム */
+  /* グロー光輪は外周リングを1ストロークするだけにして、GPUブラーパスを1回に抑える。
+     **セグメントごとの描画に shadowBlur を効かせてはいけない。**
+     fill/stroke/strokeText/fillText すべてに乗るので 8〜12セグ × 4操作 =
+     32〜48パス/フレームになり、Input Delay が 17〜27ms 悪化する */
   if (active) {
     if (_wheelGlowSprites) {
       /* プリレンダ済みグロー（bp 8段階量子化）+ クリスプなリング本体 */
@@ -14739,10 +14748,10 @@ document.addEventListener('keydown', e=>{
 
 /* ── ポインタ入力のボタン当たり判定（touchstart / mousedown 共通） ──
    はしごを2つに割っているのは、タッチだけが途中で音声アンロックを挟むため。
-   順序を保ったまま共通化するのが目的で、判定そのものは一切変えていない。
+   **判定の順序には意味がある**（先に見たボタンが勝つ）ので、並べ替えないこと。
    プラットフォーム固有の入口（_unlockAudio・_ensureCanvasFocus・STARTをtouchendへ
    回す扱い）は共通化の対象外にしている。iOSのオーディオ有効化仕様に合わせた
-   意図的な設計であり、揃えてはいけない（[[feedback-ios-safari-audio]]のルール11） */
+   意図的な設計であり、揃えてはいけない（README.md「iOS Safari Web Audio 実装ノート」参照） */
 
 /* 全フェーズで最初に見るボタン（チートパネル・全画面）。処理したらtrueを返す */
 function _handleTopButtons(x, y) {
