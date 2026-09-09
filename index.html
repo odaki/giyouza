@@ -544,7 +544,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.57';
+const VERSION = 'v7.58';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -8671,19 +8671,23 @@ function _kingFireAttack(inputPerfMs, forced = false) {
     _king.reelBeamed = [true, true, true, true]; // ハズレはビームが飛ばないので帯電はここで止める
     /* この試技で飛ばした（が未解決の）4体すべてに結果を伝える。着地先はスポーン時から
        確定済みのためここでの位置変更は不要（そこから跳ね返る）。
-       ハズレの4体には共通のattemptTokenを持たせる。remainingは「衝突（ひび）が全て入り
-       終えたか」（シャッター演出のトリガー、_updateKingCharFlights参照）、aliveは「4体とも
-       画面外へ消えて配列から取り除かれたか」（次のトライを許可する条件、_kingTrialGate参照）を
-       別々に数える。衝突完了と画面外退場はタイミングが異なる（衝突後もfall状態でしばらく
-       画面内に残る）ため2つのカウンタが必要 */
-    const attemptToken = { remaining: 0, alive: 0 };
+       ハズレの4体には共通のattemptTokenを持たせ、remainingで「衝突（ひび）が全て入り
+       終えたか」を数える。6回目の失敗の破砕演出のトリガー（_updateKingCharFlights参照）と、
+       次のトライの解放（_kingTrialGate参照）の両方がこの1つのカウンタで決まる */
+    const attemptToken = { remaining: 0 };
     for (const f of _kingCharFlights) {
       if (f.resolve !== null) continue;
       f.resolve = 'bounce';
-      f.attemptToken = attemptToken; attemptToken.remaining++; attemptToken.alive++;
+      f.attemptToken = attemptToken; attemptToken.remaining++;
     }
-    /* こんがりが揃わない場合、落下してきた文字が的にぶつかって全て画面外へ消えるまで
-       次のトライを始めさせない。_king側に保持し、_kingTrialGateの再スピン可否判定で参照する */
+    /* ハズレのトライが終わるのは「失敗が的に刻まれた瞬間」＝4体とも衝突してひびが入り
+       終えたとき。弾き飛ばされた文字が画面外へ消えるのは待たない。
+       消えるまで待つと、落下（0.8〜0.9秒）が終わってから次の小節境界を選ぶことになり、
+       待ちが落下の後ろに直列でぶら下がって、文字が消えたあと平均0.7秒・最大1.3秒だけ
+       的が回り出さない時間が空く。
+       落下は再スピンのあとも続くが、文字は的より先に描かれる（drawBossBattleの
+       drawKingCharFlights → drawKingReel の順）ので、回り始めた的の後ろを落ちていくだけで
+       絵は乱れない */
     _king.missAttemptToken = attemptToken;
 }
 
@@ -9097,15 +9101,15 @@ function _kingBatteryCheck() {
   while (_king.reelIdx < 4) _kingReelShoot(null, true);
 }
 
-/* 次トライの解放。レスポンスが終わり（ハズレなら4体が画面外へ消え切り）、その後の最初の
-   **小節境界**で的を回し直す。速く打ち終われば速くレスポンスが終わり、速く次へ進む。
+/* 次トライの解放。レスポンスが終わり（ハズレなら4体が的に衝突してひびが入り切り）、その後の
+   最初の**小節境界**で的を回し直す。速く打ち終われば速くレスポンスが終わり、速く次へ進む。
    当たりの場合はアクセント（爆発）が次のコールの1拍目を兼ねるのでここは通らず、
    _kingSeqAccent から直接 _kingStartTrial が呼ばれる。ここを通るのはハズレ経路と、音声の
    時計が使えずシーケンスを組めなかった場合 */
 function _kingTrialGate() {
   if (!_king.attemptFired || _king.pendingDefeat || _king.pendingVictory) return;
   if (_king.seqEvents.length > 0) return; // 再生中
-  const missClear = _king.resultMatched || !_king.missAttemptToken || _king.missAttemptToken.alive <= 0;
+  const missClear = _king.resultMatched || !_king.missAttemptToken || _king.missAttemptToken.remaining <= 0;
   if (!missClear) return;
   const pos = _bgmJudgePos();
   if (pos === null || _bgmRateRamping()) {
@@ -9227,9 +9231,9 @@ function _easeKingXform() {
    といった不具合になる。集約しておけば、新しい常時演出を足したときの水平展開漏れも起きない。
    個々の中身は対象が空なら何もしない（_king が null、配列が空）ため、どのフェーズから
    呼んでも安全 */
-/* 文字飛翔の生存判定と後始末。毎フレーム呼ばれるswapRemoveの引数なので、
-   その場のアロー関数ではなくモジュールスコープに置く（クロージャ生成ゼロ。
-   通常モードの_pred*と同じ方針で、キング戦側にも水平展開する） */
+/* 文字飛翔の生存判定。毎フレーム呼ばれるswapRemoveの引数なので、その場のアロー関数では
+   なくモジュールスコープに置く（クロージャ生成ゼロ。通常モードの_pred*と同じ方針で、
+   キング戦側にも水平展開する） */
 const _predKingCharAlive = f => {
   /* 焼き込み待ち（帯電中）の文字は5音目まで消さない。焦げになるのはその瞬間なので、
      ここでフェードさせてしまうと「文字が消えて何も無い時間」が挟まる
@@ -9240,11 +9244,6 @@ const _predKingCharAlive = f => {
   if (f.state === 'fall')  return !_isKingCharOffscreen(f) && f.frames < KING_CHAR_FALL_MAX_FRAMES;
   return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
 };
-/* 画面外へ消えて配列から取り除かれた瞬間にattemptToken.aliveを減らす。
-   _updateBossBattleがalive<=0（このattemptの4体が全て消え終えた）を見て初めて
-   次のトライ（respin）を許可する */
-const _onKingCharRemoved = f => { if (f.attemptToken) f.attemptToken.alive--; };
-
 function _updateKingCommonFx() {
   if (_king) _easeKingXform();
   /* 被弾した的の揺れを減衰させる（_kingReelShakeOffset参照）。衝突は破砕へ
@@ -9493,8 +9492,9 @@ function _updateKingCharFlights() {
         f.rotSpd = knockDir * KING_CHAR_KNOCK_ROT_SPD * (0.7 + Math.random() * 0.6);
         /* 衝突の瞬間にひびを追加 */
         _addKingReelCrackAtCollision(f);
-        /* 同じ失敗attemptの4体全てが衝突し終えたら、6回目の失敗（pendingDefeat）
-           の場合に限り的の破砕演出へ進む（_kingReelShoot参照）。
+        /* 同じ失敗attemptの4体全てが衝突し終えた＝そのハズレのトライが閉じた瞬間。
+           次のトライの解放条件（_kingTrialGate）がこのカウンタを見る。加えて6回目の失敗
+           （pendingDefeat）の場合に限り的の破砕演出へ進む（_kingReelShoot参照）。
            phase==='boss'ガードは防御的措置: _updateKingCharFlightsは
            bossVictory/bossDefeat系の各updateからも呼ばれ続けるため、万一
            別phaseへ遷移済みの状態で衝突が完了してもシャッターで上書きしない
@@ -9518,7 +9518,7 @@ function _updateKingCharFlights() {
       f.rot += f.rotSpd;
     }
   }
-  swapRemove(_kingCharFlights, _predKingCharAlive, _onKingCharRemoved);
+  swapRemove(_kingCharFlights, _predKingCharAlive);
 }
 
 function _updateBossBattle() {
