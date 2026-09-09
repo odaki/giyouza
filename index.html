@@ -544,7 +544,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.56';
+const VERSION = 'v7.57';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -8079,6 +8079,29 @@ const KING_SEQ_GAP_MAX = 4 * KING_SEQ_DIV;
    終盤のキックに乗せた打ち込み（1〜3拍の間隔）はこの範囲に収まるので影響しない。
    下の scale による比率圧縮は、倍率を1まで下げても収まらない病的なケースだけの保険 */
 const KING_SEQ_SPAN_SLOTS = KING_SEQ_GAP_MAX * 2;
+/* 「正解文字が回ってくるのを待っていた回」の判定閾値＝コール全長（1打目〜4打目）3小節。
+
+   序盤は的の各文字のエリアが1/4しかなく、その窓（0.20〜0.29秒）は1拍（0.33秒）より狭い。
+   的の回転周期（0.81〜1.16秒）は拍と無関係なので、拍の瞬間が窓の内側に気持ちよく入る
+   回転が来るまで見送ることになり、タップ間隔は5〜10拍まで伸びる。この間隔はリズムの
+   意図ではなく待ち時間なので、比として読むと 5:9:4 のような大きい整数になり、全長の上限
+   （KING_SEQ_SPAN_SLOTS）に収めるために倍率が1〜2まで落ちて、再生間隔が1.25拍・2.25拍と
+   いう拍節に存在しない値になる。全拍にキック（BGM_KICK_BOSS）が入っているボスBGMの上で
+   これが鳴ると、拍から浮いた長いフレーズとして聴こえる。
+   命中させた文字のエリアが広がると（_adjustKingCharWeight）窓が1拍より広くなり、どの拍でも
+   狙えるようになる＝間隔が1〜3拍になってコール全長は3小節に収まる。つまりこの閾値は
+   「文字を待っていたか、リズムに乗って叩けていたか」を構造的に分ける線になる。
+   フィット誤差から「意図の有無」を推定する形にしてはいけない（上限クランプされた間隔は
+   ちょうど格子上の値になるので、意図なしのほうが誤差が小さく出て指標が逆に働く） */
+const KING_SEQ_LONG_CALL_BEATS = 3 * KING_BAR_BEATS;
+/* 長コールの回だけ掛けるレスポンス先頭の待ちの上限＝1拍。
+   leadIn（コール1打目の小節内位置）は0〜15スロット＝最大1.23秒あり、コールを閉じてから
+   小節境界までの切り上げの待ち（最大1小節）にそのまま上乗せされる。長コールの回は
+   レスポンスが必ず詰められていて2音目以降の小節内位置はコールと一致しないので、1音目の
+   位置だけのためにこの長さを払う意味が無い。
+   0にしないのは、切り替えの合図（_playKingCue）と1音目が同じスロットに重なって合図が
+   聴き分けられなくなるため。1拍空けると「パン → タンタンタンタン」の形が保たれる */
+const KING_SEQ_LEAD_IN_MAX = KING_SEQ_DIV;
 /* 打ち込みハイハットの音量（_playKingHat）。
    KING_HAT_ACCENT は発射（オープン）への上乗せで、撃った瞬間にアクセントを立てる。
    TRのACCENTと同じくレベルだけを動かし、音色（フィルタ・長さ）は変えない */
@@ -8691,15 +8714,21 @@ function _kingBuildSequence(forced, gain, flights) {
          → コールが占めた小節数 callBars ぶん後ろの小節境界がレスポンス開始
          → 各音は「コール1打目の小節内位置(leadIn) + 打ち込みの相対オフセット」
          → レスポンスが終わった次の小節境界がアクセント（＝次のコールの1拍目）
-     leadIn は1打目の絶対位置ではなく**小節内の位置**だけを引き継ぐ。序盤は正解文字を
-     待って何小節も空けるので、絶対位置ごと持ってくると先頭に死んだ間が入る。
-     小節内位置さえ揃えば照合には十分 */
+     leadIn は1打目の絶対位置ではなく**小節内の位置**だけを引き継ぐ。正解文字を待って
+     何小節も空けた回で絶対位置ごと持ってくると、先頭に死んだ間が入る。小節内位置さえ
+     揃えば照合には十分。
+     その小節内位置も、レスポンスを詰める回（longCall）では1拍で頭打ちにする
+     （KING_SEQ_LEAD_IN_MAX参照） */
   const callStart = _king.recStartPos;
   const barSlots = KING_SEQ_BAR_SLOTS;
   const firstSlot = Math.round((rec[0].pos - callStart) / KING_SEQ_QUANT);
-  const leadIn = ((firstSlot % barSlots) + barSlots) % barSlots;
   const callSlots = Math.max(0, Math.round((rec[rec.length - 1].pos - callStart) / KING_SEQ_QUANT));
   const callBars = Math.max(1, Math.ceil(callSlots / barSlots));
+  /* 正解文字を待っていた回か（KING_SEQ_LONG_CALL_BEATS参照）。当てはめ方（_kingSeqFitBeats）
+     とレスポンス先頭の待ち（KING_SEQ_LEAD_IN_MAX）が、この1つの判定で一緒に切り替わる */
+  const longCall = callSlots - firstSlot > KING_SEQ_LONG_CALL_BEATS * KING_SEQ_DIV;
+  const leadInRaw = ((firstSlot % barSlots) + barSlots) % barSlots;
+  const leadIn = longCall ? Math.min(leadInRaw, KING_SEQ_LEAD_IN_MAX) : leadInRaw;
   /* ── 打ち込んだ「相対的な間隔」から意図したビートシーケンスを読み取る ──
 
      各タップを記録時に絶対16分グリッドへ独立にスナップしてはいけない。タップ同士の
@@ -8736,32 +8765,40 @@ function _kingBuildSequence(forced, gain, flights) {
        間隔を渡す。先にクランプすると比を読む前に長い音が潰れる（例: タ=200msで1:2 を叩くと
        400ms が上限329msへ落ちて 1:1.64 に見え、2:3 と誤読される）。
 
-       「序盤は長短の段だけ残す」対数モードや、的の配分に応じた混合は入れないこと。上限が
-       4拍あるので長い待ちもそのまま表現でき、段階化しなくても長短は残る。それ以上に、
-       推定で作った別パターンへ置き換わることが「打った通りに再生されない」の主因になる。
-       打ったものをそのまま量子化する一本道にする */
-    for (const g of _kingSeqFitGaps(raw)) off.push(off[off.length - 1] + g);
+       当てはめは2本あり、分岐はコール全長という構造的な条件だけで決める（longCall）。
+       リズムに乗って叩けている回は _kingSeqFitGaps が打ったものをそのまま等倍で返し、
+       文字を待っていた回だけ _kingSeqFitBeats が拍を単位に読み直す。
+       分岐の条件をこれ以上増やさないこと。長短を対数で段階化する、的の配分で混ぜる、
+       フィット誤差から意図の有無を推定する、といった作り方はいずれも「打った通りに
+       再生されない」の主因になる */
+    const fit = longCall ? _kingSeqFitBeats(raw) : _kingSeqFitGaps(raw);
+    for (const g of fit) off.push(off[off.length - 1] + g);
   }
-  /* レスポンスの長さは上限（KING_SEQ_SPAN_SLOTS＝2小節）で頭打ちにする。
-     序盤は正解文字を探して何小節もかかるので、そのまま同じ長さで返すとトライが
-     倍の長さになる。上限内なら scale=1＝等倍でそのまま返る（＝終盤ほど
-     「打ったものがそのまま返ってくる」が強くなる） */
+  /* レスポンスの長さは上限（KING_SEQ_SPAN_SLOTS＝2小節）で頭打ちにする。上限内なら
+     scale=1＝等倍でそのまま返る。当てはめ側（_kingSeqFitGaps は倍率を1段下げる形で、
+     _kingSeqFitBeats は合計を1小節に収める形で）すでに上限を満たしているので、ここは
+     倍率を1まで下げても収まらない病的なケースだけの保険になる */
   const noteSpan = off[off.length - 1];
   const scale = noteSpan > KING_SEQ_SPAN_SLOTS ? KING_SEQ_SPAN_SLOTS / noteSpan : 1;
   const mapOff = o => o * scale * KING_SEQ_PLAY_SCALE;
-  /* レスポンス開始＝コールが占めた小節数ぶん後ろの小節境界。予約が間に合わない
-     （コールを閉じた瞬間が境界の直前だった）場合は1小節ずつ後ろへ送る */
+  /* レスポンス開始＝コールが占めた小節数ぶん後ろの小節境界 */
   let respStartSlot = Math.round(callStart / KING_SEQ_QUANT) + callBars * barSlots;
-  /* 判定は leadIn を足さない位置＝小節境界そのもので取る。切り替えの合図
-     （_playKingCue）がこの境界に鳴るので、ここが過去だと合図だけ落ちてしまう */
+  /* 予約が間に合うかは**1音目**（境界＋leadIn）で見る。境界そのものを基準にすると、
+     コールを閉じた瞬間がたまたま境界の直前だっただけでレスポンスが丸ごと1小節（1.3秒）
+     後ろへ飛び、待ちが倍になる。
+     間に合わないのが境界だけなら、枠は動かさずに切り替えの合図（_playKingCue）を落とす。
+     合図には待ちの無音を埋める役目もあるが、この回は待ちがほぼ無い＝埋めるものが無い */
   const minSlot = (nowPos + KING_SEQ_RESPONSE_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT;
-  while (respStartSlot < minSlot) respStartSlot += barSlots;
+  while (respStartSlot + leadIn < minSlot) respStartSlot += barSlots;
+  const cueOk = respStartSlot >= minSlot;
   const slotAt = o => (respStartSlot + leadIn + mapOff(o)) * KING_SEQ_QUANT;
   const events = [];
   /* コールを閉じる合図。レスポンス開始の小節境界に置く（爆発と対になる） */
-  const cueAt = _bgmBufPosToCtxTime(respStartSlot * KING_SEQ_QUANT);
-  if (cueAt === null) return false;
-  events.push({ at: cueAt, kind: 'cue' });
+  if (cueOk) {
+    const cueAt = _bgmBufPosToCtxTime(respStartSlot * KING_SEQ_QUANT);
+    if (cueAt === null) return false;
+    events.push({ at: cueAt, kind: 'cue' });
+  }
   for (let i = 0; i < rec.length; i++) {
     const at = _bgmBufPosToCtxTime(slotAt(off[i]));
     if (at === null) return false;
@@ -8810,7 +8847,9 @@ function _kingBuildSequence(forced, gain, flights) {
                 '= 拍', raw.map(x => (x / _bgmRateTo * 1000 / beat).toFixed(2)).join(','),
                 '→ 再生(スロット)', outSlots.join(','),
                 '= 拍', outSlots.map(v => (v / KING_SEQ_DIV).toFixed(2)).join(','),
-                '| コール', callBars + '小節(先頭' + leadIn + 'スロット目)',
+                '| コール', callBars + '小節(先頭' + leadIn + 'スロット目'
+                  + (leadIn !== leadInRaw ? '/元' + leadInRaw : '') + ')',
+                longCall ? '[長コール→拍グリッド]' : '[比を保存]', cueOk ? '' : '[合図なし]',
                 '→ レスポンス', respBars + '小節', scale < 1 ? '(×' + scale.toFixed(2) + '圧縮)' : '(等倍)',
                 '/ 音数', events.filter(e => e.kind === 'impact').length,
                 '/ うち小音量', events.filter(e => e.quiet).length);
@@ -8856,7 +8895,31 @@ function _kingSeqScheduleAudio(events) {
   }
 }
 
-/* 通常モード（リズムとして叩けている）の当てはめ。dは生の間隔（秒・クランプ前）で、
+/* 正解文字を待っていた回（longCall。KING_SEQ_LONG_CALL_BEATS参照）の当てはめ。
+   dは生の間隔（秒）で、16分スロット数の配列を返す。
+
+   この回の間隔は「リズムとして刻んだもの」ではなく「文字が回ってくるのを待った時間」
+   なので、比をそのまま保存しても伝わるものが無い。むしろ比を保存しようとすると 5:9:4 の
+   ような大きい整数になり、全長の上限に収めるために倍率が1〜2まで落ちて、再生間隔が
+   1.25拍・2.25拍という拍節に存在しない値になる＝拍から浮いて聴こえる。
+   そこで16分ではなく**拍**を単位に読み直し、全長を1小節へ収める:
+     1. 各間隔を最寄りの拍数へ丸める（1拍〜1小節）
+     2. 合計が1小節を超える間、半分にして丸め直す
+   間隔の下限が1拍・合計が1小節なので、4打の再生はほぼ4分音符×4になる。オンビートで
+   1小節に収まる形が返るので、これから乗るべき拍の手本としても働く。
+   打った長短の形はほとんど残らないが、待ち時間から形を復元しても意味が無いので割り切る。
+   命中させた文字のエリアが広がればコールは3小節に収まり、この経路自体を通らなくなる */
+function _kingSeqFitBeats(d) {
+  let r = d.map(v => Math.max(1, Math.min(KING_BAR_BEATS, Math.round(v / BGM_BEAT))));
+  /* 全部1拍まで詰めても合計が1小節を超える場合（打数が増えたとき）に止まらなくなるので、
+     まだ削れる要素が残っているかも条件に入れる */
+  while (r.reduce((a, v) => a + v, 0) > KING_BAR_BEATS && r.some(v => v > 1)) {
+    r = r.map(v => Math.max(1, Math.round(v / 2)));
+  }
+  return r.map(v => v * KING_SEQ_DIV);
+}
+
+/* リズムに乗って叩けている回（longCallでない）の当てはめ。dは生の間隔（秒・クランプ前）で、
    16分スロット数の配列を返す。上限は倍率の選び方で担保する（下記2)）。
 
    「最小間隔を基準にする」方式は採らない。基準そのものが1回のブレや偶然の短い間隔に
