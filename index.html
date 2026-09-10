@@ -533,10 +533,18 @@ function _rsEvaluate() {
   }
 }
 
-/* 予約された段階を適用する。トライの区切り（init）から呼ぶ。
-   射っている最中に解像度を変えると、その1フレームがまるごと引っかかって見えるため */
+/* 予約された段階を適用する。呼んでよいのは「切り替えに伴う1フレームぶんの間が体感に
+   出ない区切り」だけ。射っている最中に解像度を変えると、その1フレームがまるごと
+   引っかかって見える。
+
+   区切りは複数あり、どれか1つでも欠けると**その区間だけ自動制御が死ぬ**。取りこぼしを
+   測って「下げる」と決めるところまでは動くが、決めたまま適用されずに走り続ける:
+     ・通常モードのトライ開始（init）
+     ・キングギヨウザ戦のトライ開始（_kingStartTrial）… 戦闘は init を通らない
+   _RS_AUTO の判定を呼び出し側ではなくここに置くのは、区切りを足すたびにガードを
+   書き忘れるのを防ぐため */
 function _rsApplyPending() {
-  if (_rsPending < 0 || _rsPending === _rsIdx) { _rsPending = -1; return; }
+  if (!_RS_AUTO || _rsPending < 0 || _rsPending === _rsIdx) { _rsPending = -1; return; }
   const up = _rsPending < _rsIdx;
   _rsIdx = _rsPending; _rsPending = -1;
   if (up) _rsSinceUp = 0; // 戻した直後の再悪化を見張る（_rsEvaluate 参照）
@@ -544,7 +552,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.59';
+const VERSION = 'v7.60';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4728,7 +4736,7 @@ function _clearTrialFxState() {
 function init(fromStartup, fromGameOver) {
   /* 実解像度の切り替えはここで適用する（_rsApplyPending 参照）。
      トライの区切りなら、切り替えに伴う1フレームぶんの間が体感に出ない */
-  if (_RS_AUTO) _rsApplyPending();
+  _rsApplyPending();
   if (fromStartup) {
     /* スタート時: initGame() は START ボタンの touchend から呼ばれる。
        iOS 内蔵スピーカーは物理2タップ必要（根本制約）。
@@ -9137,6 +9145,12 @@ function _kingTrialGate() {
 }
 
 function _kingStartTrial(startPos) {
+  /* 実解像度の切り替えをここでも適用する（_rsApplyPending 参照）。
+     戦闘は通常モードの init を通らないので、ここが無いと戦闘中はずっと
+     「取りこぼしを測って下げると決めるが、適用されない」まま最高段階で走り続ける。
+     キング戦は塗る量が最も多い場面なので、自動制御が最も要るのがここになる。
+     的を回し直す直前＝まだ1本もタップしていない瞬間なので、1フレームの間は出ない */
+  _rsApplyPending();
   _respinKingReels();
   _king.rec = [];
   _king.seqEvents = [];
