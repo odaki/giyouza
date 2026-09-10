@@ -544,7 +544,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.58';
+const VERSION = 'v7.59';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -8017,7 +8017,7 @@ let _kingImpactShake = 0;
 const KING_CRACK_KIN_MIN_GAP_MS = 60;
 let _kingCrackKinLastMs = -Infinity;
 /* ══ リズムシーケンサ（打ち込み→再生）══
-   1トライは「打ち込み（最大KING_BATTERY_BEATS拍＝BGMループ2周ぶん）→ 再生 →
+   1トライは「打ち込み（最大KING_BATTERY_BEATS拍＝BGMループ1周ぶん）→ 再生 →
    次のトライ」の3段。
    小節には固定せず量子化グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
@@ -8051,10 +8051,17 @@ const KING_SEQ_BAR_SLOTS = KING_BAR_BEATS * KING_SEQ_DIV;
 const _kingSeqBarUp = s => Math.ceil(s / KING_SEQ_BAR_SLOTS) * KING_SEQ_BAR_SLOTS;
 const KING_BAR_DUR = () => BGM_BEAT * KING_BAR_BEATS;
 /* 打ち込みの持ち時間（拍）＝バッテリーのセル数。
-   32拍＝10.53秒＝8小節＝BGMループちょうど2周（1ループ16拍）。BGMループの整数倍で
-   あることが要件で、拍数だけを単独で動かしてはいけない。
+   16拍＝5.26秒＝4小節＝BGMループちょうど1周。BGMループの整数倍であることが要件で、
+   拍数だけを単独で動かしてはいけない（次に取れる値は32拍＝2周。24拍は1.5周で不可）。
+
+   この長さは締切として働かなければ意味が無い。正解文字がポインタに来ていて、かつGOOD以上が
+   取れる最初の瞬間に必ず打つ「完璧な打ち手」は、文字エリアが1/4しかない序盤でも4本を
+   中央値3.9拍・90%点5.6拍・最大8.0拍で打ち終わる（実物の的で600回シミュレートした実測）。
+   的の1回転は2.4〜3.5拍なので、16拍の余裕は正解文字を見送れる回数にして全体で3〜5回。
+   ここを長く取ると、残量が警告色（残り2小節で橙・1小節で赤、drawKingCookGauge参照）へ
+   一度も到達しないまま毎トライが終わり、締切が体験から消える。
    表示は1小節＝4セルごとに区切る（drawKingCookGauge参照） */
-const KING_BATTERY_BEATS = 32;
+const KING_BATTERY_BEATS = 16;
 const KING_BATTERY_GROUP = 4;          // 表示の区切り（1小節）
 /* 隙間の上限＝4拍。
    打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」であって
