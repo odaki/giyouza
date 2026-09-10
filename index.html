@@ -485,6 +485,9 @@ let _rsIdx = 0;        // 現在の段階（0が最も高精細）
 let _rsFloor = 0;      // これより上へは戻さない下限（戻して失敗したときだけ引き上げる）
 let _rsWin = 0, _rsLate = 0, _rsDown = 0, _rsUp = 0, _rsRatio = 0, _rsPending = -1;
 let _rsSinceUp = Infinity; // 最後に段階を戻してからの窓数
+/* 直前のtickのフェーズ。切り替わりを_gameLoopで拾って実解像度を適用する
+   （_rsApplyPending参照）。phase はここより後で宣言されるので null 始まりにする */
+let _rsLastPhase = null;
 let _renderScale = _RS_LEVELS[0];
 
 canvas.width  = Math.round(W * _renderScale);
@@ -541,6 +544,7 @@ function _rsEvaluate() {
    測って「下げる」と決めるところまでは動くが、決めたまま適用されずに走り続ける:
      ・通常モードのトライ開始（init）
      ・キングギヨウザ戦のトライ開始（_kingStartTrial）… 戦闘は init を通らない
+     ・フェーズの切り替わり（_gameLoop）… init を通らないフェーズ全部を一括で拾う
    _RS_AUTO の判定を呼び出し側ではなくここに置くのは、区切りを足すたびにガードを
    書き忘れるのを防ぐため */
 function _rsApplyPending() {
@@ -552,7 +556,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.60';
+const VERSION = 'v7.61';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -14434,6 +14438,14 @@ function _gameLoop(t) {
     }
     _updateLastT = t;
     const _tWork = performance.now();
+    /* フェーズが変わった直後は実解像度の切り替えを適用してよい区切り
+       （_rsApplyPending参照）。画面が丸ごと変わる瞬間なので、切り替えの1フレームは
+       見えない。
+       ここで一括して拾うことで、遷移を書く側には何も要求しない。個々のフェーズ開始
+       関数へ書き足す形にすると、フェーズを足すたびに書き忘れが起き、そのフェーズの
+       間だけ自動制御が黙って死ぬ。init を通らないフェーズ（キング戦の各段・真エンディング
+       のロール・サウンドテスト・ドラムパッド）はどれも長く、塗る量も多い */
+    if (phase !== _rsLastPhase) { _rsLastPhase = phase; _rsApplyPending(); }
     /* 遅れたぶんは捨てずに追いつく（アキュムレーター方式）。
        1フレームにつき必ず1tickだけ回して余った時間を捨てると、フレームが44ms遅れたときに
        update()は1回しか走らないのに実時間は2.6フレーム進み、ゲーム世界が毎回realtimeから
