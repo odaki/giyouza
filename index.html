@@ -556,7 +556,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.63';
+const VERSION = 'v7.64';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7524,7 +7524,7 @@ function _cleanupKingBattleState() {
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
-  _kingHits = [];                // 被弾リアクションも焦げ跡を参照するので同様に捨てる
+  _kingHits = [];                // 進行中の被弾リアクションを次戦へ持ち越さない
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
   /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
   if (_omen)        _omen.items        = _releaseAll(_omen.items);
@@ -8255,11 +8255,11 @@ const KING_HIT_KNOCK_GOOD   = 2.2;
 /* 同時着弾（音声の時計が引けずシーケンスを組めない経路では4文字が同じフレームで着弾する）で
    合計が伸びすぎないための頭打ち。アクセントの半分に抑え、締めの一撃が常に最大であることを保つ */
 const KING_HIT_KNOCK_MAX    = KING_ACCENT_RECOIL_PX * 0.5;
-/* 着弾点の発光。アクセントの一斉発光（半径1.6倍・アルファ1.0）に対して、半径1/3・淡く・短く */
-const KING_HIT_FLASH_FRAMES = 5;
-const KING_HIT_FLASH_ALPHA  = 0.35;
-const KING_HIT_FLASH_SCALE  = 0.55;
-/* 進行中の被弾リアクション [{ux,uy,amp,life,flash,mark}]。1試技で最大4個・7フレームで消える */
+/* 着弾点を光らせる案（_kingFlashSprite を半径0.55倍・アルファ0.35・5フレームで重ねる）は
+   採らない。撃ち込みと同時に同じ場所で焦げ跡の帯電スパークが回り出すため、光が完全に
+   埋もれて見えない（実機で確認済み）。着弾点に何か足したくなったら、まずスパークとの
+   前後関係と明度差を解決すること */
+/* 進行中の被弾リアクション [{ux,uy,amp,life}]。1試技で最大4個・7フレームで消える */
 let _kingHits = [];
 const _predKingHitAlive = h => h.life > 0;
 let _kingChargedMarks = []; // 撃ち込み済みだがまだ焼き込まれていない焦げ跡（帯電中）
@@ -9323,7 +9323,7 @@ function _updateKingCommonFx() {
   if (_kingAccentFlash  > 0) _kingAccentFlash--;
   if (_kingAccentRecoil > 0) _kingAccentRecoil--;
   /* 1文字ごとの被弾リアクション（KING_HIT_*の定義部参照） */
-  for (const h of _kingHits) { h.life--; if (h.flash > 0) h.flash--; }
+  for (const h of _kingHits) h.life--;
   swapRemove(_kingHits, _predKingHitAlive);
   _updateKingCharFlights();
   for (const l of _kingLasers) { l.age++; l.life--; }
@@ -9386,7 +9386,7 @@ function _kingPushHit(f) {
     if (d > 1) { ux = dx / d; uy = dy / d; }
   }
   _kingHits.push({ ux, uy, amp: f.tier === 'just' ? KING_HIT_KNOCK_JUST : KING_HIT_KNOCK_GOOD,
-                   life: KING_HIT_KNOCK_FRAMES, flash: KING_HIT_FLASH_FRAMES, mark: f.markRef });
+                   life: KING_HIT_KNOCK_FRAMES });
 }
 
 /* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。
@@ -9818,21 +9818,6 @@ function drawBossBattle() {
     for (const m of _kingAccentMarks) {
       const rr = m.r * breath * 1.6;
       const mx = _king.dbx + ofs.dx + m.lx * breath, my = _king.dby + ofs.dy + m.ly * breath;
-      ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
-    }
-    ctx.restore();
-  }
-  /* 撃ち込まれた瞬間の着弾点の発光（KING_HIT_*の定義部参照）。アクセントの一斉発光と
-     同じスプライト・同じ座標変換で、半径と濃さと長さだけ落とす。
-     帯電スパークより先に描いて、スパークがこの光の上を回るようにする */
-  if (_kingFlashSprite && _kingHits.length > 0) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const h of _kingHits) {
-      if (h.flash <= 0 || !h.mark) continue;
-      ctx.globalAlpha = (h.flash / KING_HIT_FLASH_FRAMES) * KING_HIT_FLASH_ALPHA;
-      const rr = h.mark.r * breath * KING_HIT_FLASH_SCALE;
-      const mx = _king.dbx + ofs.dx + h.mark.lx * breath, my = _king.dby + ofs.dy + h.mark.ly * breath;
       ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
     }
     ctx.restore();
