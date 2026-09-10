@@ -556,7 +556,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.61';
+const VERSION = 'v7.62';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1543,7 +1543,11 @@ let _audioSampleRateAtFirst = null;
    常には成り立たない）。
 
    割り込まれた Context は currentTime が進まなくなるので、壁時計と突き合わせれば
-   state に依存せず検出できる。ここでは測って ?perf に出すだけにし、挙動は変えない。 */
+   state に依存せず検出できる。この判定は3箇所が読む: 立て直しの手段を選ぶ
+   `_resumeAudioCtx`、ミュート解除の `toggleMute`、そして「次の操作で立て直す」印を付ける
+   `_gameLoop`。**検出だけ置いて起動する経路を持たせないと、時計の死を毎フレーム正しく
+   検出しながら無音のまま走り続ける**（?perf に「ctx時計が停止中」と出ているのに
+   何も起きない状態になる）。 */
 let _ctxStallSec      = 0;    // ctx時計が止まったまま経過した秒数
 let _ctxStallMaxSec   = 0;    // セッション中の最大値（復帰後に振り返れるよう保持）
 let _ctxStallLastCtx  = null;
@@ -14417,6 +14421,22 @@ function _gameLoop(t) {
   else if (t - _rafHzT >= 1000) { _rafHz = _rafHzCount * 1000 / (t - _rafHzT); _rafHzCount = 0; _rafHzT = t; }
   if (PERF_ON) _perfCountFrame(t);
   _updateCtxStall(); // AudioContextが実際に動いているかの実測（_updateCtxStall参照）
+  /* 時計が死んだ（または割り込まれた）と分かった時点で「次の操作で立て直す」印を付ける。
+
+     ここで resume() や再作成を直接呼んではいけない。iOSでは立て直しがユーザージェスチャーの
+     中でしか効かないうえ、ジェスチャー外の resume() は interrupted を suspended に変えて
+     しまい、_resumeAudioCtx の再作成分岐が動かなくなる。印だけ付け、実際の立て直しは
+     次のタップで _recoverAudioIfNeeded が行う。
+
+     visibilitychange 側だけでは足りない。あちらが印を付けるのは「自動PAUSEしない
+     フェーズで背面に回ったとき」だけで、着信・Siri・アラーム・他アプリの発音・Bluetoothの
+     経路切り替えのように**画面の可視性が変わらないまま音声が死ぬ**経路を1つも拾わない。
+     その場合ゲームは画面上は正常に動き続け、音だけが消え、タップしても
+     _recoverAudioIfNeeded が先頭で戻るため、PAUSE往復・MUTE往復・リロード以外に
+     戻る手段が無くなる。
+     毎タップ走る _unlockAudio() は resume() を呼ぶだけなので、state が running のまま
+     時計が死んでいる Context を作り直さない＝この経路の代わりにはならない */
+  if (_ctxLooksStalled() || (audioCtx && audioCtx.state === 'interrupted')) _audioNeedsRecover = true;
   /* アキュムレーター方式: 任意のリフレッシュレートで update() を正確に60fps維持
      dtを50msに丸める（タブ非表示復帰後の異常な追いつきを防ぐ） */
   const dt = _rafLastT > 0 ? Math.min(t - _rafLastT, 50) : 0;
