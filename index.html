@@ -556,7 +556,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.62';
+const VERSION = 'v7.63';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5307,7 +5307,7 @@ function _drawKingChargeTether(x0, y0, x1, y1, idx) {
    充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
    的の帯電がバッテリー残量で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
    いちばん長く明るい */
-function _drawKingMarkCharges(breath, accentDy) {
+function _drawKingMarkCharges(breath, ofsX, ofsY) {
   if (_kingChargedMarks.length === 0) return;
   const ct = audioCtx ? audioCtx.currentTime : null;
   ctx.save();
@@ -5319,7 +5319,7 @@ function _drawKingMarkCharges(breath, accentDy) {
       const span = _king.seqAccentAt - m.chargedAt;
       p = span > 0.05 ? Math.max(0, Math.min(1, (ct - m.chargedAt) / span)) : 1;
     }
-    const mx = _king.dbx + m.lx * breath, my = _king.dby + accentDy + m.ly * breath;
+    const mx = _king.dbx + ofsX + m.lx * breath, my = _king.dby + ofsY + m.ly * breath;
     /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
        面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
     const R = m.chargeR;
@@ -7524,6 +7524,7 @@ function _cleanupKingBattleState() {
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
+  _kingHits = [];                // 被弾リアクションも焦げ跡を参照するので同様に捨てる
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
   /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
   if (_omen)        _omen.items        = _releaseAll(_omen.items);
@@ -8234,6 +8235,33 @@ let _kingFireFlash = 0;
 let _kingAccentFlash  = 0;
 let _kingAccentRecoil = 0;
 let _kingAccentMarks  = []; // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
+/* 1文字ごとの被弾リアクション（KING_ACCENT_* の縮小版）。
+   撃ち込まれた瞬間に、キング本体をビームの進行方向（的の三角 → 着弾した焦げ跡）へ短く押す。
+
+   狙いは「4文字ぶんのダメージが溜まって5音目で確定する」を目で追えるようにすること。
+   アクセントと同じカーブ（sin(pπ)(1-0.4p)）の小型版にして語彙を揃え、大きさと長さで
+   はっきり格を下げる。別種の動きを足すと2つの演出が競合して主役が消える。
+
+   方向を上固定にせずビームの向きにするのは、4発とも同じ動きだと4回目には情報量が
+   ゼロになるため。実レイアウトでの押し出し角は的1の右下で+48.5度、的4の左上で-31.5度、
+   水平変位にして-1.8〜+2.6pxの幅がある＝どの的からどこへ入ったかが動きで分かる。
+
+   OK以下のタップには反応しない。ビームも焦げ跡も出ない＝ダメージが無いという既存の扱いと
+   揃える（markRef を持たないので _stickKingChar の入口で弾かれる）。
+   精度で大きさを変えるのは、文字の大きさ・再生の音量が既に精度に対応しているのと同じ考え方 */
+const KING_HIT_KNOCK_FRAMES = 7;
+const KING_HIT_KNOCK_JUST   = 3.5;
+const KING_HIT_KNOCK_GOOD   = 2.2;
+/* 同時着弾（音声の時計が引けずシーケンスを組めない経路では4文字が同じフレームで着弾する）で
+   合計が伸びすぎないための頭打ち。アクセントの半分に抑え、締めの一撃が常に最大であることを保つ */
+const KING_HIT_KNOCK_MAX    = KING_ACCENT_RECOIL_PX * 0.5;
+/* 着弾点の発光。アクセントの一斉発光（半径1.6倍・アルファ1.0）に対して、半径1/3・淡く・短く */
+const KING_HIT_FLASH_FRAMES = 5;
+const KING_HIT_FLASH_ALPHA  = 0.35;
+const KING_HIT_FLASH_SCALE  = 0.55;
+/* 進行中の被弾リアクション [{ux,uy,amp,life,flash,mark}]。1試技で最大4個・7フレームで消える */
+let _kingHits = [];
+const _predKingHitAlive = h => h.life > 0;
 let _kingChargedMarks = []; // 撃ち込み済みだがまだ焼き込まれていない焦げ跡（帯電中）
 let _kingFlashSprite  = null; // 焦げ跡の発光用スプライト（初回使用時に生成）
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
@@ -9294,6 +9322,9 @@ function _updateKingCommonFx() {
   if (_kingFireFlash    > 0) _kingFireFlash--;
   if (_kingAccentFlash  > 0) _kingAccentFlash--;
   if (_kingAccentRecoil > 0) _kingAccentRecoil--;
+  /* 1文字ごとの被弾リアクション（KING_HIT_*の定義部参照） */
+  for (const h of _kingHits) { h.life--; if (h.flash > 0) h.flash--; }
+  swapRemove(_kingHits, _predKingHitAlive);
   _updateKingCharFlights();
   for (const l of _kingLasers) { l.age++; l.life--; }
   swapRemove(_kingLasers, _predLife); // 既存の共通predを使う（毎フレームのクロージャ生成を避ける）
@@ -9319,10 +9350,43 @@ function _kingSiftOffsetY() {
 /* 5音目アクセントののけぞり（描画時オフセット）。文字は的（下）からキングへ
    撃ち込まれるので、上へ弾かれてから戻る。篩い落としと同じ「描画時だけ掛ける」
    方式に揃える（dbyを触ると_easeKingXformとの綱引きになる） */
-function _kingAccentOffsetY() {
-  if (_kingAccentRecoil <= 0) return 0;
-  const p = 1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES; // 0→1
-  return -KING_ACCENT_RECOIL_PX * Math.sin(p * Math.PI) * (1 - p * 0.4);
+/* キング本体の表示変位。5音目アクセントののけぞりと、1文字ごとの被弾ノックバックを合成する。
+   dbx/dby は触らず描画時にだけ掛ける（既存方針。座標計算へ波及させない）。
+   毎フレーム呼ばれるので戻り値は使い回しのオブジェクトにする（クロージャ・アロケーション無し）。
+
+   被弾ぶんだけを先に頭打ちにしてからアクセントを足す。まとめて頭打ちにすると、被弾が
+   残っている間にアクセントが来たときに締めの一撃が薄まる */
+const _kingBodyOfs = { dx: 0, dy: 0 };
+function _kingBodyOffset() {
+  let hx = 0, hy = 0;
+  for (const h of _kingHits) {
+    const p = 1 - h.life / KING_HIT_KNOCK_FRAMES; // 0→1
+    const k = h.amp * Math.sin(p * Math.PI) * (1 - p * 0.4);
+    hx += h.ux * k; hy += h.uy * k;
+  }
+  const len = Math.hypot(hx, hy);
+  if (len > KING_HIT_KNOCK_MAX) { const s = KING_HIT_KNOCK_MAX / len; hx *= s; hy *= s; }
+  if (_kingAccentRecoil > 0) {
+    const p = 1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES; // 0→1
+    hy -= KING_ACCENT_RECOIL_PX * Math.sin(p * Math.PI) * (1 - p * 0.4);
+  }
+  _kingBodyOfs.dx = hx; _kingBodyOfs.dy = hy;
+  return _kingBodyOfs;
+}
+
+/* 撃ち込まれた1文字ぶんの被弾リアクションを積む（KING_HIT_* の定義部参照）。
+   押される向きは「その的の三角ポインタ → 着弾した焦げ跡」＝ビームが飛んだ向き。
+   的が引けない場合だけ真上へ逃がす */
+function _kingPushHit(f) {
+  const reel = _king.reels[f.reelIdx];
+  let ux = 0, uy = -1;
+  if (reel) {
+    const p0 = _kingReelPointerPos(reel), p1 = _kingFlightTargetPos(f);
+    const dx = p1.x - p0.x, dy = p1.y - p0.y, d = Math.hypot(dx, dy);
+    if (d > 1) { ux = dx / d; uy = dy / d; }
+  }
+  _kingHits.push({ ux, uy, amp: f.tier === 'just' ? KING_HIT_KNOCK_JUST : KING_HIT_KNOCK_GOOD,
+                   life: KING_HIT_KNOCK_FRAMES, flash: KING_HIT_FLASH_FRAMES, mark: f.markRef });
 }
 
 /* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。
@@ -9461,6 +9525,9 @@ function _isKingCharOffscreen(f) {
 function _stickKingChar(f) {
   f.state = 'stick'; f.frames = 0;
   if (!f.markRef || f.markRef.revealedAt != null) return;
+  /* 撃ち込まれた瞬間のキング本体の反応（KING_HIT_*の定義部参照）。OK以下は markRef を
+     持たないので上のガードで弾かれる＝加点も焦げ跡も無い扱いと揃う */
+  _kingPushHit(f);
   if (!f.deferBurn) { f.markRef.revealedAt = performance.now(); return; }
   if (!f.markRef.charging) {
     f.markRef.charging = true;
@@ -9718,13 +9785,13 @@ function drawBossBattle() {
   /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用）。
      位置・スケールは dbx/dby/dscale（誕生演出からの収束中の表示値）を使う */
   const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
-  const accentDy = _kingAccentOffsetY();
+  const ofs = _kingBodyOffset(); // アクセントののけぞり＋1文字ごとの被弾（_kingBodyOffset参照）
   ctx.save();
   /* 篩い落としの縦変位とスカッシュ、アクセントののけぞりは描画時にのみ掛ける
      （dby/dscaleは触らない。_kingSiftOffsetY / _kingSiftSquash /
-     _kingAccentOffsetY の定義部参照）。文字の離脱位置にはこの変位を反映しない
+     _kingBodyOffset の定義部参照）。文字の離脱位置にはこの変位を反映しない
      （ユーザー判断: 座標計算への波及を避ける） */
-  ctx.translate(_king.dbx, _king.dby + _kingSiftOffsetY() + accentDy);
+  ctx.translate(_king.dbx + ofs.dx, _king.dby + _kingSiftOffsetY() + ofs.dy);
   const sq = _kingSiftSquash();
   if (sq) ctx.scale(breath * sq.sx, breath * sq.sy);
   else    ctx.scale(breath, breath);
@@ -9750,14 +9817,29 @@ function drawBossBattle() {
     ctx.globalAlpha = fa;
     for (const m of _kingAccentMarks) {
       const rr = m.r * breath * 1.6;
-      const mx = _king.dbx + m.lx * breath, my = _king.dby + accentDy + m.ly * breath;
+      const mx = _king.dbx + ofs.dx + m.lx * breath, my = _king.dby + ofs.dy + m.ly * breath;
+      ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
+    }
+    ctx.restore();
+  }
+  /* 撃ち込まれた瞬間の着弾点の発光（KING_HIT_*の定義部参照）。アクセントの一斉発光と
+     同じスプライト・同じ座標変換で、半径と濃さと長さだけ落とす。
+     帯電スパークより先に描いて、スパークがこの光の上を回るようにする */
+  if (_kingFlashSprite && _kingHits.length > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const h of _kingHits) {
+      if (h.flash <= 0 || !h.mark) continue;
+      ctx.globalAlpha = (h.flash / KING_HIT_FLASH_FRAMES) * KING_HIT_FLASH_ALPHA;
+      const rr = h.mark.r * breath * KING_HIT_FLASH_SCALE;
+      const mx = _king.dbx + ofs.dx + h.mark.lx * breath, my = _king.dby + ofs.dy + h.mark.ly * breath;
       ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
     }
     ctx.restore();
   }
   /* 撃ち込み済み・焼き込み待ちの帯電（文字より先に描く＝文字が消えていく間も
      その外側でスパークが回り続けて見える） */
-  if (phase === 'boss') _drawKingMarkCharges(breath, accentDy);
+  if (phase === 'boss') _drawKingMarkCharges(breath, ofs.dx, ofs.dy);
   /* 発射直後の稲妻: まだ撃ち込まれていない的の三角マークと、その結果文字を繋ぐ。
      接続の有無は的の帯電と同じ _king.reelBeamed を見るので、三角の帯電が消える
      瞬間＝線が切れる瞬間になる（KING_TETHER_*の定義部参照）。
