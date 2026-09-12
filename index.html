@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.74';
+const VERSION = 'v7.75';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7416,6 +7416,13 @@ const KING_MOUTH_END_Y   = 0.26; // 口の両端のY
 const KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
 const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
 
+/* 眉の折れ（_drawKingFace参照）。眉頭から眉尻へ一直線ではなく途中で上へ折り、
+   角のある形で意志の強さを出す。
+   量は眉の長さに対する比で持つ: 眉の座標は目の大きさ(er)に従属して伸縮するので、
+   sの絶対値で持つと目のサイズを触るたびに折れの見え方が変わる */
+const KING_BROW_KINK   = 0.11; // pct=0での折れ量（眉の長さ比）
+const KING_BROW_KINK_T = 0.55; // 折れ点の位置（眉頭0〜眉尻1）
+
 /* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
    上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
    地鳴りのマイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
@@ -7427,28 +7434,35 @@ function _kingGentleness(pct01) {
 }
 
 /* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
-/* 表情（白目+黒瞳+眉+口）。呼び出し側で scale(_dpr)+translate(half,half)
+/* 表情（目+眉+口）。呼び出し側で scale(_dpr)+translate(half,half)
    適用済みの論理座標系であること前提（_buildBossOC から分離。理由は _buildBossOC
    のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
-   pct（こんがり進行度 0〜1）で吊り眉+へ字口（怒り）から、やや下がった眉+U字口
+   pct（こんがり進行度 0〜1）で吊り眉+への字口（怒り）から、寝た眉+U字口
    （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。
-   gazeUp（0〜1）は瞳を白目の中で上へ寄せる量。こんがり達成後に空を見上げてから
-   飛び去る演出（_updateBossVictoryOutro）で使う。瞳だけを動かし、白目・眉・口は
-   動かさない（顔全体を傾けるのではなく「視線を上げた」に見せるため）。
+   gaze は視線（正=上／負=下）。こんがり達成後に空を見上げてから飛び去る演出
+   （_updateBossVictoryOutro）と、篩い落としで下を睨む場面（KING_SIFT_GAZE）で使う。
    ※ この値を変えたら _renderKingBody のキャッシュ判定にも反映が必要
-   （_gazeRenderedUp参照。忘れると顔が更新されない） */
-function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
-  const ex = s*0.16, ey = s*0.06, er = s*0.055;
-  /* 瞳の上寄せ量。白目の縦半径(er)からはみ出さないよう0.5erまでに留める */
-  const pupilDy = -er * 0.5 * gazeUp;
-  /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.2er 〜 眉尻=ex+1.2er,ey-2.4er）を、
-     黒目とほぼ同じX座標（瞳=ex-0.25er）にあるピボットを中心に回転させる。
-     ピボットYは元の眉ライン上（そのX位置での直線上の点）に置くため、pct=0では
-     回転量0＝素の見た目と完全に一致する。pct→1でangle1（ほぼ水平・少し眉尻が
-     下がる程度）まで回転し、眉頭・眉尻の両方が滑らかに動く。
+   （_gazeRendered参照。忘れると顔が更新されない） */
+function _drawKingFace(c, s, pct = 0, gaze = 0) {
+  const ex = s*0.172, ey = s*0.064, er = s*0.050;
+  const ry = er * 1.28; // 目の縦半径（わずかな縦長。真円だと幼く、これ以上伸ばすと険しくなる）
+  /* 視線。白目を持たない目なので、白目の中で瞳を動かすという手が使えない。
+     目の「形」で見せる: 上を向くほど縦に伸びて見開き、下を向くほど潰れて伏し目になる。
+     ハイライトは目の中で上下に振る（白目が無い目では光の位置が視線の主役）。
+     目を上下に平行移動させるだけの形にしてはいけない: 動きが小さすぎて、
+     遠目でも縮小表示でも視線が変わったと読めない */
+  const g = Math.max(-1, Math.min(1, gaze));
+  const ryG   = ry * (1 + (g > 0 ? 0.22 * g : 0.40 * g));
+  const eyeDy = -ry  * 0.30 * g;
+  const hiDy  = -ryG * 0.38 * g;
+  /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.5er 〜 眉尻=ex+1.2er,ey-2.7er）を、
+     ピボットを中心に回転させる。ピボットは元の眉ライン上に置く（Xは目の中心より
+     わずかに眉頭寄り）ため、pct=0では回転量0＝素の見た目と完全に一致する。
+     pct→1でangle1（ほぼ水平・少し眉尻が下がる程度）まで回転し、眉頭・眉尻の
+     両方が滑らかに動く。
      眉頭を固定して眉尻だけ動かす形にはしない: 上下移動に見えて回転に見えない */
-  const innerX0 = ex - er*1.2, innerY0 = ey - er*1.2;
-  const outerX0 = ex + er*1.2, outerY0 = ey - er*2.4;
+  const innerX0 = ex - er*1.2, innerY0 = ey - er*1.5;
+  const outerX0 = ex + er*1.2, outerY0 = ey - er*2.7;
   const pivotX = ex - er*0.25;
   const pivotT = (pivotX - innerX0) / (outerX0 - innerX0);
   const pivotY = innerY0 + pivotT * (outerY0 - innerY0);
@@ -7463,15 +7477,32 @@ function _drawKingFace(c, s, pct = 0, gazeUp = 0) {
   const [innerX, innerY] = rot(innerX0, innerY0);
   const [outerX, outerY] = rot(outerX0, outerY0);
   for (const sx of [-1, 1]) {
-    c.beginPath(); c.ellipse(sx*ex, ey, er*1.15, er, 0, 0, Math.PI*2);
-    c.fillStyle = '#fff'; c.fill();
-    c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = 2; c.stroke();
-    c.beginPath(); c.arc(sx*ex - sx*er*0.25, ey + er*0.15 + pupilDy, er*0.45, 0, Math.PI*2);
-    c.fillStyle = '#1a1a1a'; c.fill();
+    /* 目。白目と黒枠は持たない。焦げ色とのコントラストは目の濃さが担う
+       （_buildBossOC参照）。純黒(#000系)にはしない: 生地の暖色と喧嘩する */
+    const cx = sx*ex, cy = ey + eyeDy;
+    c.beginPath(); c.ellipse(cx, cy, er, ryG, 0, 0, Math.PI*2);
+    c.fillStyle = 'hsl(28,38%,15%)'; c.fill();
+    /* ハイライト。左右で鏡像にせず、どちらも目の左上へ置く。本体のハイライトが
+       左上にあるので（_drawGyozaBody参照）、光源をそこへ揃える。
+       右下の弱い光は目の下縁の照り返しなので、視線の振り(hiDy)には乗せない */
+    c.beginPath(); c.arc(cx - er*0.36, cy - ryG*0.40 + hiDy, er*0.33, 0, Math.PI*2);
+    c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill();
+    c.beginPath(); c.arc(cx + er*0.30, cy + ryG*0.42, er*0.15, 0, Math.PI*2);
+    c.fillStyle = 'rgba(255,255,255,0.45)'; c.fill();
+    /* 眉。折れ点は眉の法線ではなく画面の真上へ持ち上げる（眉の傾きに関係なく
+       「眉が上へ山を作る」見え方に揃うため。傾き約27度なので差は1割ほど）。
+       折れ量はpctで0へ落とす: 据え置くと笑顔でも眉に角が残って小さな屋根に見える。
+       笑顔で直線へ戻す前提だから、怒っている側の折れを強く取れる。
+       端は丸めない（butt）。丸めると筆圧が消えて柔らかくなる */
+    const bx0 = sx*innerX, by0 = innerY, bx1 = sx*outerX, by1 = outerY;
+    const bdx = bx1 - bx0, bdy = by1 - by0;
+    const kink = Math.hypot(bdx, bdy) * KING_BROW_KINK * (1 - pct);
     c.beginPath();
-    c.moveTo(sx*outerX, outerY);
-    c.lineTo(sx*innerX, innerY);
-    c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02; c.lineCap = 'round'; c.stroke();
+    c.moveTo(bx0, by0);
+    c.lineTo(bx0 + bdx*KING_BROW_KINK_T, by0 + bdy*KING_BROW_KINK_T - kink);
+    c.lineTo(bx1, by1);
+    c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02;
+    c.lineCap = 'butt'; c.lineJoin = 'miter'; c.stroke();
   }
   /* 口: 制御点Yが端点Y(KING_MOUTH_END_Y)を下回れば「への字」(不満げ)、
      上回れば「U字」(笑顔)。pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s
@@ -7491,8 +7522,8 @@ function _buildBossOC() {
   const REF = 42, kk = s / REF;
   const mkOC = () => _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
-     目鼻口眉はトーンの影響を受けさせず、白目の白さで焦げ色とのコントラストを出す
-     （_renderKingBody 参照）。
+     目・眉・口はトーンの影響を受けさせない。生地が焦げ色へ寄っても目の濃さが
+     そのまま残ることが、そのままコントラストになる（_renderKingBody 参照）。
      本体は通常サイズ(42)で組んで scale 変換で拡大する。_drawGyozaBody の線幅は
      小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
      見える（scale なら線幅も比例して太る） */
@@ -8646,11 +8677,11 @@ function _renderKingBody() {
      残痕アルファまで落とし切る」1回の再合成をしないと、消える途中の焦げ跡が残ったまま
      キャッシュされ、ボスが直前フレームの絵で固まる。settledCountの増加も同様に再合成
      トリガーにする（新たに永続痕入りした焦げ跡を反映するため） */
-  /* 視線（gazeUp）も再合成トリガーに含める。含めないと見上げるアニメの間、
+  /* 視線（gaze）も再合成トリガーに含める。含めないと見上げるアニメの間、
      pct/焦げ跡が変化しないため古い顔がキャッシュされたまま瞳が動かない */
-  const gazeUp = _king.gazeUp || 0;
+  const gaze = _king.gaze || 0;
   if (activeCount === 0 && _king._toneRenderedPct === pct && !_king._toneHadActive &&
-      _king._settledCount === settledCount && _king._gazeRenderedUp === gazeUp) return _king.liveOC;
+      _king._settledCount === settledCount && _king._gazeRendered === gaze) return _king.liveOC;
   const lc = _king.liveOC.getContext('2d');
   lc.setTransform(1, 0, 0, 1, 0, 0);
   lc.clearRect(0, 0, _king.liveOC.width, _king.liveOC.height);
@@ -8684,8 +8715,8 @@ function _renderKingBody() {
     lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
     lc.restore();
   }
-  /* 顔（目鼻口眉）はトーン・焦げ跡の影響を受けず、常に元の色で最後に上描きする
-     （白目の白さと焦げ色とのコントラストを保つ）。pctに応じて表情が変化する
+  /* 顔（目・眉・口）はトーン・焦げ跡の影響を受けず、常に元の色で最後に上描きする
+     （焦げ色に対する目の濃さのコントラストを保つ）。pctに応じて表情が変化する
      （_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
      論理座標系（scale+translate）に戻してから描く必要がある */
   lc.setTransform(1, 0, 0, 1, 0, 0);
@@ -8693,11 +8724,11 @@ function _renderKingBody() {
   lc.translate(_king.half, _king.half);
   lc.globalCompositeOperation = 'source-over';
   lc.globalAlpha = 1;
-  _drawKingFace(lc, _BOSS_S, pct, gazeUp);
+  _drawKingFace(lc, _BOSS_S, pct, gaze);
   _king._toneRenderedPct = pct;
   _king._toneHadActive = activeCount > 0;
   _king._settledCount = settledCount;
-  _king._gazeRenderedUp = gazeUp;
+  _king._gazeRendered = gaze;
   return _king.liveOC;
 }
 
@@ -9479,7 +9510,7 @@ function _updateKingCommonFx() {
      boss限定ではなく共通FX側で進める */
   if (_king && _king.siftTimer !== null) {
     _king.siftTimer++;
-    if (_king.siftTimer === KING_SIFT_RELEASE_FRAME) _king.gazeUp = 0; // 底で視線を戻す
+    if (_king.siftTimer === KING_SIFT_RELEASE_FRAME) _king.gaze = 0; // 底で視線を戻す
     if (_king.siftTimer > KING_SIFT_RELEASE_FRAME + KING_SIFT_SETTLE_FRAMES) _king.siftTimer = null;
   }
   /* 5音目アクセントの全身リアクション残量（KING_ACCENT_*の定義部参照）。
@@ -9796,7 +9827,7 @@ function _updateBossBattle() {
     if (pend.length > 0 && pend.every(f => f.state === 'wait')) {
       _king.siftPending = false;
       _king.siftTimer = 0;
-      _king.gazeUp = KING_SIFT_GAZE; // 振り下ろす間だけ下を見る（底で0へ戻す）
+      _king.gaze = KING_SIFT_GAZE; // 振り下ろす間だけ下を見る（底で0へ戻す）
       _kingSiftShake = KING_SIFT_SHAKE_FRAMES;
       playSE('kingSift');
     } else if (pend.length === 0) {
@@ -10265,7 +10296,7 @@ function _startBossVictoryOutro() {
     baseBy: _king.by, baseScale: _king.scale,
     msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
   };
-  _king.gazeUp = 0;
+  _king.gaze = 0;
   playSE('kingVictoryInhale');
 }
 
@@ -10312,7 +10343,7 @@ function _updateBossVictoryOutro() {
        上昇へ滑らかに繋がる */
     const p = Math.min(1, o.timer / _VICTORY_OUTRO_LOOKUP_FRAMES);
     if (_king) {
-      _king.gazeUp = Math.min(1, p / 0.6);           // 前半6割で見上げきる
+      _king.gaze = Math.min(1, p / 0.6);             // 前半6割で見上げきる
       const sink = 10 * Math.sin(p * Math.PI);
       _king.by = o.baseBy + sink; _king.dby = _king.by; // イージングの遅れを挟まず直接置く
     }
