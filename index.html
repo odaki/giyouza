@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.75';
+const VERSION = 'v7.76';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -14030,8 +14030,6 @@ function drawEndScreen() {
 
   /* ━━ 大当たり ━━ */
   if (hitType === 'jackpot') {
-    for (const c of CLOUDS) drawCloud(c.x,c.y,c.s*1.2,Math.min(0.9,c.a+0.2),c.r);
-
     if (isReachJackpot) {
       /* ── リーチ経由: 虹色・大型・激しいパルス ── */
       const pulse = 1 + 0.12 * Math.sin(endTimer * 0.18);
