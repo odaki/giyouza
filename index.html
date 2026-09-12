@@ -582,7 +582,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.66';
+const VERSION = 'v7.67';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -947,7 +947,13 @@ const KING_OMEN_RATIO      = 0.8;  // 予兆演出の開始割合
    中心への引きを加速度で書いてはいけない。強くすると中心を行き過ぎて周回し、最接近距離が
    結果任せになる。ここで効くのはまさに最接近距離なので、径を直接与える形にする */
 const KING_OMEN_FX_LIFE  = [70, 130];     // 寿命（フレーム）
-const KING_OMEN_FX_NEAR  = [0.55, 0.08];  // 最接近半径（外周半径に対する比）
+/* 最接近半径。基準は外周半径（画面対角）ではなく**内接半径 min(W,H)/2**にすること。
+   出てくる外周は対角基準でよい（画面外から入ってくるため）が、最接近は必ず画面の中に
+   無ければならない。対角基準にすると縦画面で破綻する: 外周半径553pxの55%＝304pxに対して
+   縦画面の内接半径は210pxしかなく、横向きの角度を引いた回は弧がまるごと画面の外を通る
+   （実測で44%が一度も画面に入らなかった）。
+   内接半径の0.85は「画面の端を掠める」、0.12は「ほぼ中心」 */
+const KING_OMEN_FX_NEAR  = [0.85, 0.12];
 const KING_OMEN_FX_SWIRL = [0.5, 3.0];    // 寿命いっぱいで回り込む角度（ラジアン）
 const KING_OMEN_FX_SPIN  = [0.04, 0.15];  // ギヨウザ自身の回転（上限は本番の収束と同値）
 const KING_OMEN_FX_ALPHA = [0.22, 0.55];
@@ -7287,7 +7293,8 @@ function _kingOmenProgress() {
 function _spawnOmenFx() {
   const t = _kingOmenProgress();
   const n = Math.round(_kingOmenLerp(KING_OMEN_FX_N, t));
-  const R = Math.hypot(W, H) * 0.6;
+  const R = Math.hypot(W, H) * 0.6;   // 出入りする外周（本番の収束と同値）。画面外
+  const rIn = Math.min(W, H) / 2;     // 最接近の基準（KING_OMEN_FX_NEARの定義部参照）。画面内
   const base = Math.random() * Math.PI * 2;
   const size = _ITEM_SPRITE_REF * _kingOmenLerp(KING_OMEN_FX_SIZE, t);
   const sign = () => (Math.random() < 0.5 ? 1 : -1);
@@ -7301,7 +7308,7 @@ function _spawnOmenFx() {
       swirl: _kingOmenLerp(KING_OMEN_FX_SWIRL, t) * sign(),
       spin:  _kingOmenLerp(KING_OMEN_FX_SPIN, t) * sign(),
       alpha: _kingOmenLerp(KING_OMEN_FX_ALPHA, t),
-      r0: R, rNear: R * _kingOmenLerp(KING_OMEN_FX_NEAR, t), rOut: R * 1.15,
+      r0: R, rNear: rIn * _kingOmenLerp(KING_OMEN_FX_NEAR, t), rOut: R * 1.15,
       a: 0,
     });
   }
