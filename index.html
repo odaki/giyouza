@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.77';
+const VERSION = 'v7.78';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -705,8 +705,14 @@ function _mkCache(w, h) {
    drawImage() 1回で済ませる */
 let _staticLayerCanvas = null; // 雲 + 上下帯を合成した透明オフスクリーン
 /* 獅子（横画面のみ）は動かすので静的レイヤーへ焼き込まず、1枚のスプライトで持つ。
-   左右で焼き分けず、右は描画時に反転する */
+   左右で焼き分けず、右は描画時に反転する（焼き分ければ右も画素まで一致するが、
+   スプライトが倍になる。反転の再サンプルで輪郭の1179画素が最大37/255ずれるだけなので、
+   alpha 0.6 の背景要素には見合わない） */
 let _shishiSpr = null;
+/* 雲も動かすので静的レイヤーへ焼き込まない。s=1 の雲を1枚だけ焼き、
+   位置・拡大・回転・alpha は貼るときに掛ける。雲ごとに焼き分ける案も測ったが、
+   速度は同じでメモリが4.4倍（586KB 対 132KB）だった */
+let _cloudSpr = null;
 let _bgAnimSec = 0;            // 背景の環境演出の経過秒（フレーム基準。_updateAlways参照）
 
 function _prebuildStaticLayers() {
@@ -724,8 +730,17 @@ function _prebuildStaticLayers() {
   oc2.fillStyle = bg;
   oc2.fillRect(0, 0, W, H);
 
-  /* 雲を描く */
-  for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
+  /* 雲スプライト（不透明・等倍・無回転で1枚だけ）。位置は画面幅に依存するので、
+     向きを変えたときに画面外へ取り残されないよう流れる位置も初期値へ戻す */
+  {
+    const cs  = _mkCache(CLOUD_SPR_W * _dpr, CLOUD_SPR_H * _dpr);
+    const cs2 = cs.getContext('2d');
+    cs2.scale(_dpr, _dpr);
+    cs2.translate(CLOUD_SPR_W / 2, CLOUD_SPR_H / 2);
+    _drawCloudTo(cs2, 0, 0, 1, 1, 0);
+    _cloudSpr = cs;
+    for (let i = 0; i < CLOUDS.length; i++) _cloudX[i] = CLOUDS[i].x;
+  }
 
   /* 獅子（横画面のみ）は不透明で1枚のスプライトへ焼く。貼るときに 0.6 を掛ける。
      描き先へ直接 globalAlpha=0.6 で描くと内部パーツまですべて半透明になり、
@@ -4426,26 +4441,46 @@ let worms = [], uzaTexts = [], items = [];
 let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
 
 /* ── 吉祥雲配置 ── */
+/* 吉祥雲。r（傾き）は持たない: 速度も傾きも大きさから導く（_cloudV / _cloudRot）。
+   手で持たせると「進む向きと傾きが食い違った雲」を後から簡単に作れてしまう */
 const CLOUDS = IS_PORTRAIT ? [
-  { x:  55, y:  60, s:0.70, a:0.65, r: 0.10 },
-  { x: 355, y:  55, s:0.60, a:0.60, r:-0.15 },
-  { x:  28, y: 290, s:0.55, a:0.52, r:-0.20 },
-  { x: 390, y: 280, s:0.58, a:0.52, r: 0.15 },
-  { x:  40, y: 700, s:0.55, a:0.50, r:-0.10 },
-  { x: 370, y: 700, s:0.52, a:0.50, r: 0.10 },
+  { x:  55, y:  60, s:0.70, a:0.65 },
+  { x: 355, y:  55, s:0.60, a:0.60 },
+  { x:  28, y: 290, s:0.55, a:0.52 },
+  { x: 390, y: 280, s:0.58, a:0.52 },
+  { x:  40, y: 700, s:0.55, a:0.50 },
+  { x: 370, y: 700, s:0.52, a:0.50 },
 ] : [
-  { x: 140, y:  78, s:0.9,  a:0.75, r: 0.0  },
-  { x: 260, y:  48, s:0.6,  a:0.65, r: 0.25 },
-  { x: 870, y:  40, s:0.75, a:0.70, r:-0.2  },
-  { x: 940, y:  78, s:0.8,  a:0.70, r: 0.15 },
-  { x:  30, y: 480, s:0.65, a:0.60, r:-0.3  },
-  { x: 140, y: 520, s:0.55, a:0.55, r: 0.1  },
-  { x: 950, y: 490, s:0.70, a:0.60, r: 0.2  },
-  { x:1040, y: 460, s:0.58, a:0.55, r:-0.15 },
-  { x: 490, y:  20, s:0.50, a:0.45, r: 0.0  },
-  { x: 580, y: 530, s:0.48, a:0.45, r: 0.0  },
+  { x: 140, y:  78, s:0.9,  a:0.75 },
+  { x: 260, y:  48, s:0.6,  a:0.65 },
+  { x: 870, y:  40, s:0.75, a:0.70 },
+  { x: 940, y:  78, s:0.8,  a:0.70 },
+  { x:  30, y: 480, s:0.65, a:0.60 },
+  { x: 140, y: 520, s:0.55, a:0.55 },
+  { x: 950, y: 490, s:0.70, a:0.60 },
+  { x:1040, y: 460, s:0.58, a:0.55 },
+  { x: 490, y:  20, s:0.50, a:0.45 },
+  { x: 580, y: 530, s:0.48, a:0.45 },
 ];
 
+/* 雲は風に流される。向きは全雲で共通にする（混ざると風ではなく混乱に見える）。
+   大きい＝近い雲ほど速く動き、速い雲ほど進む側へ深く傾く。
+   傾きを速度から導いておけば「進む方向が下がっている」が構造として守られる。
+   意匠としての雲なので、流れが目に付く手前で止める（5秒で30〜40px） */
+const CLOUD_DIR         = -1;    // -1=左へ
+const CLOUD_SPEED_BASE  = 3;     // px/秒
+const CLOUD_SPEED_SCALE = 6;     // px/秒（大きさ比例分）
+const CLOUD_TILT_PER_V  = 0.02;  // rad/(px/秒)
+const CLOUD_BOB_PX      = 2.5;   // 上下のたゆたい
+const CLOUD_BOB_SEC     = 9;     // その周期の基準
+/* スプライトの寸法は s=1 の実測bbox x[-61,60] y[-20,12] に余白を足したもの。
+   回転は貼るときに掛けるので、ここに回転ぶんの余白は要らない */
+const CLOUD_SPR_W = 132, CLOUD_SPR_H = 48;
+const _cloudV     = CLOUDS.map(c => CLOUD_DIR * (CLOUD_SPEED_BASE + CLOUD_SPEED_SCALE * c.s));
+const _cloudRot   = _cloudV.map(v => v * CLOUD_TILT_PER_V);
+const _cloudBobW  = CLOUDS.map(c => Math.PI * 2 / (CLOUD_BOB_SEC * (0.8 + c.s * 0.5)));
+const _cloudBobPh = CLOUDS.map(c => c.x * 0.017);
+const _cloudX     = CLOUDS.map(c => c.x);
 /* ════════════════ Startup Jingle ════════════════ */
 /*
   オリエンタルリフ (Oriental Riff / Asian Riff)
@@ -5722,6 +5757,7 @@ function _updateAlways() {
      壁時計だとポーズやバックグラウンドから戻った瞬間に位相が飛ぶ。
      どのphase分岐の早期returnにも巻き込まれないこの位置に置く */
   _bgAnimSec += _TARGET_FRAME_MS / 1000;
+  _updateClouds();
   /* 画面全体フェードは関数先頭で最優先に更新する。
      boss系の各phase分岐は末尾で早期returnするため、後方の「phaseをまたいで常時更新
      すべきもの」セクションに置くと、その早期returnで一切実行されずフェードが永久に
@@ -12507,6 +12543,36 @@ function _drawCloudTo(c2, cx, cy, sc, alpha, rot) {
 }
 function drawCloud(cx, cy, sc, alpha, rot) { _drawCloudTo(ctx, cx, cy, sc, alpha, rot); }
 
+/* 雲を1tickぶん流す。画面外へ出たら自分の幅ぶん余分に回り込ませる
+   （幅を含めずに折り返すと、端で消えて端から現れる） */
+function _updateClouds() {
+  const dt = _TARGET_FRAME_MS / 1000;
+  for (let i = 0; i < CLOUDS.length; i++) {
+    const span = W + CLOUD_SPR_W * CLOUDS[i].s;
+    let x = _cloudX[i] + _cloudV[i] * dt;
+    const half = CLOUD_SPR_W * CLOUDS[i].s * 0.5;
+    if (x < -half) x += span; else if (x > W + half) x -= span;
+    _cloudX[i] = x;
+  }
+}
+
+/* 雲を描く。上下のたゆたいは位相を x から、周期を大きさから導いて、
+   6〜10個が同じ上下動で揃わないようにする（データは増やさない） */
+function _drawClouds() {
+  if (!_cloudSpr) return;
+  for (let i = 0; i < CLOUDS.length; i++) {
+    const c = CLOUDS[i];
+    ctx.save();
+    ctx.translate(_cloudX[i],
+      c.y + Math.sin(_bgAnimSec * _cloudBobW[i] + _cloudBobPh[i]) * CLOUD_BOB_PX);
+    ctx.rotate(_cloudRot[i]);
+    ctx.scale(c.s, c.s);
+    ctx.globalAlpha = c.a;
+    ctx.drawImage(_cloudSpr, -CLOUD_SPR_W / 2, -CLOUD_SPR_H / 2, CLOUD_SPR_W, CLOUD_SPR_H);
+    ctx.restore();
+  }
+}
+
 /* ════════════════ 獅子 ════════════════ */
 /* 配置（横画面のみ）。スプライトの寸法は sc=1 のときの実測bbox
    x[-67,65] y[-90,70] に SHISHI_SCALE を掛け、余白を数px足したもの。
@@ -13190,10 +13256,11 @@ function draw() {
      キャッシュ未構築のフォールバックは通常描画（_mkCache により実質到達しない） */
   if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
+    _drawClouds();
     _drawShishiPair();
   } else {
     ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
-    for (const c of CLOUDS) drawCloud(c.x,c.y,c.s,c.a,c.r);
+    for (let i=0;i<CLOUDS.length;i++) drawCloud(CLOUDS[i].x,CLOUDS[i].y,CLOUDS[i].s,CLOUDS[i].a,_cloudRot[i]);
     if (!IS_PORTRAIT) {
       ctx.globalAlpha = 0.6;
       drawShishi(SHISHI_X[0], SHISHI_Y, SHISHI_SCALE, false);
