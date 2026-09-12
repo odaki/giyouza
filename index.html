@@ -511,9 +511,6 @@ let _rsIdx = 0;        // 現在の段階（0が最も高精細）
 let _rsFloor = 0;      // これより上へは戻さない下限（戻して失敗したときだけ引き上げる）
 let _rsWin = 0, _rsLate = 0, _rsDown = 0, _rsUp = 0, _rsRatio = 0, _rsPending = -1;
 let _rsSinceUp = Infinity; // 最後に段階を戻してからの窓数
-/* 直前のtickのフェーズ。切り替わりを_gameLoopで拾って実解像度を適用する
-   （_rsApplyPending参照）。phase はここより後で宣言されるので null 始まりにする */
-let _rsLastPhase = null;
 let _renderScale = _RS_LEVELS[0];
 
 canvas.width  = Math.round(W * _renderScale);
@@ -570,7 +567,7 @@ function _rsEvaluate() {
    測って「下げる」と決めるところまでは動くが、決めたまま適用されずに走り続ける:
      ・通常モードのトライ開始（init）
      ・キングギヨウザ戦のトライ開始（_kingStartTrial）… 戦闘は init を通らない
-     ・フェーズの切り替わり（_gameLoop）… init を通らないフェーズ全部を一括で拾う
+     ・フェーズの切り替わり（_onPhaseChanged）… init を通らないフェーズ全部を一括で拾う
    _RS_AUTO の判定を呼び出し側ではなくここに置くのは、区切りを足すたびにガードを
    書き忘れるのを防ぐため */
 function _rsApplyPending() {
@@ -582,7 +579,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.70';
+const VERSION = 'v7.71';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -14628,6 +14625,29 @@ let _frameTimesIdx = 0, _rafLastT = 0, _updateLastT = 0, _updateAccum = 0;
    判断に使う。?perfのfps表示とは別に、常時この推定を持つ */
 let _rafHz = 0, _rafHzCount = 0, _rafHzT = 0;
 const _RAF_HZ_HIGH = 70; // これを超えていれば高リフレッシュレート端末とみなす
+/* 直前のtickのフェーズ。phase はここより後で宣言されるので null 始まりにする */
+let _prevPhase = null;
+/* フェーズをまたぐ横断的な処理の置き場。フェーズが変わった最初のtickで1度だけ呼ばれる。
+
+   **全フェーズで起きてほしいことは、フェーズ側へ書かずに必ずここへ足すこと。**
+   フェーズごとの都合に結び付けると「そのフェーズだけ黙って死ぬ」形で壊れる。実際に2つ
+   踏んでいる:
+   ・実解像度の自動制御が通常モードのトライ開始（init）からしか適用されず、init を通らない
+     キング戦・真エンディングのロール・サウンドテスト・ドラムパッドでは、取りこぼしを測って
+     「下げる」と決めたまま最高段階のまま走り続けていた
+   ・音声の時計が死んだときの立て直しが visibilitychange からしか武装されず、可視性の変化を
+     伴わない中断（着信・Siri・他アプリの発音・Bluetoothの経路切り替え）を1つも拾えなかった
+   どちらも「検出はできているのに、それを起こす経路が1つのフェーズの都合に結び付いていた」
+   という同じ形。個々のフェーズ開始関数へ書き足す形にすると、フェーズを足すたびに同じ抜けが
+   再発する。
+
+   フェーズの切り替わりは画面が丸ごと変わる瞬間なので、1フレームぶんの間が出る処理
+   （実解像度の切り替え＝canvasバッキングストアの張り直し）を置いても体感に出ない。
+   直前のフェーズが要る処理を足すときは、引数で _prevPhase を渡す形にすること */
+function _onPhaseChanged() {
+  _rsApplyPending(); // 実解像度の段階切り替え（_rsApplyPending参照）
+}
+
 function _gameLoop(t) {
   _rafId = requestAnimationFrame(_gameLoop);
   _rafHzCount++;
@@ -14672,14 +14692,8 @@ function _gameLoop(t) {
     }
     _updateLastT = t;
     const _tWork = performance.now();
-    /* フェーズが変わった直後は実解像度の切り替えを適用してよい区切り
-       （_rsApplyPending参照）。画面が丸ごと変わる瞬間なので、切り替えの1フレームは
-       見えない。
-       ここで一括して拾うことで、遷移を書く側には何も要求しない。個々のフェーズ開始
-       関数へ書き足す形にすると、フェーズを足すたびに書き忘れが起き、そのフェーズの
-       間だけ自動制御が黙って死ぬ。init を通らないフェーズ（キング戦の各段・真エンディング
-       のロール・サウンドテスト・ドラムパッド）はどれも長く、塗る量も多い */
-    if (phase !== _rsLastPhase) { _rsLastPhase = phase; _rsApplyPending(); }
+    /* フェーズをまたぐ横断的な処理（_onPhaseChanged参照） */
+    if (phase !== _prevPhase) { _prevPhase = phase; _onPhaseChanged(); }
     /* 遅れたぶんは捨てずに追いつく（アキュムレーター方式）。
        1フレームにつき必ず1tickだけ回して余った時間を捨てると、フレームが44ms遅れたときに
        update()は1回しか走らないのに実時間は2.6フレーム進み、ゲーム世界が毎回realtimeから
