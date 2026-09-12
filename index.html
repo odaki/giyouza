@@ -390,8 +390,15 @@ function drawPerf() {
   }
   const n = v => v.toFixed(1);
   const lines = [
-    `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}${_RS_AUTO ? '自動' : '固定'}(焼込${_dpr})` +
-      ` ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%`,
+    /* 実解像度の行。「残N段」は自動制御がこれから下げられる段数で、**0なら打ち止め**。
+       取りこぼしが続いているのに解像度が下がらないとき、原因が2つあって見分けが要る:
+       適用点がそのフェーズに無いのか（_rsApplyPending の呼び出し口を疑う）、それとも
+       もう下限まで落ちているのか。段数が出ていないとこの2つを取り違える。
+       「床」は一度戻して失敗した段階（_rsFloor）。この端末ではここより上へ二度と戻さない、
+       と自動制御が判断済みであることを示す */
+    `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}` +
+      (_RS_AUTO ? `自動残${_RS_LEVELS.length - 1 - _rsIdx}段${_rsFloor > 0 ? '床' + _RS_LEVELS[_rsFloor] : ''}` : '固定') +
+      `(焼込${_dpr}) ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     /* プールの生存数。返却漏れ（配列を捨てるときに _releaseAll を通し忘れる等）を実行中に
        見つけるための行。返さなかったスロットは生きたまま残って再利用されず、_itemAlloc /
@@ -590,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.73';
+const VERSION = 'v7.74';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
