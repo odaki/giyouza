@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.76';
+const VERSION = 'v7.77';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -703,7 +703,11 @@ function _mkCache(w, h) {
 /* ── 静的レイヤーキャッシュ ──
    雲・獅子は毎フレーム同じパスを描くことになる。OffscreenCanvas に事前描画しておき、
    drawImage() 1回で済ませる */
-let _staticLayerCanvas = null; // 雲 + 獅子（PC のみ）を合成した透明オフスクリーン
+let _staticLayerCanvas = null; // 雲 + 上下帯を合成した透明オフスクリーン
+/* 獅子（横画面のみ）は動かすので静的レイヤーへ焼き込まず、1枚のスプライトで持つ。
+   左右で焼き分けず、右は描画時に反転する */
+let _shishiSpr = null;
+let _bgAnimSec = 0;            // 背景の環境演出の経過秒（フレーム基準。_updateAlways参照）
 
 function _prebuildStaticLayers() {
   /* OffscreenCanvas 未対応の古いブラウザではスキップ（通常描画にフォールバック） */
@@ -723,19 +727,17 @@ function _prebuildStaticLayers() {
   /* 雲を描く */
   for (const c of CLOUDS) _drawCloudTo(oc2, c.x, c.y, c.s, c.a, c.r);
 
-  /* PC レイアウトのみ獅子を合成。
-     獅子を一時 OffscreenCanvas に不透明で描いてから 0.6 alpha で貼り付け。
-     oc2 に直接 globalAlpha=0.6 で描くと内部パーツもすべて半透明（X線状態）になるため
-     この2段階方式で「内部は不透明・全体を 0.6 でブレンド」を実現する。 */
+  /* 獅子（横画面のみ）は不透明で1枚のスプライトへ焼く。貼るときに 0.6 を掛ける。
+     描き先へ直接 globalAlpha=0.6 で描くと内部パーツまですべて半透明になり、
+     体が透けたX線状態になる。「内部は不透明・全体を0.6でブレンド」はこの2段構えでしか作れない */
+  _shishiSpr = null;
   if (!IS_PORTRAIT) {
-    const lc  = _mkCache(W * _dpr, H * _dpr);
-    const lc2 = lc.getContext('2d');
-    lc2.scale(_dpr, _dpr);
-    _drawShishiTo(lc2, 78,  360, 0.82, false);
-    _drawShishiTo(lc2, 983, 360, 0.82, true);
-    oc2.globalAlpha = 0.6;
-    oc2.drawImage(lc, 0, 0, W, H); // CSSピクセルサイズを明示（省略するとDPR倍になり消える）
-    oc2.globalAlpha = 1;
+    const sp  = _mkCache(SHISHI_SPR_W * _dpr, SHISHI_SPR_H * _dpr);
+    const sp2 = sp.getContext('2d');
+    sp2.scale(_dpr, _dpr);
+    sp2.translate(SHISHI_SPR_AX, SHISHI_SPR_AY);
+    _drawShishiTo(sp2, 0, 0, SHISHI_SCALE, false);
+    _shishiSpr = sp;
   }
   /* 上下の金帯も焼き込み（毎フレームの fillRect×4 を排除） */
   oc2.fillStyle = Y;
@@ -5715,6 +5717,11 @@ function _resolveTrialResult() {
    新しく「phaseに関係なく進める必要があるもの」を足すときは、update()本体では
    なくこの関数に入れること。 */
 function _updateAlways() {
+  /* 背景の環境演出（獅子の呼吸・揺れ）の時計。
+     壁時計ではなくフレーム基準にする: 数フレームの進み遅れは知覚できない一方、
+     壁時計だとポーズやバックグラウンドから戻った瞬間に位相が飛ぶ。
+     どのphase分岐の早期returnにも巻き込まれないこの位置に置く */
+  _bgAnimSec += _TARGET_FRAME_MS / 1000;
   /* 画面全体フェードは関数先頭で最優先に更新する。
      boss系の各phase分岐は末尾で早期returnするため、後方の「phaseをまたいで常時更新
      すべきもの」セクションに置くと、その早期returnで一切実行されずフェードが永久に
@@ -8410,6 +8417,11 @@ const KING_SEQ_BEAM_LEAD = KING_LASER_TRAVEL_FRAMES / 60;
 const KING_ACCENT_FLASH_FRAMES  = 10;  // 全身フラッシュ＋焦げ跡の発光
 const KING_ACCENT_RECOIL_FRAMES = 14;  // のけぞり
 const KING_ACCENT_RECOIL_PX     = 10;
+
+/* 被弾リアクションの包絡。進行p(0→1)に対し、立ち上がりが速く戻りがやや残る山。
+   キング本体ののけぞり・1文字ごとののけぞり・背景の獅子が、同じ1つの出来事として
+   読めるよう式を1箇所に集約する（別々に持つと片方を調整したときに静かにズレる） */
+function _kingReactEnv(p) { return Math.sin(p * Math.PI) * (1 - p * 0.4); }
 /* 発射（5打目）の放電。撃った瞬間に4つの三角から放電が弾ける。
    発射操作では帯電演出が「消える」だけなので、増えるものを1つ足さないと撃った変化に
    気づけない */
@@ -9557,14 +9569,13 @@ function _kingBodyOffset() {
   let hx = 0, hy = 0;
   for (const h of _kingHits) {
     const p = 1 - h.life / KING_HIT_KNOCK_FRAMES; // 0→1
-    const k = h.amp * Math.sin(p * Math.PI) * (1 - p * 0.4);
+    const k = h.amp * _kingReactEnv(p);
     hx += h.ux * k; hy += h.uy * k;
   }
   const len = Math.hypot(hx, hy);
   if (len > KING_HIT_KNOCK_MAX) { const s = KING_HIT_KNOCK_MAX / len; hx *= s; hy *= s; }
   if (_kingAccentRecoil > 0) {
-    const p = 1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES; // 0→1
-    hy -= KING_ACCENT_RECOIL_PX * Math.sin(p * Math.PI) * (1 - p * 0.4);
+    hy -= KING_ACCENT_RECOIL_PX * _kingReactEnv(1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES);
   }
   _kingBodyOfs.dx = hx; _kingBodyOfs.dy = hy;
   return _kingBodyOfs;
@@ -12497,6 +12508,24 @@ function _drawCloudTo(c2, cx, cy, sc, alpha, rot) {
 function drawCloud(cx, cy, sc, alpha, rot) { _drawCloudTo(ctx, cx, cy, sc, alpha, rot); }
 
 /* ════════════════ 獅子 ════════════════ */
+/* 配置（横画面のみ）。スプライトの寸法は sc=1 のときの実測bbox
+   x[-67,65] y[-90,70] に SHISHI_SCALE を掛け、余白を数px足したもの。
+   SHISHI_FOOT は足元のY（変換の軸に使う。中心を軸にすると呼吸が浮き沈みに見える） */
+const SHISHI_SCALE  = 0.82;
+const SHISHI_X      = [78, 983];
+const SHISHI_Y      = 360;
+const SHISHI_FOOT   = 57;
+const SHISHI_SPR_W  = 120, SHISHI_SPR_H  = 144;
+const SHISHI_SPR_AX = 60,  SHISHI_SPR_AY = 80;
+/* 生き物として最低限の気配。alpha 0.6 の背景要素なので、動いていると気付く手前で止める。
+   呼吸と揺れの周期は互いに割り切れない値にして、2つが同じ位相で重なり続けないようにする */
+const SHISHI_BREATH_SEC   = 3.4;
+const SHISHI_BREATH_AMP   = 0.012; // 縦の伸縮（横は体積を保つよう逆向きに半分）
+const SHISHI_SWAY_SEC     = 5.1;
+const SHISHI_SWAY_RAD     = 0.010;
+const SHISHI_ACCENT_PX    = 4;     // キング戦のアクセントで跳ね上がる高さ
+const SHISHI_ACCENT_SCALE = 0.03;  // 跳ねに合わせた伸び
+
 /* _drawShishiTo: 任意のコンテキストに獅子を描く（OffscreenCanvas 事前描画用）
    drawShishi: メインcanvasへのラッパー */
 function _drawShishiTo(c2, cx, cy, sc, mirX) {
@@ -12610,6 +12639,33 @@ function _drawShishiTo(c2, cx, cy, sc, mirX) {
   _drawCurl(3);          // 下部中央: 最背面
   for (const i of [2,4,8,9,10]) _drawCurl(i);
   c2.restore();
+}
+/* 背景の獅子を2体ぶん、変換だけで動かして描く。
+   胴体と尻尾を別スプライトにして尻尾を振る案は採らない: alpha 0.6 で2枚を重ねると
+   重なった部分だけ濃くなるため、一度不透明のキャンバスへ合成してから貼る必要があり、
+   実測でこの形の約30倍（+0.09ms/フレーム）かかる。背景の環境演出に払う額ではない */
+function _drawShishiPair() {
+  if (!_shishiSpr) return;
+  /* キング戦の5音目で跳ね上がる。キング本体ののけぞりと同じ包絡を使い、
+     2つが1つの出来事として読めるようにする。戦闘外では残量が0なので何も起きない */
+  const acc = _kingAccentRecoil > 0
+    ? _kingReactEnv(1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES) : 0;
+  for (let i = 0; i < 2; i++) {
+    /* 左右で位相を半周ずらす。揃って動くと2体が1つの仕掛けに見える */
+    const ph     = i * Math.PI;
+    const breath = Math.sin(_bgAnimSec / SHISHI_BREATH_SEC * Math.PI * 2 + ph) * SHISHI_BREATH_AMP;
+    const sway   = Math.sin(_bgAnimSec / SHISHI_SWAY_SEC   * Math.PI * 2 + ph) * SHISHI_SWAY_RAD;
+    const sy = 1 + breath + acc * SHISHI_ACCENT_SCALE;
+    const sx = 1 - breath * 0.5; // 縦に伸びたぶん横を縮めて体積を保つ
+    ctx.save();
+    ctx.translate(SHISHI_X[i], SHISHI_Y + SHISHI_FOOT - acc * SHISHI_ACCENT_PX);
+    ctx.rotate(sway);
+    ctx.scale(i === 1 ? -sx : sx, sy);
+    ctx.globalAlpha = 0.6;
+    ctx.drawImage(_shishiSpr, -SHISHI_SPR_AX, -SHISHI_SPR_AY - SHISHI_FOOT,
+                  SHISHI_SPR_W, SHISHI_SPR_H);
+    ctx.restore();
+  }
 }
 function drawShishi(cx, cy, sc, mirX) { _drawShishiTo(ctx, cx, cy, sc, mirX); }
 
@@ -13134,13 +13190,14 @@ function draw() {
      キャッシュ未構築のフォールバックは通常描画（_mkCache により実質到達しない） */
   if (_staticLayerCanvas) {
     ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
+    _drawShishiPair();
   } else {
     ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
     for (const c of CLOUDS) drawCloud(c.x,c.y,c.s,c.a,c.r);
     if (!IS_PORTRAIT) {
       ctx.globalAlpha = 0.6;
-      drawShishi(78, 360, 0.82, false);
-      drawShishi(983, 360, 0.82, true);
+      drawShishi(SHISHI_X[0], SHISHI_Y, SHISHI_SCALE, false);
+      drawShishi(SHISHI_X[1], SHISHI_Y, SHISHI_SCALE, true);
       ctx.globalAlpha = 1;
     }
     /* 上下帯 */
