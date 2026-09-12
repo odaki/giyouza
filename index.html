@@ -582,7 +582,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.69';
+const VERSION = 'v7.70';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -934,8 +934,35 @@ const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行
 const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（超大当たりより低い）
 /* ── キングギヨウザ（ボス戦）: 蓄積・予兆・出現予告 ── */
 const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
-const KING_OMEN_RATIO      = 0.8;  // 予兆演出の開始割合
-/* 予兆の見え方を蓄積で動かすダイヤル（t=0:予兆開始の蓄積 → 1:出現直前）。
+/* 予兆を出しはじめる蓄積の割合。
+   当たり1回の加算は最大で閾値の20%（超大当たり+200）、大当たりでも10%（+100）ある。
+   窓が狭いと段が当たり1回より細くなり、1回の当たりで段をまたいで飛ぶ。40%＝600点の窓なら
+   いちばん狭い段でも大当たり1回ぶんが残る（KING_OMEN_EXPの定義部の帯を参照）。
+   加算値（KING_GAIN_*）側で調整してはいけない。あれは「その演出で画面に出るギヨウザの数」と
+   一致させてあり、蓄積＝取り込まれたギヨウザの数という筋の土台になっている */
+const KING_OMEN_RATIO      = 0.4;
+/* 予兆の強まり方の指数。進み具合 t をそのまま使わず u = t^EXP を全ダイヤルへ通す。
+   段の閾値を別表で持たずに、個数も連続量（最接近・濃さ・頻度）も同じ形で動かすための唯一の
+   つまみ。1.0（直線）だと段が等間隔になり、深い側が早く来すぎる。
+   2.2 のときの帯と、当たり1回で何段ぶん進むか:
+     1個 400-764（364点＝中当たり18回・大当たり3.6回）
+     2個 764-899（135点＝中当たり6.7回・大当たり1.3回）
+     3個 899-1000（101点＝中当たり5.0回・大当たり1.0回）
+   超大当たり（+200）だけは上の2段を飛ばしうる。これ以上詰めるには閾値1000自体を上げる
+   ことになり、周回の長さと勝利時に返る数を変えてしまうので、ここは許容する */
+const KING_OMEN_EXP        = 2.2;
+/* 実績側の進み具合を測る幅（残りいくつから予兆を出すか）。
+   予兆の進み具合は「蓄積」と「実績」の**小さいほう**で決める。蓄積だけで測ってはいけない:
+   蓄積に上限は無く、実績（500回プレイ・矢1000本など）のほうがずっと遅いため、初回は最後の
+   実績が解除される時点で蓄積がとっくに閾値を超えている。蓄積だけを見ると進み具合が1に
+   張り付き、いきなり最終段が出て次のトライでボスが始まる＝浅い段が一度も起きない。
+   残り4個以上では出さない。残り3個で1個、2個で2個、1個で3個と上がる */
+const KING_OMEN_ACH_SPAN   = 4;
+/* 敗北後に蓄積を戻す割合。**必ず KING_OMEN_RATIO より下にすること。**
+   予兆の窓の中へ戻すと、負けた直後から気配が途切れずに続く。一度静けさを挟んでから
+   また気配が立ち上がるほうが、撃退できたという手応えが残る */
+const KING_DEFEAT_RESTART_RATIO = 0.35;
+/* 予兆の見え方を進み具合で動かすダイヤル（_kingOmenProgress。0=まだ出さない → 1=出現直前）。
    本番の収束（_updateBossOmen の step5。外周から中心へ、回転しながら44個が集まる）と
    同じ語彙で、その収束が「起きかけて、ほどけて散る」ところまでを見せる。
    t が小さいと軌道がほとんど曲がらず流れ星に見え、大きいと中心まで来て弾ける。
@@ -959,14 +986,20 @@ const KING_OMEN_FX_SPIN  = [0.04, 0.15];  // ギヨウザ自身の回転（上�
 /* 濃さ。下限は「映っている時間が短い側でも気づける」ことから決める。蓄積が浅い側は
    画面に入っている時間が0.65秒しかなく（深い側は1.5秒）、そこを薄くすると存在ごと
    気づかれない。上限は手前に描くぶん抑える（描画位置のコメント参照） */
-const KING_OMEN_FX_ALPHA = [0.30, 0.55];
-const KING_OMEN_FX_SIZE  = [0.45, 0.70];  // _ITEM_SPRITE_REF に対する倍率
+const KING_OMEN_FX_ALPHA = [0.42, 0.60];
+/* 大きさ（_ITEM_SPRITE_REF に対する倍率）。濃さと同様、浅い側を小さくしすぎないこと。
+   段階感は個数・最接近距離・回転・頻度が担うので、いちばん気づいてほしい最初の1個を
+   小さく薄くする理由が無い。縦画面はホイールが中央の列を占め、予兆が通るのは左右の細い
+   余白なので、そこで一瞬見えることが下限の基準になる */
+const KING_OMEN_FX_SIZE  = [0.68, 0.80];
 /* 1フレームあたりの出現確率（idle/reach のフレームでしか判定しない）。
    深い側だけを抑える。浅い側と深い側を同じ割合で動かしてはいけない: 出すぎて煩わしいのは
    3個そろう深い側で、浅い側はむしろ気づかれにくい。一律に下げると気づかれにくい側が
    さらに薄まる。アイドル中の時間で浅い側15秒・深い側10秒に1回 */
-const KING_OMEN_FX_RATE  = [1/900, 1/600];
-const KING_OMEN_FX_N     = [1, 3];        // 同時に出す数
+const KING_OMEN_FX_RATE  = [1/2400, 1/600];
+/* 同時に出す数の上限。個数は u を等分して決める（1個→2個→3個）。u 自体が指数で歪んで
+   いるので、等分でも蓄積の上では指数的な帯になる（KING_OMEN_EXPの定義部参照） */
+const KING_OMEN_FX_N_MAX = 3;
 const _kingOmenLerp = (a, t) => a[0] + (a[1] - a[0]) * t;
 /* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下する
    （updateItems参照）。当たり演出はユーザー入力待ちで自動終了しないため、
@@ -5721,16 +5754,16 @@ function _updateAlways() {
   if (isSlowSpin && !_prevIsSlowSpinForBadge) _slowHandBadgeArmed = true;
   _prevIsSlowSpinForBadge = isSlowSpin;
   if (_slowHandBadgeArmed && !isSlowSpin && grayRateCur > 0.995) _slowHandBadgeArmed = false;
-  /* キングギヨウザ予兆（KING_OMEN_FX_*の定義部参照）。蓄積が閾値へ近づくほど、出現の収束を
+  /* キングギヨウザ予兆（KING_OMEN_FX_*の定義部参照）。出現へ近づくほど、そのときの収束を
      予告する動きが強まる。
-     こんがり以外の実績が未達成のうちは、まだ出現できないため予兆も出さない
-     （水平展開: _maybeStartBossOmenと同じ条件を予兆側にも適用）。
+     蓄積と実績の条件は _kingOmenProgress が両方まとめて持つ（どちらかが足りなければ0を
+     返す）ので、ここで実績を別に見ない。以前は「こんがり以外の全実績」を要求していたが、
+     それだと初回は最後の実績が解除された瞬間にいきなり最終段から始まり、浅い段が一度も
+     起きなかった。
      OffscreenCanvas非対応環境は戦闘自体が起きない（_initBossBattle）ので、こちらも出さない */
-  if (_CACHE_OK && _omenFx.length === 0 && (phase === 'idle' || phase === 'reach') && !isFever &&
-      kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO &&
-      _allAchExceptKongariDone() &&
-      Math.random() < _kingOmenLerp(KING_OMEN_FX_RATE, _kingOmenProgress())) {
-    _spawnOmenFx();
+  if (_CACHE_OK && _omenFx.length === 0 && (phase === 'idle' || phase === 'reach') && !isFever) {
+    const u = _kingOmenProgress();
+    if (u > 0 && Math.random() < _kingOmenLerp(KING_OMEN_FX_RATE, u)) _spawnOmenFx();
   }
   _updateOmenFx();
   /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
@@ -7284,10 +7317,20 @@ let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（nu
    （letはホイストされないので、使用箇所より後で宣言するとTDZ risk になる） */
 let _victoryOutro = null; // { step, timer, items, seedItem, msgAlpha, gaugeAlpha, baseBy, baseScale }
 
-/* 予兆の進み具合（0=予兆開始の蓄積 → 1=出現直前）。KING_OMEN_FX_* の補間に使う */
+/* 予兆の進み具合（0=まだ出さない → 1=出現直前）。KING_OMEN_FX_* の補間に使う。
+
+   蓄積と実績の**小さいほう**で測る。出現には両方が要るので、遅れているほうが「あとどれだけ
+   残っているか」を決める。蓄積だけで測ると初回の予兆が丸ごと飛ぶ（KING_OMEN_ACH_SPANの
+   定義部参照）。
+   2回目以降は実績が全解除済みで実績側が常に1.0になり、蓄積側だけが効く。初回と2回目以降で
+   式を分けないのは、同じ式で初回も周回も成立しているため。
+   蓄積側にだけ指数を掛ける。実績は残り個数という粗い段なので、さらに歪めると段が飛ぶ */
 function _kingOmenProgress() {
   const from = KING_GYOZA_THRESHOLD * KING_OMEN_RATIO;
-  return Math.max(0, Math.min(1, (kingGyozaMeter - from) / (KING_GYOZA_THRESHOLD - from)));
+  const meterT = Math.max(0, Math.min(1, (kingGyozaMeter - from) / (KING_GYOZA_THRESHOLD - from)));
+  const left = ACHIEVEMENTS.reduce((a, x) => a + (x.id !== KONGARI_ACH_ID && !unlockedAch[x.id] ? 1 : 0), 0);
+  const achU = Math.max(0, Math.min(1, 1 - left / KING_OMEN_ACH_SPAN));
+  return Math.min(meterT ** KING_OMEN_EXP, achU);
 }
 
 /* 予兆のギヨウザを1組ぶん出す（KING_OMEN_FX_*の定義部参照）。
@@ -7299,7 +7342,7 @@ function _kingOmenProgress() {
    （_initBossBattle が即 _kingBattleEnd する）ため、呼び出し側で _CACHE_OK を条件にしている */
 function _spawnOmenFx() {
   const t = _kingOmenProgress();
-  const n = Math.round(_kingOmenLerp(KING_OMEN_FX_N, t));
+  const n = Math.min(KING_OMEN_FX_N_MAX, 1 + Math.floor(t * KING_OMEN_FX_N_MAX));
   const R = Math.hypot(W, H) * 0.6;   // 出入りする外周（本番の収束と同値）。画面外
   const rIn = Math.min(W, H) / 2;     // 最接近の基準（KING_OMEN_FX_NEARの定義部参照）。画面内
   const base = Math.random() * Math.PI * 2;
@@ -11067,9 +11110,10 @@ function drawKingReelShatter() {
 function _startBossDefeat() {
   phase = 'bossDefeat';
   _bossDefeatTimer = 0;
-  /* 敗北時のking値: 0（振り出しに戻す）ではなく、出現閾値の50%からやり直しにする。
-     戦闘開始時点で_initBossBattleが0にリセット済みのため、ここで上書きする */
-  kingGyozaMeter = KING_GYOZA_THRESHOLD * 0.5;
+  /* 敗北時のking値: 0（振り出しに戻す）ではなく、途中からやり直しにする。
+     戦闘開始時点で_initBossBattleが0にリセット済みのため、ここで上書きする。
+     戻す先は予兆の窓より下にする（KING_DEFEAT_RESTART_RATIOの定義部参照） */
+  kingGyozaMeter = KING_GYOZA_THRESHOLD * KING_DEFEAT_RESTART_RATIO;
   lsSaveStats();
   if (_king) {
     _king.scale = 1;
