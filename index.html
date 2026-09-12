@@ -393,6 +393,17 @@ function drawPerf() {
     `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}${_RS_AUTO ? '自動' : '固定'}(焼込${_dpr})` +
       ` ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%`,
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
+    /* プールの生存数。返却漏れ（配列を捨てるときに _releaseAll を通し忘れる等）を実行中に
+       見つけるための行。返さなかったスロットは生きたまま残って再利用されず、_itemAlloc /
+       _partAlloc が新規生成を続けてプールが際限なく伸びる。iOS Safari の canvas メモリを
+       圧迫して処理落ち・音途切れになる欠陥クラスで、症状が出る頃には原因から遠い。
+       item/part は「生存/総数」。総数が初期値（item 300 / part の _PART_POOL_SIZE）から
+       伸び続けていたら返却漏れを疑う。
+       oc は各OCプールの**空き数**。使い終わったOCが戻れば増える。0に張り付いたままなら
+       返していない＝毎回新規生成している */
+    `pool item ${_itemPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_itemPool.length}` +
+      ` part ${_partPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_partPool.length}` +
+      `  oc w${_freeWheelOCs.length} r${_freeResultOCs.length} k${_freeKingReelOCs.length} g${_freeGhostCanvases.length}`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
        el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠 */
     `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(1)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
@@ -579,7 +590,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.71';
+const VERSION = 'v7.72';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
