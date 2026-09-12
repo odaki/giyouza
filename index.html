@@ -590,7 +590,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.72';
+const VERSION = 'v7.73';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1214,6 +1214,13 @@ function swapRemove(arr, pred, onRemove) {
 
 /* ════════════════ ゲーム状態 ════════════════ */
 let wheels, curIdx, phase, particles;
+/* ホイールが回っていて、プレイヤーが矢を放てる状態か。
+   idle と reach の両方で矢を放てる（リーチは4本目を自分で放つ演出なので、入力を受ける点は
+   idle と同じ）。この2つを並べた条件は入力・BET操作・弓と矢の描画・ホイールのアクティブ表示・
+   自動減衰の対象判定・予兆の出現条件と、判断の場所がばらけている。素で並べて書くと、
+   矢を放てるフェーズを足したときに拾い漏らす場所が出るので、必ずここを通す。
+   結果表示（done）まで含めたい処理は、これに done を足す形で書くこと（_preBuildStepIfDue） */
+function _isSpinPhase() { return phase === 'idle' || phase === 'reach'; }
 let arrowProgress, arrowSX, arrowSY, arrowTX, arrowTY;
 let _arrowStartWallTime  = 0; // 発射時の performance.now()/1000（矢アニメ用: suspended中も進む）
 let _arrowProgressAtPause = -1; // ポーズ時に shooting 中だった場合のarrowProgress保存値
@@ -1513,7 +1520,7 @@ function _preBuildStepIfDue() {
   /* 回転中（idle/reach）に加えて結果表示中（done）も対象にする。4射目の着弾は
      そのままトライ終了なので、doneを含めないと4個目だけ毎回間に合わない。
      ただし結果が出た直後は演出の立ち上がりと重なるので、少し置いてから作る */
-  const inSpin = phase === 'idle' || phase === 'reach';
+  const inSpin = _isSpinPhase();
   if (!inSpin && !(phase === 'done' && endTimer > 8)) return;
   if (curIdx === 0 || _preBuiltForShot === curIdx) return; // まだ1射もしていない／この矢のぶんは作成済み
   /* 着弾（＝飛行時間の経過）を待ってから。発射と同じフレームに置かないための間 */
@@ -3779,7 +3786,7 @@ function startBossBGMTape(durationMs = 1400) {
 function _betControlsEnabled() {
   if (betLocked) return false;
   if (performance.now() < _betUnlockAt) return false;
-  if (phase !== 'idle' && phase !== 'reach') return false;
+  if (!_isSpinPhase()) return false;
   if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
       && audioCtx.currentTime < slowRampEndTime) return false;
   return true;
@@ -5769,7 +5776,7 @@ function _updateAlways() {
      それだと初回は最後の実績が解除された瞬間にいきなり最終段から始まり、浅い段が一度も
      起きなかった。
      OffscreenCanvas非対応環境は戦闘自体が起きない（_initBossBattle）ので、こちらも出さない */
-  if (_CACHE_OK && _omenFx.length === 0 && (phase === 'idle' || phase === 'reach') && !isFever) {
+  if (_CACHE_OK && _omenFx.length === 0 && _isSpinPhase() && !isFever) {
     const u = _kingOmenProgress();
     if (u > 0 && Math.random() < _kingOmenLerp(KING_OMEN_FX_RATE, u)) _spawnOmenFx();
   }
@@ -5818,7 +5825,7 @@ function _updateAlways() {
      「何もしない」より「ヘタな射ち」のほうが痛くなるよう差別化する。
      done/shooting/tapestart/startup フェーズは対象外（プレイヤーの責任ではない）
      shootGuardUntil 未経過の初期保護期間も除外 */
-  if ((phase === 'idle' || phase === 'reach') && performance.now() >= shootGuardUntil && BGM_BEAT > 0) {
+  if (_isSpinPhase() && performance.now() >= shootGuardUntil && BGM_BEAT > 0) {
     const _curBeat = Math.floor(_bgmAccumAudioTime / (BGM_BEAT * AUTO_DECAY_BEATS));
     if (_autoDecayBeatIdx >= 0 && _curBeat > _autoDecayBeatIdx) {
       /* フレーム落ち等で複数期間分まとめて来た場合は最大4件に制限 */
@@ -13104,7 +13111,7 @@ function draw() {
   }
 
   /* 弓 (縦画面のみ) */
-  if (IS_PORTRAIT && (phase==='idle'||phase==='reach')) drawBow();
+  if (IS_PORTRAIT && _isSpinPhase()) drawBow();
 
   ctx.textBaseline='alphabetic'; // リセット
 
@@ -13222,7 +13229,7 @@ function _drawBetBtn(rect, label, canChange, fontSize) {
 }
 
 function drawWheel(i) {
-  const w=wheels[i], active=i===curIdx&&(phase==='idle'||phase==='reach');
+  const w=wheels[i], active=i===curIdx&&_isSpinPhase();
   /* ビート拍動: アクティブホイールの強調度をキックに合わせてパルス */
   const bp = active ? getBeatPulse() : 0; // 0-1、ビート直後=1
   ctx.save(); ctx.translate(w.x,w.y);
@@ -13563,7 +13570,7 @@ function drawBow() {
   ctx.strokeStyle = 'rgba(220,190,80,0.92)'; ctx.lineWidth = 1.6; ctx.lineCap = 'round'; ctx.stroke();
 
   /* ── 矢 ── */
-  if (phase === 'idle' || phase === 'reach') {
+  if (_isSpinPhase()) {
     /* 矢柄 */
     ctx.beginPath();
     ctx.moveTo(nockX, by);
@@ -14848,8 +14855,7 @@ function togglePause() {
 }
 
 function onShoot(_inputPerfMs){
-  /* idle と reach の両フェーズで矢を放てる */
-  if (phase!=='idle' && phase!=='reach') return;
+  if (!_isSpinPhase()) return;
   /* リーチ発動直後はエフェクト・SEを見せるため入力ロック */
   if (phase === 'reach' && reachTimer < REACH_LOCK_FRAMES) return;
   /* スローハンド発動直後はバッジ・テンポ変化に気づくまで入力ロック */
