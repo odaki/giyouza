@@ -582,7 +582,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.67';
+const VERSION = 'v7.68';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -958,7 +958,7 @@ const KING_OMEN_FX_SWIRL = [0.5, 3.0];    // 寿命いっぱいで回り込む�
 const KING_OMEN_FX_SPIN  = [0.04, 0.15];  // ギヨウザ自身の回転（上限は本番の収束と同値）
 const KING_OMEN_FX_ALPHA = [0.22, 0.55];
 const KING_OMEN_FX_SIZE  = [0.45, 0.70];  // _ITEM_SPRITE_REF に対する倍率
-const KING_OMEN_FX_RATE  = [1/900, 1/300];// 1フレームあたりの出現確率
+const KING_OMEN_FX_RATE  = [1/1800, 1/600];// 1フレームあたりの出現確率（idle/reach中だけ判定する）
 const KING_OMEN_FX_N     = [1, 3];        // 同時に出す数
 const _kingOmenLerp = (a, t) => a[0] + (a[1] - a[0]) * t;
 /* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下する
