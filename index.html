@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.88';
+const VERSION = 'v7.89';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10140,6 +10140,28 @@ function _kingSpinProgress() {
   return Math.max(0, Math.min(1, p));
 }
 
+/* 回っている間だけ球に載せる鏡面反射。光なので回さない。
+   強さは |sin θ| に比例させ、静止しているとき（θ=0, 2π）はちょうど0にする。
+   固定したままにすると、回り出す瞬間と止まる瞬間に光が現れて消える段差が出る。
+   表面の明るい模様（元からある白い楕円）は模様と一緒に回って裏へ消えるので、
+   ちょうど入れ替わりで受け渡す形になる。
+   これが無いと、裏を向いている間の球が陰影の手掛かりを失って平たい円盤に見える */
+const _KING_SPEC = [[0, 'rgba(255,255,255,0.34)'], [0.40, 'rgba(255,255,255,0.13)'],
+                    [1, 'rgba(255,255,255,0)']];
+function _kingSpecular(gain) {
+  if (gain <= 0.01) return;
+  const s = _BOSS_S, R = s * KING_SPIN_R_RATIO, half = _king.half;
+  const g = ctx.createRadialGradient(-s*0.20, -s*0.12, 0, -s*0.20, -s*0.10, s*0.30);
+  for (const [p, col] of _KING_SPEC) g.addColorStop(p, col);
+  ctx.save();
+  ctx.globalAlpha = gain;
+  ctx.beginPath(); ctx.ellipse(0, s*0.08, R, s*0.48, 0, 0, Math.PI*2); ctx.clip();
+  /* 塗るのはグラジェントが届く範囲だけ。球全体を塗ると4倍の面積を無駄に触る
+     （中心 -0.20s,-0.10s／半径 0.30s なので、この矩形の外は完全に透明） */
+  ctx.fillStyle = g; ctx.fillRect(-s*0.50, -s*0.40, s*0.60, s*0.60);
+  ctx.restore();
+}
+
 function _drawKingSpin(th) {
   const half = _king.half, s = _BOSS_S, R = s * KING_SPIN_R_RATIO, D = _dpr, N = KING_SPIN_STRIPS;
   ctx.drawImage(_kingSpinSphere, -half, -half, half * 2, half * 2);
@@ -10156,6 +10178,7 @@ function _drawKingSpin(th) {
       x0, -half, x1 - x0, half * 2);
   }
   ctx.restore();
+  _kingSpecular(Math.abs(Math.sin(th)));
 }
 
 function _drawKingBody(alpha) {
