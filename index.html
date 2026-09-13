@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.86';
+const VERSION = 'v7.87';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5353,10 +5353,10 @@ function _kingReelPointerPos(w) {
    静電気のような点滅を表現する（的4本ぶんの極小描画なので、パーティクル化・
    プール化の対象外） */
 function _drawKingReelCharge(px, py, idx) {
-  /* 帯電の勢いをバッテリー残量に連動させる（副表示）。プレイヤーの視線は的に
+  /* 帯電の勢いを打ち込みの残り拍に連動させる（副表示）。プレイヤーの視線は的に
      釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
-     分かるようにする。満充電で最大、切れかけると弱々しくなる */
-  const pw = KING_BATTERY_BEATS > 0 ? _kingBatteryLeft() / KING_BATTERY_BEATS : 1;
+     分かるようにする。残りが多いほど強く、尽きかけると弱々しくなる */
+  const pw = KING_STEP_BEATS > 0 ? _kingStepsLeft() / KING_STEP_BEATS : 1;
   const vigor = 0.35 + 0.65 * pw;
   let seed = Math.floor(performance.now() / 45) + idx * 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
@@ -5491,7 +5491,7 @@ function _drawKingChargeTether(x0, y0, x1, y1, idx) {
    こちらは文字の縁から外へ）。
 
    充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
-   的の帯電がバッテリー残量で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
+   的の帯電が打ち込みの残り拍で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
    いちばん長く明るい */
 function _drawKingMarkCharges(breath, ofsX, ofsY) {
   if (_kingChargedMarks.length === 0) return;
@@ -5584,7 +5584,7 @@ function drawKingReel(w, active, idx) {
   /* ビートリング: これから射つ的の外側に、拍ごとに広がって消える輪を出す。
      ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、これが
      無いと拍の手掛かりが一つも無くなる（全タップが calcSyncScore で採点されるのに、
-     バッテリーの減り方しか手掛かりが無い状態になる）。
+     打ち込みメーターの進み方しか手掛かりが無い状態になる）。
      通常モードはプリレンダのグロースプライト（WR基準）を使うが、KING_WRは縦画面で
      動的に変わるので流用できない。shadowBlurも規約で使えないため、広がる輪＋減衰する
      線幅で表現する（ミュート時の画面枠と同じ考え方）。 */
@@ -8368,7 +8368,7 @@ let _kingImpactShake = 0;
 const KING_CRACK_KIN_MIN_GAP_MS = 60;
 let _kingCrackKinLastMs = -Infinity;
 /* ══ リズムシーケンサ（打ち込み→再生）══
-   1トライは「打ち込み（最大KING_BATTERY_BEATS拍＝BGMループ1周ぶん）→ 再生 →
+   1トライは「打ち込み（最大KING_STEP_BEATS拍＝BGMループ1周ぶん）→ 再生 →
    次のトライ」の3段。
    小節には固定せず量子化グリッドの上を走らせる（速く打ち終われば速く再生が終わり、
    速く次へ進む＝テンポが腕前に直結する）。
@@ -8401,7 +8401,7 @@ const KING_BAR_BEATS = 4;
 const KING_SEQ_BAR_SLOTS = KING_BAR_BEATS * KING_SEQ_DIV;
 const _kingSeqBarUp = s => Math.ceil(s / KING_SEQ_BAR_SLOTS) * KING_SEQ_BAR_SLOTS;
 const KING_BAR_DUR = () => BGM_BEAT * KING_BAR_BEATS;
-/* 打ち込みの持ち時間（拍）＝バッテリーのセル数。
+/* 打ち込みの持ち時間（拍）＝ステップLEDのセル数。
    16拍＝5.26秒＝4小節＝BGMループちょうど1周。BGMループの整数倍であることが要件で、
    拍数だけを単独で動かしてはいけない（次に取れる値は32拍＝2周。24拍は1.5周で不可）。
 
@@ -8412,8 +8412,8 @@ const KING_BAR_DUR = () => BGM_BEAT * KING_BAR_BEATS;
    ここを長く取ると、残量が警告色（残り2小節で橙・1小節で赤、drawKingCookGauge参照）へ
    一度も到達しないまま毎トライが終わり、締切が体験から消える。
    表示は1小節＝4セルごとに区切る（drawKingCookGauge参照） */
-const KING_BATTERY_BEATS = 16;
-const KING_BATTERY_GROUP = 4;          // 表示の区切り（1小節）
+const KING_STEP_BEATS = 16;
+const KING_STEP_GROUP = 4;          // 表示の区切り（1小節）
 /* 打ち込みメーターの色（drawKingCookGauge参照）。リズムマシンのステップLEDに倣う。
    消灯はグレーで、赤い再生ヘッドが左から右へ1拍ずつ進み、打った拍が緑で点いたまま残る。
    締切は「ヘッドが右端に近づく」だけでも読めるが、プレイヤーの視線は的に向いているので、
@@ -8424,7 +8424,7 @@ const KING_STEP_ON        = '#3fe07a';
 const KING_STEP_HEAD      = '#ff3b2f';
 const KING_STEP_FLASH_SEC = 0.18; // 打った瞬間だけ明るく光る長さ
 /* セルごとの「打ってからの経過秒」。負なら未点灯。毎フレーム使い回してGCを出さない */
-const _kingStepAge = new Float32Array(KING_BATTERY_BEATS);
+const _kingStepAge = new Float32Array(KING_STEP_BEATS);
 /* 隙間の上限＝4拍。
    打ち込みの長い空白は、ほとんどが「正解文字が回ってくるのを待っている時間」であって
    リズムの意図ではない。そこでタップ間の隙間に上限を掛け、超えたぶんだけ切り詰める。
@@ -8779,9 +8779,9 @@ function _initBossBattle() {
     reelShake: [0, 0, 0, 0],      // 的スロット単位の被弾揺れ残量（KING_REEL_SHAKE_FRAMES参照）
     /* リズムシーケンサ（KING_SEQ_*の定義部参照）。
        rec         : 打ち込み記録 [{pos, flight}]（pos=生のバッファ位置。強制発射分はnull）
-       recStartPos : コール開始のバッファ位置（必ず小節境界）。バッテリー残量の起点であり、
+       recStartPos : コール開始のバッファ位置（必ず小節境界）。打ち込みの持ち時間の起点であり、
                      コール＆レスポンスの枠の原点でもある（_kingBuildSequence参照）。
-                     nullの間はバッテリー無効＝時間制限なし（音声が使えるまでの保険）
+                     nullの間は持ち時間なし＝時間制限なしで動かす（音声が使えるまでの保険）
        seqEvents   : 再生の予約イベント [{at(ctx時刻), kind, ...}]。時刻昇順
        nextTrialPos: 次トライを開始するバッファ位置（小節境界）。nullなら未予約
        seqAccentAt : 5音目（焼き込み）のctx時刻。帯電の充電進捗を出すのに使う
@@ -8967,7 +8967,7 @@ function _kingCurrentFlightPos(f) {
    **4本目でコールが閉じ、そのまま _kingFireAttack へ進む**。独立した発射トリガーは持たない:
    ・コール＆レスポンスとして見ると、コールは4打ちょうどであるべき
    ・5打目の位置がプレイヤー任せだと「4連射→間→爆発」の形が打ち方次第で崩れる
-   ・「もう一手必要」がプレイヤーに伝わらず、バッテリー切れの自動発射が標準トリガーだと
+   ・「もう一手必要」がプレイヤーに伝わらず、持ち時間切れの自動発射が標準トリガーだと
      誤解される
    締めのアクセントは小節境界に置かれる（_kingBuildSequence参照）。
    決定した文字はここで即バックグラウンドの飛翔演出（_spawnKingCharFlight）に渡す。
@@ -8980,7 +8980,7 @@ function _kingReelShoot(inputPerfMs, forced = false) {
   const w = _king.reels[_king.reelIdx];
   w.result = hitResult(w, -Math.PI/2); // 的の三角ポインタは常に真上（drawKingReel参照）
   w.locked = true;
-  /* forced=バッテリー切れの強制発射で自動確定した的。プレイヤーが狙っていないので
+  /* forced=持ち時間切れの強制発射で自動確定した的。プレイヤーが狙っていないので
      精度を与えない（syncScore=0 → tier=null → 焦げ跡もビームも音も無し）。
      配分の学習（_adjustKingCharWeight）も行わない: あれは「その的で狙って当てた
      文字」だけを基準にする仕組みなので、自動確定を混ぜると意味が壊れる。
@@ -9007,7 +9007,7 @@ function _kingReelShoot(inputPerfMs, forced = false) {
    レスポンスを鳴らし、不一致なら篩い落とし→衝突→ひびへ進む。
    いずれの場合も4本の結果文字を表示したまま静止させ、次のトライは _kingTrialGate が
    小節境界で解放する。
-   forced=true はバッテリー切れで最後の的が自動確定した場合（_kingBatteryCheck 経由） */
+   forced=true は持ち時間切れで最後の的が自動確定した場合（_kingStepsCheck 経由） */
 function _kingFireAttack(inputPerfMs, forced = false) {
   if (phase !== 'boss' || !_king || _king.reelIdx < 4 || _king.attemptFired) return;
   _king.attemptFired = true; // 的の帯電演出（drawKingReel参照）を止める
@@ -9224,7 +9224,7 @@ function _kingBuildSequence(forced, gain, flights) {
      なるので、コールとレスポンスが途切れずに回り続ける。プレイヤーのタップ位置に置いては
      いけない（詰めて押すと爆発が4打目に張り付き、「4連射 → 間 → 爆発」の形が打ち方次第で
      崩れる）。小節境界に置けば毎回同じ形になる。
-     次トライのバッテリー起点（recStartPos）もこの位置＝必ず小節境界になる。
+     次トライの打ち込み起点（recStartPos）もこの位置＝必ず小節境界になる。
      焦げ跡が1つも無ければダメージ自体が無いので、アクセントではなく不発音にして
      「音は撃ったと言っているのに画面は無反応」を避ける */
   const respSlots = leadIn + mapOff(noteSpan);
@@ -9232,7 +9232,7 @@ function _kingBuildSequence(forced, gain, flights) {
   const accentPos = (respStartSlot + respBars * barSlots) * KING_SEQ_QUANT;
   const accentAt = _bgmBufPosToCtxTime(accentPos);
   if (accentAt === null) return false;
-  /* forced（バッテリー切れで最後の的が自動確定した試技）はアクセントを鳴らさない。
+  /* forced（持ち時間切れで最後の的が自動確定した試技）はアクセントを鳴らさない。
      こんがり%は据え置く（バランスは変えない）。差は「フレーズが締まるかどうか」＝
      自分でコールを閉じたか、時間切れで閉じられたかの違いとして出す */
   /* dud=この試技のダメージがゼロ（＝焦げ跡を1つも作れない＝4タップ全てOK止まり）。
@@ -9454,7 +9454,7 @@ function _kingSeqAccent(e, flush) {
      （死に時間がゼロになり、アクセントがそのまま次の小節の「1」になる）。
      勝敗が決まった場合は次のトライへ進ませない。
      ポーズによる畳み込み（_kingSeqFlush）は時刻が過去なので、ここで起こすと
-     バッテリーの起点が過去になって復帰直後に切れる。その場合は attemptFired を
+     打ち込みの起点が過去になって復帰直後に切れる。その場合は attemptFired を
      立てたままにして、復帰後の _kingTrialGate へ委ねる */
   if (flush || _king.pendingVictory || _king.pendingDefeat) return;
   _kingStartTrial(e.nextPos);
@@ -9468,23 +9468,23 @@ function _kingApplyGain(gain) {
   if (_king.cookPct >= 100) _king.pendingVictory = true;
 }
 
-/* 打ち込みの持ち時間（バッテリー）の残りセル数。0で充電切れ。
+/* 打ち込みの持ち時間の残りセル数。0で切れ。
    実時間で失効すべきガードなので audio-clock 基準にする（CLAUDE.mdの時間条件規約。
    フレームカウンタだと document.hidden で rAF が止まっている間に失効しない）。
-   recStartPos が未確定の間（音声の時計が引けるようになるまで）は満充電扱い＝
+   recStartPos が未確定の間（音声の時計が引けるようになるまで）は満タン扱い＝
    時間制限なしで動かす */
-function _kingBatteryLeft() {
-  if (!_king || _king.recStartPos === null) return KING_BATTERY_BEATS;
+function _kingStepsLeft() {
+  if (!_king || _king.recStartPos === null) return KING_STEP_BEATS;
   const pos = _bgmJudgePos();
-  if (pos === null) return KING_BATTERY_BEATS;
+  if (pos === null) return KING_STEP_BEATS;
   const used = Math.floor((pos - _king.recStartPos) / BGM_BEAT);
-  return Math.max(0, Math.min(KING_BATTERY_BEATS, KING_BATTERY_BEATS - used));
+  return Math.max(0, Math.min(KING_STEP_BEATS, KING_STEP_BEATS - used));
 }
 
-/* 充電切れの監視。切れたら残りの的をその瞬間の目で自動確定して強制発射する。
+/* 持ち時間切れの監視。切れたら残りの的をその瞬間の目で自動確定して強制発射する。
    ほぼ確実に不一致になり、既存のハズレ経路（篩い落とし→衝突→ひび→failCount）へ
    そのまま合流する＝時間切れ専用の敗北経路を作らない */
-function _kingBatteryCheck() {
+function _kingStepsCheck() {
   if (_king.attemptFired) return; // 打ち込みが終わっていれば無関係
   if (_king.recStartPos === null) {
     /* 戦闘開始直後はテープ演出のレートランプ中で位置が引けない。使えるようになった
@@ -9497,7 +9497,7 @@ function _kingBatteryCheck() {
     }
     return;
   }
-  if (_kingBatteryLeft() > 0) return;
+  if (_kingStepsLeft() > 0) return;
   /* 残りの的を自動確定する。4本目の _kingReelShoot がそのままコールを閉じる
      （_kingFireAttack を別途呼ぶ必要はない） */
   while (_king.reelIdx < 4) _kingReelShoot(null, true);
@@ -9524,7 +9524,7 @@ function _kingTrialGate() {
   }
   if (_king.nextTrialPos === null) {
     /* 小節境界へ揃える。コール＆レスポンスの枠は recStartPos からの小節数で決まるので、
-       ここが拍境界だと以降の枠がすべて小節から外れる（バッテリーの目盛りも同様） */
+       ここが拍境界だと以降の枠がすべて小節から外れる（ステップLEDの目盛りも同様） */
     const sl = _kingSeqBarUp(Math.ceil((pos + KING_SEQ_MIN_LEAD * _bgmRateTo) / KING_SEQ_QUANT));
     _king.nextTrialPos = sl * KING_SEQ_QUANT;
   }
@@ -9546,7 +9546,7 @@ function _kingStartTrial(startPos) {
   _king.nextTrialPos = null;
   _king.seqAccentAt = null;
   _king.reelBeamed = [false, false, false, false];
-  _king.recStartPos = startPos; // バッテリーの起点（nullなら_kingBatteryCheckが後から打つ）
+  _king.recStartPos = startPos; // 打ち込みの起点（nullなら_kingStepsCheckが後から打つ）
 }
 
 /* 4本とも即座に再スピン（ヒット・ミス問わず毎回呼ばれる） */
@@ -10001,7 +10001,7 @@ function _updateBossBattle() {
     if (_kingLasers.length === 0 && _king.seqEvents.length === 0) { _startBossVictory(); }
     return;
   }
-  /* 打ち込みの持ち時間（バッテリー）と、次トライの解放。
+  /* 打ち込みの持ち時間と、次トライの解放。
      6回目の失敗（pendingDefeat）後は再スピンしない。的は敗北結果を表示したままロックされ
      続け、文字の衝突（ひび）→破砕へそのまま進む。
      ここで再スピンを許すと重大な破綻になる: 文字の衝突（シャッター発動）は復路込みで
@@ -10011,7 +10011,7 @@ function _updateBossBattle() {
      敗北フローが衝突する。
      再スピンを止めれば reelIdx=4 のまま_kingReelShootの既存ガードで入力も塞がれる
      （_kingTrialGate の先頭で pendingDefeat を弾いている） */
-  _kingBatteryCheck();
+  _kingStepsCheck();
   _kingTrialGate();
 }
 
@@ -10228,14 +10228,14 @@ function drawKingCookGauge(achieved = false) {
   /* 打ち込みメーター。1セル=1拍で、赤い再生ヘッドが拍境界ごとに1つ右へ進み、
      打った拍が緑で点いたまま残る（KING_STEP_*の定義部参照）。ラベル行の右側には
      16セルが入らないので、パネル上端に横幅いっぱいの細いストリップとして置く
-     （こんがりバーと同じ左右位置に揃える）。KING_BATTERY_GROUP（4拍＝1小節）ごとに
+     （こんがりバーと同じ左右位置に揃える）。KING_STEP_GROUP（4拍＝1小節）ごとに
      広めの隙間を空けて、数えなくても小節の頭が読めるようにする。
      achieved=true（退場演出中）は打ち込み自体が無いので出さない */
   if (!achieved && _king.recStartPos !== null && !_king.attemptFired) {
-    const head = KING_BATTERY_BEATS - _kingBatteryLeft();
-    const groups = Math.ceil(KING_BATTERY_BEATS / KING_BATTERY_GROUP);
+    const head = KING_STEP_BEATS - _kingStepsLeft();
+    const groups = Math.ceil(KING_STEP_BEATS / KING_STEP_GROUP);
     const ch = 4, cgap = 1.5, ggap = 5;
-    const cw = (bw - (groups - 1) * ggap - (KING_BATTERY_BEATS - groups) * cgap) / KING_BATTERY_BEATS;
+    const cw = (bw - (groups - 1) * ggap - (KING_STEP_BEATS - groups) * cgap) / KING_STEP_BEATS;
     const by0 = my + (IS_PORTRAIT ? 5 : 3); // ラベル文字の上端より上（パネル上端の細帯）
     /* 点灯セルを打ち込み記録から復元する。経過時間も位置と同じ音声基準の時計で測る
        （フレーム基準にすると処理落ちで閃光の長さが変わる）。
@@ -10245,12 +10245,12 @@ function drawKingCookGauge(achieved = false) {
     for (const r of _king.rec) {
       if (r.pos === null) continue;
       const ci = Math.floor((r.pos - _king.recStartPos) / BGM_BEAT);
-      if (ci >= 0 && ci < KING_BATTERY_BEATS) {
+      if (ci >= 0 && ci < KING_STEP_BEATS) {
         _kingStepAge[ci] = nowPos === null ? KING_STEP_FLASH_SEC : nowPos - r.pos;
       }
     }
     let x = bx;
-    for (let i = 0; i < KING_BATTERY_BEATS; i++) {
+    for (let i = 0; i < KING_STEP_BEATS; i++) {
       const age = _kingStepAge[i], lit = age >= 0, isHead = i === head;
       if (lit) {
         /* 打った直後だけ白寄りへ持ち上げて、点いたことを手応えにする */
@@ -10261,7 +10261,7 @@ function drawKingCookGauge(achieved = false) {
       } else if (isHead) {
         ctx.fillStyle = KING_STEP_HEAD;
       } else {
-        ctx.fillStyle = i >= KING_BATTERY_BEATS - KING_BATTERY_GROUP
+        ctx.fillStyle = i >= KING_STEP_BEATS - KING_STEP_GROUP
           ? KING_STEP_OFF_WARN : KING_STEP_OFF;
       }
       ctx.beginPath(); ctx.rect(x, by0, cw, ch); ctx.fill();
@@ -10271,7 +10271,7 @@ function drawKingCookGauge(achieved = false) {
         ctx.strokeStyle = KING_STEP_HEAD; ctx.lineWidth = 1.5;
         ctx.strokeRect(x - 0.75, by0 - 0.75, cw + 1.5, ch + 1.5);
       }
-      x += cw + ((i + 1) % KING_BATTERY_GROUP === 0 ? ggap : cgap);
+      x += cw + ((i + 1) % KING_STEP_GROUP === 0 ? ggap : cgap);
     }
   }
   ctx.font = `bold ${IS_PORTRAIT ? 16 : 18}px ${FONT_MIN}`;
