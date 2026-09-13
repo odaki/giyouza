@@ -280,6 +280,20 @@ const _MARK_ON = _dbgFlag('mark');
 const _mark = (_MARK_ON && typeof console !== 'undefined' && console.timeStamp)
   ? name => { try { console.timeStamp(name); } catch (_e) {} }
   : () => {};
+/* 1フレームで走ったtickの回数の分布（直近_TICK_HIST_FRAMESフレーム）。
+   「tickが飛んだ」と「フレーム間隔そのものが伸びた」を見分けるために要る。
+   gap だけ見ていると両者が同じ形に見える: アキュムレーターの余りがしきい値を
+   割ってtickを1回飛ばしただけでも、次のtickまでの間隔は2フレームぶんになり、
+   実際の過負荷と区別が付かない。0回が並んでいれば前者、1回のまま間隔が伸びて
+   いれば後者。?perf 時だけ数える */
+const _TICK_HIST_FRAMES = 120;
+let _tickHist = [0, 0, 0], _tickHistN = 0, _tickHistShown = [0, 0, 0];
+function _tickHistCount(steps) {
+  _tickHist[steps === 0 ? 0 : steps === 1 ? 1 : 2]++;
+  if (++_tickHistN >= _TICK_HIST_FRAMES) {
+    _tickHistShown = _tickHist; _tickHist = [0, 0, 0]; _tickHistN = 0;
+  }
+}
 const _PERF_FONT = '11px monospace';
 const _PERF_MAX_HOLD_MS = 5000; // 最大値の保持時間。古い記録は捨てて直近の状態を映す
 /* 計測対象の定義。ここに1行足して呼び出し側で_perfMark(key, t0)すれば、表示も
@@ -398,8 +412,11 @@ function drawPerf() {
        と自動制御が判断済みであることを示す */
     `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}` +
       (_RS_AUTO ? `自動残${_RS_LEVELS.length - 1 - _rsIdx}段${_rsFloor > 0 ? '床' + _RS_LEVELS[_rsFloor] : ''}` : '固定') +
-      `(焼込${_dpr}) ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%`,
+      `(焼込${_dpr}) ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%` +
+      (_RS_AUTO ? ` 判定 下${_rsDown}/${_RS_DOWN_WINDOWS} 上${_rsUp}/${_RS_UP_WINDOWS}` +
+        (_rsPending >= 0 ? ` 予約${_RS_LEVELS[_rsPending]}(適用待ち)` : '') : ''),
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
+    `tick 0回${_tickHistShown[0]} 1回${_tickHistShown[1]} 2回以上${_tickHistShown[2]} (直近${_TICK_HIST_FRAMES}f・0回=tick飛ばし)`,
     /* プールの生存数。返却漏れ（配列を捨てるときに _releaseAll を通し忘れる等）を実行中に
        見つけるための行。返さなかったスロットは生きたまま残って再利用されず、_itemAlloc /
        _partAlloc が新規生成を続けてプールが際限なく伸びる。iOS Safari の canvas メモリを
@@ -597,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.83';
+const VERSION = 'v7.84';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -14980,6 +14997,7 @@ function _gameLoop(t) {
     }
     if (_updateAccum > _TARGET_FRAME_MS)  _updateAccum = 0; // 追いつききれない借金は捨てる
     if (_updateAccum < -_TARGET_FRAME_MS) _updateAccum = 0; // 貸し越し側も同様
+    if (PERF_ON) _tickHistCount(_steps);
     draw();
     _frameWorkTimes[(_frameTimesIdx > 0 ? _frameTimesIdx - 1 : 0) % _FRAME_BUF_SIZE] = performance.now() - _tWork;
   } else {
@@ -14991,6 +15009,7 @@ function _gameLoop(t) {
        跳ねる＝詰まりはこちらのJSではなくブラウザ側の描画・合成にある。無駄な1枚を減らす
        （120Hz端末では描いて滑らかさを保つ） */
     const _t0 = PERF_ON ? performance.now() : 0;
+    if (PERF_ON) _tickHistCount(0);
     _bgmAccumStep();
     if (_rafHz === 0 || _rafHz > _RAF_HZ_HIGH) draw();
     if (PERF_ON) _perfMark('drawOnly', _t0);
