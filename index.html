@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.89';
+const VERSION = 'v7.90';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7877,6 +7877,7 @@ function _cleanupKingBattleState() {
   _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない（同上）
   _kingSpinSphere = _kingSpinSurface = null; // 「くるり」用の層を次戦へ持ち越さない
   _kingSpinChimeAt = null;
+  _kingNotes = []; _kingNoteFired = false;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
   _kingHits = [];                // 進行中の被弾リアクションを次戦へ持ち越さない
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
@@ -9672,6 +9673,7 @@ const _predKingCharAlive = f => {
   return true; // fly/wait/bounce は常に残す（bounceは衝突で必ずfallへ遷移する）
 };
 function _updateKingCommonFx() {
+  _updateKingNotes(); // 達成の音符（戦闘中は空なので素通りする）
   if (_king) _easeKingXform();
   /* 被弾した的の揺れを減衰させる（_kingReelShakeOffset参照）。衝突は破砕へ
      跨ぐ可能性があるため共通FX側で進める */
@@ -10057,12 +10059,81 @@ function _updateBossBattle() {
    輪郭が変わらない。
 
    短冊は等幅で切る。縁ほど元画像を大きく圧縮することになるが、それが正しい前縮み */
-const KING_SPIN_SEC     = 0.35; // 1回転に掛ける時間。チーンへ着地させる
+const KING_SPIN_SEC     = 1.20; // 1回転に掛ける時間。ファンファーレの途中から回り始め、チーンへ着地する
 const KING_SPIN_STRIPS  = 64;   // 短冊の数（16でもほぼ同じ見た目だが、実測で0.064ms）
 const KING_SPIN_R_RATIO = 0.58; // 球の半径（_drawGyozaBody の本体楕円と同じ比）
 let _kingSpinSphere = null;     // 回さない層（生地＋こんがりトーン）
 let _kingSpinSurface = null;    // 回す層（接地側の焦げ色・薄皮・ひだ・焦げ跡・顔）
 let _kingSpinChimeAt = null;    // チーンのctx時刻。音が引けないときはnull
+/* チーンからの経過秒。まだなら負、判定できなければ -Infinity。
+   音が鳴っていれば音声時計、消音時だけ勝利からの経過フレームで代用する */
+function _kingChimeElapsed() {
+  if (_kingSpinChimeAt !== null && audioCtx) return audioCtx.currentTime - _kingSpinChimeAt;
+  if (phase !== 'bossVictory' && phase !== 'bossVictoryOutro') return -Infinity;
+  return (_bossVictoryTimer - KONGARI_CHIME_SEC * 60) / 60;
+}
+
+/* チーンの瞬間の上下バウンド。減衰する2山にする。1回だけ跳ねるより
+   「機嫌が良くなった」に寄る。回転と同じく座標変換へは波及させない
+   （決着後なので飛翔文字はもう居ない） */
+const KING_BOUNCE_SEC = 0.70, KING_BOUNCE_PX = 26;
+function _kingVictoryBounce() {
+  const dt = _kingChimeElapsed();
+  if (dt < 0 || dt > KING_BOUNCE_SEC) return 0;
+  const p = dt / KING_BOUNCE_SEC;
+  return -KING_BOUNCE_PX * Math.exp(-3.4 * p) * Math.abs(Math.sin(Math.PI * 2.1 * p));
+}
+
+/* チーンで右上へ飛ぶ音符。漫画の「機嫌が良くなった」の記号。
+   初速が速く、強い減速で失速し、その場で漂いながら消える。等速で飛ばすと
+   花火になってしまうので、指数減衰であることがこの表現の要。
+   1個だけにする: 数を増やすと祝祭の演出になり、ふと鼻歌が漏れた感じから離れる */
+const KING_NOTE_SEC   = 1.10;             // 寿命
+const KING_NOTE_SPEED = 430;              // 初速 px/秒
+const KING_NOTE_DRAG  = 3.6;              // 減速（0.3秒でほぼ止まる）
+const KING_NOTE_GRAV  = 40;               // 失速してから軽く落ちる
+const KING_NOTE_ANGLE = -Math.PI * 0.30;  // 右上（水平から54度上）
+let _kingNotes = [], _kingNoteFired = false;
+function _fireKingNote() {
+  if (!_king) return;
+  const s = _BOSS_S * _king.dscale;
+  _kingNotes = [{
+    x: _king.dbx + s * 0.22, y: _king.dby - s * 0.22,
+    vx: Math.cos(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
+    vy: Math.sin(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
+    t: 0, rot: -0.20,
+  }];
+}
+/* 位置は実時間（秒）で進める。フレーム基準にすると処理落ちで飛距離が変わる。
+   固定tickなので1tick＝_TARGET_FRAME_MSで割り切ってよい */
+function _updateKingNotes() {
+  if (_kingNotes.length === 0) return;
+  const dt = _TARGET_FRAME_MS / 1000, k = Math.exp(-KING_NOTE_DRAG * dt);
+  for (const n of _kingNotes) {
+    n.t += dt;
+    n.x += n.vx * dt; n.y += n.vy * dt;
+    n.vx *= k; n.vy *= k;
+    n.vy += KING_NOTE_GRAV * dt;
+    n.rot += 0.9 * dt;
+  }
+  _kingNotes = _kingNotes.filter(n => n.t < KING_NOTE_SEC);
+}
+function _drawKingNotes() {
+  if (_kingNotes.length === 0) return;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.round(_BOSS_S * 0.14)}px ${FONT_MIN}`;
+  for (const n of _kingNotes) {
+    const p = n.t / KING_NOTE_SEC;
+    ctx.globalAlpha = Math.max(0, 1 - p * p); // 後半で速く消える
+    ctx.save();
+    ctx.translate(n.x, n.y); ctx.rotate(n.rot);
+    outText('♪', 0, 0, '#ffdd55', 'rgba(60,20,0,0.85)', 5);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 const _wrapPi = a => { a = (a + Math.PI) % (2 * Math.PI); return (a < 0 ? a + 2 * Math.PI : a) - Math.PI; };
 
 /* 層は達成の瞬間に1回だけ作る。常設の _renderKingBody の経路は触らない
@@ -10185,7 +10256,8 @@ function _drawKingBody(alpha) {
   if (!_king) return;
   ctx.save();
   if (alpha !== undefined) ctx.globalAlpha = alpha;
-  ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
+  ctx.translate(_king.dbx, _king.dby + _kingVictoryBounce());
+  ctx.scale(_king.dscale, _king.dscale);
   const spin = _kingSpinProgress();
   if (spin >= 0) {
     /* イーズインアウト。静止から回り出して静止で終わる＝弾かれたのではなく自ら回った形 */
@@ -10225,6 +10297,7 @@ function _drawKingOutcomeScreen(opts) {
     _drawKingBody();
     drawKingCharFlights();
   }
+  _drawKingNotes();
   if (opts.extra) opts.extra();
 
   ctx.font = `bold ${IS_PORTRAIT ? 30 : 42}px ${FONT_MIN}`;
@@ -10569,6 +10642,7 @@ function _startBossVictory() {
     ? audioCtx.currentTime + 0.01 : null;
   playSE('kongariComplete', seAt ?? undefined);
   _kingSpinChimeAt = seAt === null ? null : seAt + KONGARI_CHIME_SEC;
+  _kingNotes = []; _kingNoteFired = false;
   _buildKingSpinLayers(); // 「くるり」用の2層（_drawKingSpin参照）
   /* 真エンディングへ入るかどうかは trueEndingSeen で判定する（「実績が今回初めて解除された
      か」で判定してはいけない）。
@@ -10592,6 +10666,8 @@ function _updateBossVictory() {
   if (_kingSpinSurface && _bossVictoryTimer > KONGARI_CHIME_SEC * 60) {
     _kingSpinSphere = _kingSpinSurface = null;
   }
+  /* チーンを跨いだ瞬間に音符を1つ出す（_fireKingNote参照） */
+  if (!_kingNoteFired && _kingChimeElapsed() >= 0) { _kingNoteFired = true; _fireKingNote(); }
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
   _updateKingCommonFx();
@@ -10765,6 +10841,7 @@ function drawBossVictoryOutro() {
   for (const g of o.items) drawOneItem(g);
   if (o.seedItem) drawOneItem(o.seedItem);
   if (_king) _drawKingBody();
+  _drawKingNotes();
   _drawVictorySteam();
   /* こんがりゲージの締め: 100%のまま「達成！」を出してから飛び去りに合わせて消す。
      決着した瞬間にゲージが消えると、終わり方が唐突に見える */
