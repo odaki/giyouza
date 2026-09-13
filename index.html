@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.99';
+const VERSION = 'v8.00';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10160,7 +10160,7 @@ const KING_NOTE_SEC   = 2.00;             // 寿命。失速してからも漂�
 const KING_NOTE_SPEED = 430;              // 初速 px/秒
 const KING_NOTE_DRAG  = 3.6;              // 減速（0.3秒でほぼ止まる）
 const KING_NOTE_GRAV  = 40;               // 失速してから軽く落ちる
-const KING_NOTE_ANGLE = -Math.PI / 12;    // 時計の2時と3時の中間＝水平から15度上
+const KING_NOTE_ANGLE = -Math.PI / 6;     // 時計の2時＝水平から30度上
 let _kingNotes = [], _kingNoteFired = false;
 function _fireKingNote() {
   if (!_king) return;
