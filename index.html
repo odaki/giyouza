@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.01';
+const VERSION = 'v8.02';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -12383,10 +12383,32 @@ function _dpLoopBeatPos(L) {
 }
 
 /* 音だけ鳴らす（ライブの打鍵とパターン再生の共通部分）。tは絶対時刻 */
-function _dpVoice(i, t) {
+/* 先読みで予約済みの音。まだ鳴っていないものは、パターンが差し替わったときに黙らせる。
+   Web Audio へ渡した予約そのものは取り消せないが、**通り道のゲインを0にすれば音は消える**。
+   パッドの hit() は自前でノードを作るので、戻り値で掴むには全音源に手を入れることになる。
+   通り道を1つ挟むほうが安い（ノード1つぶんで、もともと複数作っている中の1つ） */
+let _dpPending = [];
+/* 予約1つぶんの通り道。t に鳴る音はここを通る */
+function _dpCancelGate(t) {
+  const g = audioCtx.createGain();
+  g.gain.value = 1;
+  g.connect(_seDest(audioCtx));
+  _disconnectAfter(audioCtx, t + 2.0, g);
+  if (_dpPending.length > 128) _dpPending = _dpPending.filter(p => p.at > audioCtx.currentTime - 2);
+  _dpPending.push({ at: t, g });
+  return g;
+}
+/* 差し替えの境目。ここより後に鳴る予約だけを黙らせ、組み直しもここから始める。
+   同じ値を両方に使うので、黙らせも組み直しもされない隙間ができない */
+const DP_REPATCH_EPS = 0.004;
+
+/* track=true は再生（シーケンサ）からの予約。差し替えで黙らせられるよう通り道を挟む。
+   パッドを直接叩いたぶんは取り消す相手が居ないので挟まない。
+   通り道を作るのは**鳴らすと決めたあと**にする（ミュート中に作ると捨てるだけ） */
+function _dpVoice(i, t, track) {
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
   const pad = DRUM_PADS[i];
-  let dest = _seDest(audioCtx);
+  let dest = track ? _dpCancelGate(t) : _seDest(audioCtx);
   if (pad.gain !== 1) {
     const g = audioCtx.createGain();
     g.gain.value = pad.gain;
@@ -12398,9 +12420,9 @@ function _dpVoice(i, t) {
 }
 
 /* クリック。小節の頭はリムショット、他の拍はクローズハット（TR音源のまま） */
-function _dpClickVoice(t, accent) {
+function _dpClickVoice(t, accent, track) {
   if (!audioCtx || audioCtx.state !== 'running' || audioMuted) return;
-  const d = _seDest(audioCtx);
+  const d = track ? _dpCancelGate(t) : _seDest(audioCtx);
   if (accent) _playRimshot(audioCtx, t, d, DP_CLICK_ACCENT_VOL);
   else        _playKingHat(audioCtx, t, d, false, DP_CLICK_VOL);
 }
@@ -12521,9 +12543,11 @@ function _dpLoopTick() {
       const t = L.head + g * slotDur;            // 時刻は必ず原点から1回の掛け算で作る
       if (t >= until) { L.schedSlot = g; done = true; break; } // 次はここから
       const at = Math.max(t, now);               // 少し遅れていても捨てずに即座に鳴らす
-      if (st.click) _dpClickVoice(at, st.click === 2);
+      /* クリックも取り消せるようにする。差し替えでカーソルを戻すとクリックも予約し直すので、
+         黙らせないと同じ位置で二度鳴る（内容は変わらないので聞こえ方は変わらない） */
+      if (st.click) _dpClickVoice(at, st.click === 2, true);
       else {
-        _dpVoice(st.i, at);
+        _dpVoice(st.i, at, true);
         L.viz.push({ i: st.i, t: at }); // 鳴る時刻にパッドを光らせる（_updateDrumPad）
       }
       emitted = g;
@@ -12547,6 +12571,7 @@ function _dpLoopStopSched() {
   const L = _dp && _dp.loop;
   if (!L || !L.sched) return;
   clearInterval(L.sched); L.sched = null;
+  _dpPending = []; // ノードは_disconnectAfterが始末する。参照だけ落とす
   L.viz.length = 0;
 }
 
@@ -12618,17 +12643,37 @@ function _dpLoopRec() {
 /* 直前のレイヤーを取り消す。録音中なら、まずその録りかけを捨てる */
 /* 録音中は「この録りかけ（take・pass）を捨てる」＝打ち直しのやり直し。
    録音していなければ直前に確定したレイヤーを取り消す */
+/* パターンが差し替わったことを再生へ即座に反映する。
+   予約済みで**まだ鳴っていない**ぶんを黙らせ、カーソルを現在位置へ戻して組み直す。
+   これが無いと、切り替えた瞬間から最大 DP_SCHED_AHEAD（0.45秒＝120BPMでほぼ1拍）は
+   古いパターンが鳴り続ける。ループの頭でUNDO/REDOを使ってパターンを切り替える使い方だと、
+   切り替えたい頭そのものが既に予約済みで、狙った音が出ない。
+   鳴っている最中のものは切らない（途中で断つと段差がそのままクリックになる） */
+function _dpLoopRepatch() {
+  const L = _dp && _dp.loop;
+  if (!L || !L.playing || !audioCtx) return;
+  const cut = audioCtx.currentTime + DP_REPATCH_EPS;
+  const keep = [];
+  for (const p of _dpPending) {
+    if (p.at > cut) { try { p.g.gain.cancelScheduledValues(0); p.g.gain.value = 0; } catch (e) {} }
+    else keep.push(p);
+  }
+  _dpPending = keep;
+  L.viz = L.viz.filter(v => v.t <= cut); // 消した音でパッドを光らせない
+  L.schedSlot = Math.ceil((cut - L.head) / _dpSlotDur(L));
+  _dpLoopTick(); // 次のtick（10ms後）を待たずに新しいパターンで組み直す
+}
+
 function _dpLoopUndo() {
   const L = _dp.loop;
   if (L.rec && ((L.take && L.take.length) || (L.pass && L.pass.length) || L.pending.length)) {
     L.take = null; L.pass = []; L.pending = []; L.passDirty = false;
-    /* 予約位置は巻き戻さない。既にWeb Audioへ渡した先読みぶんは取り消せないので、
-       巻き戻すと同じ音が二度鳴るだけになる（_dpLoopApplyBpm のコメントと同じ理由）。
-       捨てた録りかけは先読みの残り（最大 DP_SCHED_AHEAD）ぶんで鳴り止む */
+    _dpLoopRepatch(); // 捨てた録りかけを先読みの残りぶん鳴らし続けない
     return;
   }
   if (L.layers.length === 0) return;
   L.redo.push(L.layers.pop());
+  _dpLoopRepatch();
 }
 
 /* UNDOで外したレイヤーを戻す。CLEARは置かない: 全部UNDOすれば同じことができるうえ、
@@ -12639,6 +12684,7 @@ function _dpLoopRedo() {
   const L = _dp.loop;
   if (L.redo.length === 0) return;
   L.layers.push(L.redo.pop());
+  _dpLoopRepatch();
 }
 
 /* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
