@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.07';
+const VERSION = 'v8.08';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -12237,6 +12237,10 @@ function _startDrumPad() {
 function _exitDrumPad() {
   _dpHoldEnd();
   _dpLoopStopSched(); // ループの予約を畳んでから抜ける（残すと戻った後も鳴り続ける）
+  /* 予約したままの書き込みをここで吐き出す。戻り先のサウンドテストも音を鳴らすだけの
+     画面でupdate()が早期に戻るので、次の機会はページを離れるときまで来ない。
+     パッドから指が離れた直後なので、書き込みで数ミリ秒止まっても演奏を乱さない */
+  _lsFlush();
   _dp = null;
   _startSoundTest(); // 入ってきたサウンドテストへ戻す
 }
@@ -12400,7 +12404,6 @@ function _dpLoopNew() {
    壊れた保存は**丸ごと**捨てる。一部だけ採ると、パッドの構成や小節数の選択肢を
    変えたときに半端な状態が復元されて、どこがおかしいのか追えなくなる */
 const DP_SEQ_VER = 1;            // 保存の形を変えたら上げる（旧データは読まずに捨てられる）
-const DP_SEQ_MAX_CHARS = 64 * 1024;  // これを超えたら保存しない（他のキーの容量を食わない）
 const DP_SEQ_BEAT_DIGITS = 4;
 const DP_LS_QUIET_MS = 400;      // 最後の打鍵からこれだけ空いたら書いてよい
 
@@ -12415,10 +12418,10 @@ function _dpSeqSave(L) {
       for (const e of l.ev) ev.push(e.i, +e.beat.toFixed(DP_SEQ_BEAT_DIGITS));
       return { len: l.len, ev };   // 数値を平らに並べる（{i,beat}のままだと倍以上になる）
     });
-    const s = JSON.stringify({ v: DP_SEQ_VER, bpm: L.bpm, bars: L.bars,
-                               quant: L.quant, click: L.click ? 1 : 0, layers });
-    if (s.length > DP_SEQ_MAX_CHARS) return;  // レイヤーは際限なく積めるので上限で止める
-    _lsQueue(LS_DPSEQ, s);
+    /* 大きさの歯止めはここには要らない。総イベント数が DP_LOOP_MAX_EV で頭打ちになるので
+       （_dpHitの記録条件を参照）、保存は上限でも5KB程度にしかならない */
+    _lsQueue(LS_DPSEQ, JSON.stringify({ v: DP_SEQ_VER, bpm: L.bpm, bars: L.bars,
+                                        quant: L.quant, click: L.click ? 1 : 0, layers }));
   } catch (e) {}
 }
 
@@ -12430,6 +12433,7 @@ function _dpSeqLoad(L) {
   if (!(o.bpm >= DP_BPM_MIN && o.bpm <= DP_BPM_MAX)) return;
   if (!DP_BARS_CHOICES.includes(o.bars) || !DP_QUANT_CHOICES.includes(o.quant)) return;
   const layers = [];
+  let n = 0;
   for (const l of o.layers) {
     if (!l || !Array.isArray(l.ev) || l.ev.length % 2) return;
     const len = l.len;
@@ -12444,7 +12448,11 @@ function _dpSeqLoad(L) {
       ev.push({ i, beat });
     }
     layers.push({ ev, len });
+    n += ev.length;
   }
+  /* スケジューラが前提にしている歯止めを、読み込みでも守る。
+     ここを通さないと、手で書き換えた保存から上限を超えた状態を作れてしまう */
+  if (n > DP_LOOP_MAX_EV) return;
   L.layers = layers;
   L.bpm = Math.round(o.bpm); L.bars = o.bars; L.quant = o.quant; L.click = !!o.click;
 }
