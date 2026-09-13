@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.00';
+const VERSION = 'v8.01';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4330,7 +4330,7 @@ function hitTest(rect, x, y) {
 
 /* ── ボタンを押した瞬間の光（全ボタン共通） ──
    状態（ON/OFF・有効/無効）とは別物で、「押せた」ことを画面で返すためのもの。
-   これが無いと、押しても画面がほとんど変わらないボタン（TEMPO±・UNDO・CLEAR・
+   これが無いと、押しても画面がほとんど変わらないボタン（TEMPO±・UNDO・REDO・
    効果音の試聴など）は操作した手応えが無い。
 
    **押した点を1箇所で控え、各ボタンは自分の矩形に入っているかを見るだけ**にしてある。
@@ -12159,13 +12159,14 @@ function _dpBuildLayout() {
   const plate = { x: lcdX, y: panelY + 20 };
   const lcd = { x: lcdX, y: panelY + headH, w: lcdW, h: lcdH };
   /* 操作の配置:
-       LCD直下の横並び … UNDO / CLEAR（編集）
+       LCD直下の横並び … Q / UNDO / REDO（編集）。戻るが左・進むが右で、
+                        ブラウザやエディタと同じ向きに揃える
        ロゴの左右に3段 … 左=REC/PLAY/CLICK（演奏）、右=テンポ±/小節数（設定）
      SPシリーズのように大きなノブの左右へ縦に並べる。行を増やすとパネルが縦に
      伸びてロゴを小さくせざるを得ないが、ロゴの左右は元々空いているのでここへ置く */
   const ctlY = panelY + headH + lcdH + 8;
   const ctlW = (lcdW - ctlGap * 2) / 3;
-  const ctls = ['quant', 'undo', 'clear'].map((id, i) => ({
+  const ctls = ['quant', 'undo', 'redo'].map((id, i) => ({
     id, x: lcdX + i * (ctlW + ctlGap), y: ctlY, w: ctlW, h: ctlH }));
   const jog = { x: lcdX + lcdW / 2, y: ctlY + ctlH + 20 + jogD / 2, r: jr };
   /* 左右のピルボタン（3段） */
@@ -12323,6 +12324,9 @@ function _dpBoundaryWinBeats(L) {
 
 const DP_QUANT_CHOICES = [0, 0.25, 0.5, 1];
 const DP_QUANT_LABEL = { 0: 'Q OFF', 0.25: 'Q 1/16', 0.5: 'Q 1/8', 1: 'Q 1/4' };
+/* 既定は1/16。打ち込みの取っ掛かりとしては、生よりも「まず揃う」ほうが道具として
+   扱いやすい。OFFへ回せば叩いたままの演奏が戻る（記録は常に生のまま） */
+const DP_QUANT_DEFAULT = 0.25;
 /* 操作ボタンの表示名。状態で変わるものがあるのでループ状態 L を受け取る関数で持つ。
    ボタンを足すときは _dpBuildLayout の配置とここの2箇所を対にすること
    （描画側で id を分岐させると、配置だけ足して表示名を忘れたときに黙って空文字になる） */
@@ -12335,7 +12339,7 @@ const DP_CTL_LABEL = {
   bars:  L => `${L.bars} BAR${L.bars > 1 ? 'S' : ''}`,
   quant: L => DP_QUANT_LABEL[L.quant],
   undo:  () => 'UNDO',
-  clear: () => 'CLEAR',
+  redo:  () => 'REDO',
 };
 const DP_BEATS_PER_BAR = 4;
 /* クリックの音量。パッドと同じ音源を使うが、伴走なので控えめにする */
@@ -12347,8 +12351,9 @@ function _dpLoopNew() {
        pass … この周に叩いたぶん。周が変わるとき、入力があればtakeを置き換える
      打ち込む→次の周で仮再生を聞く→駄目なら叩き直す（takeが差し替わる）→
      良ければRECを終える、という手順になる。RECを終えた時点のtakeが確定する */
-  return { playing: false, rec: false, bpm: 120, bars: 2, quant: 0,
-           layers: [], take: null, takeLen: 0, pass: null, pending: [], passDirty: false, lastK: null,
+  return { playing: false, rec: false, bpm: 120, bars: 2, quant: DP_QUANT_DEFAULT,
+           layers: [], redo: [],
+           take: null, takeLen: 0, pass: null, pending: [], passDirty: false, lastK: null,
            head: 0, schedSlot: 0, sched: null, viz: [], click: false };
 }
 function _dpBeatDur(L) { return 60 / L.bpm; }
@@ -12405,7 +12410,7 @@ function _dpLoopEventCount(L) {
   for (const layer of L.layers) n += layer.ev.length;
   return n;
 }
-/* 何か入っているか（UNDO/CLEARを効かせてよいか） */
+/* 何か入っているか（UNDOを効かせてよいか） */
 function _dpLoopHasPattern(L) {
   return L.layers.length > 0 || (L.take && L.take.length > 0) || (L.pass && L.pass.length > 0);
 }
@@ -12579,7 +12584,12 @@ function _dpLoopCommit(L) {
   else if (L.take && L.pass && L.pass.length) L.take = L.take.concat(L.pass); // 同上
   /* 長さは**打ち込んだときの小節数**。確定した瞬間の小節数で決めると、
      録音のあとに小節数を変えてからRECを切っただけで長さが変わってしまう */
-  if (L.take && L.take.length) L.layers.push({ ev: L.take, len: L.takeLen || _dpBeatsPerLoop(L) });
+  if (L.take && L.take.length) {
+    L.layers.push({ ev: L.take, len: L.takeLen || _dpBeatsPerLoop(L) });
+    /* 新しく積んだ時点で履歴が分岐するので、UNDOで外したぶんは捨てる。
+       残すと「戻した先とは違う並びのレイヤーが後ろへ足される」ことになる */
+    L.redo.length = 0;
+  }
   L.take = null; L.takeLen = 0; L.pass = null; L.pending = []; L.passDirty = false;
   L.lastK = null; L.rec = false;
 }
@@ -12618,13 +12628,17 @@ function _dpLoopUndo() {
     return;
   }
   if (L.layers.length === 0) return;
-  L.layers.pop();
+  L.redo.push(L.layers.pop());
 }
 
-function _dpLoopClear() {
+/* UNDOで外したレイヤーを戻す。CLEARは置かない: 全部UNDOすれば同じことができるうえ、
+   一撃で消せるボタンは押し間違いが致命的になる。
+   録りかけの破棄（上のUNDOの前半）はREDOの対象にしない。layers を触っていないので
+   戻す先が無く、「UNDOしたのに関係ないレイヤーが戻る」という見え方になるため */
+function _dpLoopRedo() {
   const L = _dp.loop;
-  L.layers = []; L.take = null; L.takeLen = _dpBeatsPerLoop(L);
-  L.pass = L.rec ? [] : null; L.pending = []; L.passDirty = false;
+  if (L.redo.length === 0) return;
+  L.layers.push(L.redo.pop());
 }
 
 /* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
@@ -12763,7 +12777,7 @@ function _drumPadTouch(x, y, inputPerfMs) {
     if (c.id === 'rec')   _dpLoopRec();
     if (c.id === 'play')  _dpLoopPlayStop();
     if (c.id === 'undo')  _dpLoopUndo();
-    if (c.id === 'clear') _dpLoopClear();
+    if (c.id === 'redo')  _dpLoopRedo();
     if (c.id === 'click') _dpLoopToggleClick();
     if (c.id === 'bpmUp') { _dpLoopSetBpm(+DP_BPM_STEP); _dpHoldBegin(+DP_BPM_STEP, c); }
     if (c.id === 'bpmDn') { _dpLoopSetBpm(-DP_BPM_STEP); _dpHoldBegin(-DP_BPM_STEP, c); }
@@ -12880,7 +12894,8 @@ function _dpDrawLcd(o) {
 }
 
 /* 操作ボタン。REC（録音中）・CLICK（ON）・Q（ON）は点いた状態を持ち、
-   UNDO/CLEAR は打ち込みが無いとき暗くする（押しても効かないことを見せる） */
+   UNDO は打ち込みが無いとき、REDO は戻せるものが無いとき暗くする
+   （押しても効かないことを見せる） */
 function _dpDrawCtls(o) {
   const LP = o.loop;
   const hasPat = _dpLoopHasPattern(LP);
@@ -12888,7 +12903,8 @@ function _dpDrawCtls(o) {
     const on   = (c.id === 'rec' && LP.rec) || (c.id === 'click' && LP.click) ||
                  (c.id === 'quant' && LP.quant > 0);
     const red  = (c.id === 'rec' && LP.rec);
-    const live = (c.id === 'undo' || c.id === 'clear') ? hasPat : true;
+    const live = c.id === 'undo' ? hasPat
+               : c.id === 'redo' ? LP.redo.length > 0 : true;
     /* 形だけがロゴの左右で変わる（_dpBtnPoly参照）。面の作りはパッドと同じ */
     const at = inset => c.shape
       ? _dpRoundPoly(_dpBtnPoly(c, inset), 6)
