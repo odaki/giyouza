@@ -413,7 +413,7 @@ function drawPerf() {
     `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}` +
       (_RS_AUTO ? `自動残${_RS_LEVELS.length - 1 - _rsIdx}段${_rsFloor > 0 ? '床' + _RS_LEVELS[_rsFloor] : ''}` : '固定') +
       `(焼込${_dpr}) ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%` +
-      (_RS_AUTO ? ` 判定 下${_rsDown}/${_RS_DOWN_WINDOWS} 上${_rsUp}/${_RS_UP_WINDOWS}` +
+      (_RS_AUTO ? ` 判定 下${_rsDown}/${_rsRatio > _RS_PANIC_RATIO ? 1 : _RS_DOWN_WINDOWS} 上${_rsUp}/${_RS_UP_WINDOWS}` +
         (_rsPending >= 0 ? ` 予約${_RS_LEVELS[_rsPending]}(適用待ち)` : '') : ''),
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     `tick 0回${_tickHistShown[0]} 1回${_tickHistShown[1]} 2回以上${_tickHistShown[2]} (直近${_TICK_HIST_FRAMES}f・0回=tick飛ばし)`,
@@ -533,6 +533,7 @@ const _dpr = (() => {
 const _RS_LATE_MS      = 20;   // これを超えたtick間隔を取りこぼしとみなす（60Hzの16.7msに余裕）
 const _RS_WINDOW       = 120;  // 1窓のtick数（約2秒）
 const _RS_DOWN_RATIO   = 0.25; // 取りこぼし率がこれを超える窓が続いたら下げる
+const _RS_PANIC_RATIO  = 0.35; // これを超えた窓は1つで下げる（様子を見る意味が無い水準）
 const _RS_UP_RATIO     = 0.05; // これを下回る窓が続いたら戻す
 const _RS_DOWN_WINDOWS = 2;    // 下げるまでの連続窓数（約4秒）
 const _RS_UP_WINDOWS   = 8;    // 戻すまでの連続窓数（約16秒・戻しは慎重に）
@@ -576,7 +577,12 @@ function _rsEvaluate() {
   if (_rsSinceUp !== Infinity) _rsSinceUp++;
   if (_rsRatio > _RS_DOWN_RATIO) {
     _rsUp = 0;
-    if (++_rsDown >= _RS_DOWN_WINDOWS && _rsIdx < _RS_LEVELS.length - 1) {
+    /* _RS_DOWN_WINDOWS ぶん様子を見るのは、たまたま重かった1窓で画質を落とさないための
+       保険。取りこぼしが_RS_PANIC_RATIOを超えている窓にはその保険が要らない
+       （明らかに足りていない）ので1窓で下げる。キング戦の立ち上がりがこれに当たり、
+       下げ切るまでの数秒がそのまま体感の引っかかりになる */
+    const need = _rsRatio > _RS_PANIC_RATIO ? 1 : _RS_DOWN_WINDOWS;
+    if (++_rsDown >= need && _rsIdx < _RS_LEVELS.length - 1) {
       _rsDown = 0;
       /* 戻した直後にまた落ちた＝その段階はこの端末には無理、とみなして下限を上げる。
          下げるたびに下限を上げると二度と戻れなくなるので、失敗した時だけにする */
@@ -614,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.84';
+const VERSION = 'v7.85';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
