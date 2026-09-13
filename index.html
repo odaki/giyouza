@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.94';
+const VERSION = 'v7.95';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -726,7 +726,7 @@ function _mkCache(w, h) {
 /* ── 静的レイヤーキャッシュ ──
    雲・獅子は毎フレーム同じパスを描くことになる。OffscreenCanvas に事前描画しておき、
    drawImage() 1回で済ませる */
-let _staticLayerCanvas = null; // 雲 + 上下帯を合成した透明オフスクリーン
+let _staticLayerCanvas = null; // 背景グラジェント + 上下の金帯を焼き込んだ1枚（雲と獅子は動かすので入らない）
 /* 獅子（横画面のみ）は動かすので静的レイヤーへ焼き込まず、1枚のスプライトで持つ。
    左右で焼き分けず、右は描画時に反転する（焼き分ければ右も画素まで一致するが、
    スプライトが倍になる。反転の再サンプルで輪郭の1179画素が最大37/255ずれるだけなので、
@@ -7727,8 +7727,9 @@ function _buildBossOC() {
   bc.scale(kk, kk);
   _drawGyozaBody(bc, REF, 0, 0, grd);
   bc.restore();
-  /* 顔レイヤー（透明地に目鼻口眉のみ）: トーン合成の後に毎回このレイヤーだけ
-     上描きし、常に元の色を保証する */
+  /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
+     ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
+     持ち続けても読む人が居ないまま 1140×1140＝約5MB を抱えることになる */
   const faceOC = mkOC();
   const fc = faceOC.getContext('2d');
   fc.scale(_dpr, _dpr);
@@ -7745,13 +7746,13 @@ function _buildBossOC() {
   const liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 中身がある矩形。スプライトは 0.75s 四方の安全枠で作ってあるので、そのまま
      転送すると面積の48%を透明なまま塗ることになる。これは画面内で最大の矩形で、
-     ここを切るのがキング戦でいちばん効く（実測 -72%）。
+     実解像度2では画面の44%を占める。
      範囲は本体楕円＋輪郭線の外側半分で決まる。焦げ跡は source-atop で本体の
      アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
      余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
   const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
   const rx = s * 0.58 + strokeOut + pad, ry = s * 0.48 + strokeOut + pad;
-  _bossOC = { oc, bodyOC, faceOC, half, liveOC,
+  _bossOC = { oc, bodyOC, half, liveOC,
               rect: { x: -rx, y: s * 0.08 - ry, w: rx * 2, h: ry * 2 } };
 }
 
