@@ -608,7 +608,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.96';
+const VERSION = 'v7.97';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -6262,6 +6262,14 @@ function drawWorms(list) {
    個体差は _ITEM_VARIANT_N 種に量子化されるが落下群では知覚できない。
    OffscreenCanvas 未対応時は null → パス描画へフォールバック */
 const _ITEM_VARIANT_N   = 12;
+/* ギヨウザ本体の楕円（サイズ s に対する比）。中心は s*CY だけ下、半径は RX/RY。
+   この形は輪郭だけでなく、影の広がり・湯気の湧き出す弧・スプライトの中身の矩形・
+   勝利で回すときの球の半径まで共有している。数字のまま散らすと、形を変えたときに
+   どれかが取り残される（実際「_drawGyozaBodyと同じ比率」と書いたコメントが3箇所あった） */
+const GYOZA_BODY_CY = 0.08, GYOZA_BODY_RX = 0.58, GYOZA_BODY_RY = 0.48;
+/* 置き場所はここより後ろにできない。下の _itemVariantSprites は評価時に
+   _drawGyozaBody を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
+
 const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
 const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
 const _itemVariantSprites = (() => {
@@ -6579,7 +6587,7 @@ function _drawGyozaShadow(c2, s) {
   c2.save();
   c2.translate(s*0.06, s*0.12);
   c2.scale(1, 0.55);
-  c2.beginPath(); c2.arc(0, 0, s*0.58, 0, Math.PI*2);
+  c2.beginPath(); c2.arc(0, 0, s*GYOZA_BODY_RX, 0, Math.PI*2);
   c2.fillStyle = 'rgba(0,0,0,0.18)'; c2.fill();
   c2.restore();
 }
@@ -6595,7 +6603,7 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part) {
   if (all || part === 'sphere') {
   /* 本体楕円 */
   c2.beginPath();
-  c2.ellipse(ox, oy + s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
+  c2.ellipse(ox, oy + s*GYOZA_BODY_CY, s*GYOZA_BODY_RX, s*GYOZA_BODY_RY, 0, 0, Math.PI*2);
   c2.fillStyle = bodyGrd;
   c2.fill();
   c2.strokeStyle = 'rgba(120,90,50,0.55)';
@@ -6983,7 +6991,7 @@ function _makeGhostCanvas(r) {
   c2.shadowColor = 'rgba(140,200,255,0.95)';
   c2.shadowBlur  = r * 0.7;
   c2.beginPath();
-  c2.ellipse(cx, cy + r*0.08, r*0.58, r*0.48, 0, 0, Math.PI*2);
+  c2.ellipse(cx, cy + r*GYOZA_BODY_CY, r*GYOZA_BODY_RX, r*GYOZA_BODY_RY, 0, 0, Math.PI*2);
   c2.fillStyle = 'rgba(180,220,255,0.35)';
   c2.fill();
   c2.restore();
@@ -7194,7 +7202,7 @@ function drawFish(f, t) {
   /* ── ギヨウザ本体（drawOneItem と同じパス構成） ── */
   /* 本体楕円（焼きギヨウザカラー） */
   ctx.beginPath();
-  ctx.ellipse(0, s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
+  ctx.ellipse(0, s*GYOZA_BODY_CY, s*GYOZA_BODY_RX, s*GYOZA_BODY_RY, 0, 0, Math.PI*2);
   ctx.fillStyle = f.bodyGrd; // initGyogyo()で事前生成済み
   ctx.globalAlpha = 0.97;
   ctx.fill();
@@ -7739,9 +7747,9 @@ function _buildBossOC() {
      アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
      余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
   const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
-  const rx = s * 0.58 + strokeOut + pad, ry = s * 0.48 + strokeOut + pad;
+  const rx = s * GYOZA_BODY_RX + strokeOut + pad, ry = s * GYOZA_BODY_RY + strokeOut + pad;
   _bossOC = { oc, bodyOC, half, liveOC,
-              rect: { x: -rx, y: s * 0.08 - ry, w: rx * 2, h: ry * 2 } };
+              rect: { x: -rx, y: s * GYOZA_BODY_CY - ry, w: rx * 2, h: ry * 2 } };
 }
 
 /* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部）。
@@ -10110,7 +10118,6 @@ function _updateBossBattle() {
    短冊は等幅で切る。縁ほど元画像を大きく圧縮することになるが、それが正しい前縮み */
 const KING_SPIN_SEC     = 1.20; // 1回転に掛ける時間。ファンファーレの途中から回り始め、チーンへ着地する
 const KING_SPIN_STRIPS  = 64;   // 短冊の数（16でもほぼ同じ見た目だが、実測で0.064ms）
-const KING_SPIN_R_RATIO = 0.58; // 球の半径（_drawGyozaBody の本体楕円と同じ比）
 let _kingSpinSphere = null;     // 回さない層（生地＋こんがりトーン）
 let _kingSpinSurface = null;    // 回す層（接地側の焦げ色・薄皮・ひだ・焦げ跡・顔）
 let _kingSpinChimeAt = null;    // チーンのctx時刻。音が引けないときはnull
@@ -10254,12 +10261,12 @@ const _KING_SPEC = [[0, 'rgba(255,255,255,0.34)'], [0.40, 'rgba(255,255,255,0.13
                     [1, 'rgba(255,255,255,0)']];
 function _kingSpecular(gain) {
   if (gain <= 0.01) return;
-  const s = _BOSS_S, R = s * KING_SPIN_R_RATIO, half = _king.half;
+  const s = _BOSS_S, R = s * GYOZA_BODY_RX, half = _king.half;
   const g = ctx.createRadialGradient(-s*0.20, -s*0.12, 0, -s*0.20, -s*0.10, s*0.30);
   for (const [p, col] of _KING_SPEC) g.addColorStop(p, col);
   ctx.save();
   ctx.globalAlpha = gain;
-  ctx.beginPath(); ctx.ellipse(0, s*0.08, R, s*0.48, 0, 0, Math.PI*2); ctx.clip();
+  ctx.beginPath(); ctx.ellipse(0, s*GYOZA_BODY_CY, R, s*GYOZA_BODY_RY, 0, 0, Math.PI*2); ctx.clip();
   /* 塗るのはグラジェントが届く範囲だけ。球全体を塗ると4倍の面積を無駄に触る
      （中心 -0.20s,-0.10s／半径 0.30s なので、この矩形の外は完全に透明） */
   ctx.fillStyle = g; ctx.fillRect(-s*0.50, -s*0.40, s*0.60, s*0.60);
@@ -10267,10 +10274,10 @@ function _kingSpecular(gain) {
 }
 
 function _drawKingSpin(th) {
-  const half = _king.half, s = _BOSS_S, R = s * KING_SPIN_R_RATIO, D = _dpr, N = KING_SPIN_STRIPS;
+  const half = _king.half, s = _BOSS_S, R = s * GYOZA_BODY_RX, D = _dpr, N = KING_SPIN_STRIPS;
   _blitKingBody(_kingSpinSphere);
   ctx.save();
-  ctx.beginPath(); ctx.ellipse(0, s * 0.08, R, s * 0.48, 0, 0, Math.PI * 2); ctx.clip();
+  ctx.beginPath(); ctx.ellipse(0, s * GYOZA_BODY_CY, R, s * GYOZA_BODY_RY, 0, 0, Math.PI * 2); ctx.clip();
   for (let i = 0; i < N; i++) {
     const x0 = -R + (2 * R) * (i / N), x1 = -R + (2 * R) * ((i + 1) / N);
     const lam = x => Math.asin(Math.max(-1, Math.min(1, x / R)));
@@ -10584,7 +10591,7 @@ function _spawnVictorySteamWisp() {
   if (!_king) return;
   const s = _BOSS_S * _king.dscale;
   const cx = _king.dbx, cy = _king.dby + s * 0.08;
-  const rx = s * 0.58, ry = s * 0.48;
+  const rx = s * GYOZA_BODY_RX, ry = s * GYOZA_BODY_RY;
   const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.75; // 真上を中心に上半分の弧
   _victorySteam.push({
     x: cx + Math.cos(ang) * rx * 0.85,
