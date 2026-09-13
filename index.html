@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.03';
+const VERSION = 'v8.04';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -12784,8 +12784,11 @@ function _dpLoopCycleQuant() {
 function _dpLoopToggleClick() {
   const L = _dp.loop;
   L.click = !L.click;
-  /* 予約位置は巻き戻さない（テンポ変更と同じ理由）。次の先読み窓からクリックが乗る。
-     即座に効かせたい場合は _dpLoopRepatch() を呼ぶ */
+  /* 切るときだけ即座に効かせる。予約済みのクリックを残すと、消したあとも先読みぶん
+     （最大 DP_SCHED_AHEAD＝0.45秒）だけ鳴り、消えたのか分からない。
+     入れるときは巻き戻さない（テンポ変更と同じ理由）。クリックは拍の上にしか乗らないので、
+     次の先読み窓から乗り始めても頭の欠けた鳴り方にはならない */
+  if (!L.click) _dpLoopRepatch();
 }
 
 function _dpHit(i) {
