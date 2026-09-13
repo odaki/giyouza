@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.02';
+const VERSION = 'v8.03';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -12402,6 +12402,17 @@ function _dpCancelGate(t) {
    同じ値を両方に使うので、黙らせも組み直しもされない隙間ができない */
 const DP_REPATCH_EPS = 0.004;
 
+/* cut より後に鳴る予約を黙らせ、_dpPending には「もう鳴り始めているもの」だけを残す。
+   鳴っている最中のものは切らない（途中で断つと段差がそのままクリックになる） */
+function _dpSilencePending(cut) {
+  const keep = [];
+  for (const p of _dpPending) {
+    if (p.at > cut) { try { p.g.gain.cancelScheduledValues(0); p.g.gain.value = 0; } catch (e) {} }
+    else keep.push(p);
+  }
+  _dpPending = keep;
+}
+
 /* track=true は再生（シーケンサ）からの予約。差し替えで黙らせられるよう通り道を挟む。
    パッドを直接叩いたぶんは取り消す相手が居ないので挟まない。
    通り道を作るのは**鳴らすと決めたあと**にする（ミュート中に作ると捨てるだけ） */
@@ -12571,7 +12582,10 @@ function _dpLoopStopSched() {
   const L = _dp && _dp.loop;
   if (!L || !L.sched) return;
   clearInterval(L.sched); L.sched = null;
-  _dpPending = []; // ノードは_disconnectAfterが始末する。参照だけ落とす
+  /* 止めた瞬間に音を止める。予約を放置すると、STOPのあとも先読みぶん
+     （最大 DP_SCHED_AHEAD＝0.45秒）だけパターンが鳴り続ける */
+  if (audioCtx) _dpSilencePending(audioCtx.currentTime + DP_REPATCH_EPS);
+  _dpPending = []; // 残りのノードは_disconnectAfterが始末する。参照だけ落とす
   L.viz.length = 0;
 }
 
@@ -12653,12 +12667,7 @@ function _dpLoopRepatch() {
   const L = _dp && _dp.loop;
   if (!L || !L.playing || !audioCtx) return;
   const cut = audioCtx.currentTime + DP_REPATCH_EPS;
-  const keep = [];
-  for (const p of _dpPending) {
-    if (p.at > cut) { try { p.g.gain.cancelScheduledValues(0); p.g.gain.value = 0; } catch (e) {} }
-    else keep.push(p);
-  }
-  _dpPending = keep;
+  _dpSilencePending(cut);
   L.viz = L.viz.filter(v => v.t <= cut); // 消した音でパッドを光らせない
   L.schedSlot = Math.ceil((cut - L.head) / _dpSlotDur(L));
   _dpLoopTick(); // 次のtick（10ms後）を待たずに新しいパターンで組み直す
@@ -12758,9 +12767,10 @@ function _dpLoopCycleBars() {
   const L = _dp.loop;
   const i = DP_BARS_CHOICES.indexOf(L.bars);
   L.bars = DP_BARS_CHOICES[(i + 1) % DP_BARS_CHOICES.length];
-  /* 予約位置は巻き戻さない（UNDO・テンポ変更と同じ理由）。スロット番号は
+  /* 予約位置は巻き戻さない（テンポ変更と同じ理由）。スロット番号は
      headからの拍数で決まり小節数に依存しないので、そのまま使える。
-     新しい小節数は先読みの残りが尽きた時点から効く */
+     新しい小節数は先読みの残りが尽きた時点から効く。
+     即座に効かせたい場合は _dpLoopRepatch() を呼ぶ */
 }
 
 /* クオンタイズの刻みを巡回する（OFF → 1/16 → 1/8 → 1/4 → OFF）。
@@ -12774,7 +12784,8 @@ function _dpLoopCycleQuant() {
 function _dpLoopToggleClick() {
   const L = _dp.loop;
   L.click = !L.click;
-  /* 予約位置は巻き戻さない（上と同じ理由）。次の先読み窓からクリックが乗る */
+  /* 予約位置は巻き戻さない（テンポ変更と同じ理由）。次の先読み窓からクリックが乗る。
+     即座に効かせたい場合は _dpLoopRepatch() を呼ぶ */
 }
 
 function _dpHit(i) {
