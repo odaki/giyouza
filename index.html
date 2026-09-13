@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.87';
+const VERSION = 'v7.88';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3352,6 +3352,10 @@ function _playDoraHit(ctx, t, dest) {
       基音・明るいオーバートーンは長く伸びる「チーン」の芯として残す
       （高次倍音ほど速く減衰するのは実際の金属共鳴体の物理特性と一致する）
    チーンの後に音を足さない。締めの一音として最後まで聞かせる */
+/* ファンファーレ開始から「チーン」までの秒数。勝利の回転演出がこの一打へ着地するので
+   （_kingSpinProgress参照）、音と映像で同じ値を見る。ここを直書きに戻すと、
+   ファンファーレを詰め直したときに映像だけが取り残されて静かにズレる */
+const KONGARI_CHIME_SEC = 1.6;
 function _playKongariCompleteFanfare(ctx, t, dest) {
   const d = _seDest(ctx, dest);
   const fanfare = [
@@ -3366,7 +3370,7 @@ function _playKongariCompleteFanfare(ctx, t, dest) {
      release0.02→t+1.45で消音／ベースC4: t+0.56開始, dur0.7+decay0.22+
      release0.02→t+1.5で消音）が鳴り止んだ後、0.1秒の間を置いてから
      単独で打つ */
-  const strikeT = t + 1.6;
+  const strikeT = t + KONGARI_CHIME_SEC;
   playNoise(ctx, strikeT, 0.008, 0.22, 6000, d); // ソレノイドがベルに接触する瞬間の金属クリック
   const base = noteHz('C', 7); // アルペジオの頂点(C6)より1オクターブ上、チーン特有の高く澄んだ音高
   /* 減衰時間は長め（基音2.1秒・オーバートーン1.3秒）。高次倍音の0.12秒はそのまま:
@@ -6561,7 +6565,15 @@ function _drawGyozaShadow(c2, s) {
   c2.restore();
 }
 
-function _drawGyozaBody(c2, s, ox, oy, bodyGrd) {
+/* part を渡すと層を選んで描く。省略時は全部を元の順序で描く（既存の呼び出しはそのまま）。
+   キング戦の勝利で本体を球として回すために分けてある（_drawKingSpin参照）:
+     'sphere'  球そのもの。輪郭と陰影を持つ＝回してはいけない層
+     'surface' 表面の模様（接地側の焦げ色・薄皮・ひだ）＝回す層
+     'gloss'   ハイライト。光なので球の上に固定する
+   分けても重ね順は元と同じなので、回していないときの見た目は変わらない */
+function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part) {
+  const all = !part;
+  if (all || part === 'sphere') {
   /* 本体楕円 */
   c2.beginPath();
   c2.ellipse(ox, oy + s*0.08, s*0.58, s*0.48, 0, 0, Math.PI*2);
@@ -6570,7 +6582,9 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd) {
   c2.strokeStyle = 'rgba(120,90,50,0.55)';
   c2.lineWidth = 1.2;
   c2.stroke();
+  }
 
+  if (all || part === 'surface') {
   /* 蒸し焼き底面の焦げ色 */
   c2.save();
   c2.beginPath();
@@ -6598,12 +6612,15 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd) {
     c2.bezierCurveTo(bx - s*0.04, oy - s*0.22, bx + s*0.04, oy - s*0.22, bx + s*0.07, oy - s*0.04);
   }
   c2.stroke();
+  }
 
+  if (all || part === 'gloss') {
   /* ハイライト */
   c2.beginPath();
   c2.ellipse(ox - s*0.18, oy - s*0.08, s*0.16, s*0.09, -0.4, 0, Math.PI*2);
   c2.fillStyle = 'rgba(255,255,255,0.28)';
   c2.fill();
+  }
 }
 
 function drawOneItem(g) {
@@ -7858,6 +7875,8 @@ function _cleanupKingBattleState() {
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
   _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない（同上）
+  _kingSpinSphere = _kingSpinSurface = null; // 「くるり」用の層を次戦へ持ち越さない
+  _kingSpinChimeAt = null;
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
   _kingHits = [];                // 進行中の被弾リアクションを次戦へ持ち越さない
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
@@ -10027,12 +10046,131 @@ function _updateBossBattle() {
 /* キング本体を現在の表示姿勢（dbx/dby/dscale）で1枚描く。決着まわりの4つの描画関数は
    いずれもここを通す（姿勢の適用を1箇所に持つ）。alphaを渡すとその不透明度で描く
    （クロスフェード用。省略時は呼び出し側の状態のまま） */
+/* ══════ こんがり達成の「くるり」 ══════
+   球そのもの（輪郭と陰影）は動かさず、表面の模様だけを球面に沿って流す。
+   画面xの列に見える表面の経度は μ = asin(x/R) − θ。|μ|≦π/2 のとき模様の x = R·sin(μ) を
+   貼り、それ以外は裏側なので何も貼らない（裏面は無地）。
+
+   1枚絵をそのまま球へ貼ってはいけない。絵の左右端は輪郭の陰影であって表面ではないので、
+   回して正面へ来た瞬間に暗い帯が中央へ伸び、砂時計型に崩れる（実装して確認した）。
+   横に縮める（scale(cosθ,1)）のも駄目で、それは板が回っているように見える。球は回しても
+   輪郭が変わらない。
+
+   短冊は等幅で切る。縁ほど元画像を大きく圧縮することになるが、それが正しい前縮み */
+const KING_SPIN_SEC     = 0.35; // 1回転に掛ける時間。チーンへ着地させる
+const KING_SPIN_STRIPS  = 64;   // 短冊の数（16でもほぼ同じ見た目だが、実測で0.064ms）
+const KING_SPIN_R_RATIO = 0.58; // 球の半径（_drawGyozaBody の本体楕円と同じ比）
+let _kingSpinSphere = null;     // 回さない層（生地＋こんがりトーン）
+let _kingSpinSurface = null;    // 回す層（接地側の焦げ色・薄皮・ひだ・焦げ跡・顔）
+let _kingSpinChimeAt = null;    // チーンのctx時刻。音が引けないときはnull
+const _wrapPi = a => { a = (a + Math.PI) % (2 * Math.PI); return (a < 0 ? a + 2 * Math.PI : a) - Math.PI; };
+
+/* 層は達成の瞬間に1回だけ作る。常設の _renderKingBody の経路は触らない
+   （毎フレーム走る場所なので、0.35秒の演出のために構造を動かさない）。
+   1140×1140が2枚で約10MB。回り終わり次第すぐ解放する（_updateBossVictory参照）。
+   確保を回転の直前まで遅らせてはいけない: この大きさの確保はフレームを1つ落とすので、
+   回り出す瞬間に引っかかる。入力のタイミングが絡まない達成の瞬間に済ませる */
+function _buildKingSpinLayers() {
+  _kingSpinSphere = _kingSpinSurface = null;
+  if (!_king || !_CACHE_OK || !_bossOC) return;
+  const s = _BOSS_S, half = _king.half, REF = 42, kk = s / REF, pct = _king.cookPct / 100;
+  const prep = () => {
+    const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
+    const c = oc.getContext('2d');
+    c.scale(_dpr, _dpr); c.translate(half, half);
+    return [oc, c];
+  };
+  const tone = c => {
+    c.globalCompositeOperation = 'source-atop';
+    if (pct > 0) {
+      c.globalAlpha = pct * KING_TONE_MAX_ALPHA;
+      c.fillStyle = KING_TONE_COLOR;
+      c.fillRect(-half, -half, half * 2, half * 2);
+      c.globalAlpha = 1;
+    }
+    c.globalCompositeOperation = 'source-over';
+  };
+  const [spOC, sp] = prep();
+  /* グラジェントは scale の前に作る（_buildBossOC と同じ手順。後で作ると寸法が変わる） */
+  const grd = _gyozaBodyGradient(sp, REF, 'hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)');
+  sp.save(); sp.scale(kk, kk); _drawGyozaBody(sp, REF, 0, 0, grd, 'sphere'); sp.restore();
+  tone(sp);
+  const [suOC, su] = prep();
+  su.save(); su.scale(kk, kk);
+  _drawGyozaBody(su, REF, 0, 0, null, 'surface');
+  /* ハイライトも模様と一緒に回す。球の上に固定するほうが光としては正しいが、そうすると
+     ハイライトだけトーンの外に出る（元は生地と一緒にトーンを浴びている）か、ひだの下へ
+     潜って隠れるかのどちらかになり、回っていないときの見た目が変わってしまう。
+     ギヨウザにそもそも光沢は無いので、表面の明るい模様として扱って構わない */
+  _drawGyozaBody(su, REF, 0, 0, null, 'gloss');
+  su.restore();
+  tone(su);
+  /* 焦げ跡はトーンの後（_renderKingBodyと同じ順）。source-atopにはしない:
+     この層のアルファはひだや薄皮しか無いので、焦げ跡が模様のある場所にしか出なくなる。
+     本体の輪郭で切るのは貼るときの楕円クリップが受け持つ */
+  for (const m of _king.marks) {
+    if (m.revealedAt == null) continue;
+    const t = Math.min(1, (performance.now() - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
+    su.save();
+    su.translate(m.lx, m.ly); su.rotate(m.rot);
+    const sc = m.r / 26;
+    su.globalAlpha = 1 - (1 - KING_MARK_RESIDUAL_ALPHA) * t;
+    su.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
+    su.restore();
+  }
+  _drawKingFace(su, s, pct, 0);
+  _kingSpinSphere = spOC; _kingSpinSurface = suOC;
+}
+
+/* 回転の進み 0〜1。範囲外（まだ・もう終わった・層が無い）は -1。
+   時計は音声基準。フレーム基準で回すと処理落ちのぶんだけチーンから外れる。
+   消音時は音が鳴らないので、その場合だけ勝利からの経過フレームで代用する */
+function _kingSpinProgress() {
+  if (!_kingSpinSurface) return -1;
+  let p;
+  if (_kingSpinChimeAt !== null && audioCtx) {
+    const left = _kingSpinChimeAt - audioCtx.currentTime;
+    if (left > KING_SPIN_SEC || left <= 0) return -1;
+    p = 1 - left / KING_SPIN_SEC;
+  } else {
+    const f1 = Math.round(KONGARI_CHIME_SEC * 60), f0 = f1 - Math.round(KING_SPIN_SEC * 60);
+    if (_bossVictoryTimer < f0 || _bossVictoryTimer >= f1) return -1;
+    p = (_bossVictoryTimer - f0) / (f1 - f0);
+  }
+  return Math.max(0, Math.min(1, p));
+}
+
+function _drawKingSpin(th) {
+  const half = _king.half, s = _BOSS_S, R = s * KING_SPIN_R_RATIO, D = _dpr, N = KING_SPIN_STRIPS;
+  ctx.drawImage(_kingSpinSphere, -half, -half, half * 2, half * 2);
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(0, s * 0.08, R, s * 0.48, 0, 0, Math.PI * 2); ctx.clip();
+  for (let i = 0; i < N; i++) {
+    const x0 = -R + (2 * R) * (i / N), x1 = -R + (2 * R) * ((i + 1) / N);
+    const lam = x => Math.asin(Math.max(-1, Math.min(1, x / R)));
+    if (Math.abs(_wrapPi(lam((x0 + x1) / 2) - th)) > Math.PI / 2) continue; // 裏側＝無地
+    const a0 = R * Math.sin(_wrapPi(lam(x0) - th)), a1 = R * Math.sin(_wrapPi(lam(x1) - th));
+    const sa = Math.min(a0, a1), sb = Math.max(a0, a1);
+    ctx.drawImage(_kingSpinSurface,
+      (sa + half) * D, 0, Math.max(0.5, (sb - sa) * D), half * 2 * D,
+      x0, -half, x1 - x0, half * 2);
+  }
+  ctx.restore();
+}
+
 function _drawKingBody(alpha) {
   if (!_king) return;
   ctx.save();
   if (alpha !== undefined) ctx.globalAlpha = alpha;
   ctx.translate(_king.dbx, _king.dby); ctx.scale(_king.dscale, _king.dscale);
-  ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  const spin = _kingSpinProgress();
+  if (spin >= 0) {
+    /* イーズインアウト。静止から回り出して静止で終わる＝弾かれたのではなく自ら回った形 */
+    const e = spin < 0.5 ? 4*spin*spin*spin : 1 - Math.pow(-2*spin + 2, 3) / 2;
+    _drawKingSpin(2 * Math.PI * e);
+  } else {
+    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  }
   ctx.restore();
 }
 
@@ -10402,7 +10540,13 @@ function _startBossVictory() {
      専用のBGM停止＋専用ファンファーレを使う
      （_stopBossBGMForVictory・_playKongariCompleteFanfare参照） */
   _stopBossBGMForVictory();
-  playSE('kongariComplete');
+  /* SEの開始時刻を自分で決めて渡す。playSE任せにすると、回転を着地させたい
+     チーンの時刻（開始+KONGARI_CHIME_SEC）を推測で持つことになる */
+  const seAt = (!audioMuted && audioCtx && audioCtx.state === 'running')
+    ? audioCtx.currentTime + 0.01 : null;
+  playSE('kongariComplete', seAt ?? undefined);
+  _kingSpinChimeAt = seAt === null ? null : seAt + KONGARI_CHIME_SEC;
+  _buildKingSpinLayers(); // 「くるり」用の2層（_drawKingSpin参照）
   /* 真エンディングへ入るかどうかは trueEndingSeen で判定する（「実績が今回初めて解除された
      か」で判定してはいけない）。
      こんがり実績は真エンディングとは独立に、より前から解除され得る。解除済みのプレイヤーでは
@@ -10418,6 +10562,13 @@ function _startBossVictory() {
 
 function _updateBossVictory() {
   _bossVictoryTimer++;
+  /* 「くるり」が終わったら層を解放する。1140×1140が2枚＝約10MBあり、
+     iOS Safari の canvas メモリを演出の間じゅう押さえておくものではない。
+     判定に使うのは音声ではなくフレーム数: 消音時は音声の時計が無く、
+     また戻らない値なので「もう終わった」の判定として安全 */
+  if (_kingSpinSurface && _bossVictoryTimer > KONGARI_CHIME_SEC * 60) {
+    _kingSpinSphere = _kingSpinSurface = null;
+  }
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
   _updateKingCommonFx();
