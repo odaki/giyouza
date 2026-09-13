@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.81';
+const VERSION = 'v7.82';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7487,7 +7487,7 @@ function _kingBreath() { return 1 + KING_BREATH_AMP * Math.sin(performance.now()
    音が引けないときは揺れない。フレーム基準で代用してはいけない（同上）。
    決着後（bossShatter以降）は止める。砕けながら踊らせない */
 const KING_GROOVE_FROM     = 0.50;  // ここから揺れ始める（こんがり比）
-const KING_GROOVE_FULL     = 0.80;  // ここで振り切る
+const KING_GROOVE_FULL     = 0.90;  // ここで振り切る
 const KING_GROOVE_EXP      = 1.6;   // 立ち上がりの鈍らせ方
 const KING_GROOVE_SWAY_PX  = 9;     // 左右の振れ（2拍で1往復）
 const KING_GROOVE_LEAN_RAD = 0.055; // 振れた側へ倒れる角
