@@ -597,6 +597,12 @@ function _rsEvaluate() {
      ・通常モードのトライ開始（init）
      ・キングギヨウザ戦のトライ開始（_kingStartTrial）… 戦闘は init を通らない
      ・フェーズの切り替わり（_onPhaseChanged）… init を通らないフェーズ全部を一括で拾う
+     ・5音目アクセントの全画面フラッシュ（_updateKingSeq）
+     ・篩い落としの画面揺れ（_updateKingCommonFx）
+   後ろ2つは「トライ開始まで待つ間が長い」ことへの手当て。決めてから適用するまでに
+   1トライぶん（入力＋再生で数秒）空くのが、実機で体感に残っていた分だった。
+   どちらも全画面が派手に変化している最中なので、1フレームぶんの間は見えない。
+   命中側はアクセント、ハズレ側は篩い落としと、両方の経路に区切りが要る
    _RS_AUTO の判定を呼び出し側ではなくここに置くのは、区切りを足すたびにガードを
    書き忘れるのを防ぐため */
 function _rsApplyPending() {
@@ -608,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.98';
+const VERSION = 'v7.99';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -9525,6 +9531,9 @@ function _kingSeqAccent(e, flush) {
       _shishiAccent     = SHISHI_ACCENT_FRAMES; // 背景の獅子も同じ瞬間に反応する
       _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
       _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+      /* 全画面フラッシュが始まるこの瞬間は、実解像度を切り替えても1フレームぶんの
+         間が見えない。トライ開始まで待つと1小節ぶん遅れる（_rsApplyPending参照） */
+      _rsApplyPending();
     }
   }
   /* アクセントのダウンビートは次のトライの開始と同じ瞬間にする
@@ -10063,6 +10072,9 @@ function _updateBossBattle() {
       _king.gaze = KING_SIFT_GAZE; // 振り下ろす間だけ下を見る（底で0へ戻す）
       _kingSiftShake = KING_SIFT_SHAKE_FRAMES;
       playSE('kingSift');
+      /* 画面が揺れているこの瞬間も切り替えの区切りにする。ハズレの経路には
+         アクセントが無いので、ここが無いとトライ開始まで待つことになる */
+      _rsApplyPending();
     } else if (pend.length === 0) {
       _king.siftPending = false; // 降ろす文字が無い（通常起こらないが保険）
     }
