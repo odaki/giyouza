@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.91';
+const VERSION = 'v7.92';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7708,7 +7708,16 @@ function _buildBossOC() {
      行うと、的が回り始めるフレームにぶつかって回転の速度ムラになる。予兆は演出だけの
      区間なので、ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
   const liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
-  _bossOC = { oc, bodyOC, faceOC, half, liveOC };
+  /* 中身がある矩形。スプライトは 0.75s 四方の安全枠で作ってあるので、そのまま
+     転送すると面積の48%を透明なまま塗ることになる。これは画面内で最大の矩形で、
+     ここを切るのがキング戦でいちばん効く（実測 -72%）。
+     範囲は本体楕円＋輪郭線の外側半分で決まる。焦げ跡は source-atop で本体の
+     アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
+     余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
+  const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
+  const rx = s * 0.58 + strokeOut + pad, ry = s * 0.48 + strokeOut + pad;
+  _bossOC = { oc, bodyOC, faceOC, half, liveOC,
+              rect: { x: -rx, y: s * 0.08 - ry, w: rx * 2, h: ry * 2 } };
 }
 
 /* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部）。
@@ -8223,7 +8232,7 @@ function drawBossOmen() {
     const k = appear * _kingBreath();
     ctx.save();
     ctx.translate(bx, by); ctx.scale(k, k);
-    ctx.drawImage(_bossOC.oc, -_bossOC.half, -_bossOC.half, _bossOC.half*2, _bossOC.half*2);
+    _blitKingBody(_bossOC.oc);
     ctx.restore();
     ctx.font = `bold ${IS_PORTRAIT ? 28 : 40}px ${FONT_MIN}`;
     outText('キングギヨウザ とうじょう！！', W/2, by - _BOSS_S*0.62,
@@ -10235,7 +10244,7 @@ function _kingSpecular(gain) {
 
 function _drawKingSpin(th) {
   const half = _king.half, s = _BOSS_S, R = s * KING_SPIN_R_RATIO, D = _dpr, N = KING_SPIN_STRIPS;
-  ctx.drawImage(_kingSpinSphere, -half, -half, half * 2, half * 2);
+  _blitKingBody(_kingSpinSphere);
   ctx.save();
   ctx.beginPath(); ctx.ellipse(0, s * 0.08, R, s * 0.48, 0, 0, Math.PI * 2); ctx.clip();
   for (let i = 0; i < N; i++) {
@@ -10252,6 +10261,15 @@ function _drawKingSpin(th) {
   _kingSpecular(Math.abs(Math.sin(th)));
 }
 
+/* ボス本体スプライトを「中身のある矩形だけ」転送する。
+   src は _bossOC と同じ寸法（half*2 四方・_dpr倍）であること
+   （_bossOC.oc / liveOC / 回転用の球の層がこれに当たる） */
+function _blitKingBody(src) {
+  const r = _bossOC.rect, half = _bossOC.half, D = _dpr;
+  ctx.drawImage(src, (r.x + half) * D, (r.y + half) * D, r.w * D, r.h * D,
+                     r.x, r.y, r.w, r.h);
+}
+
 function _drawKingBody(alpha) {
   if (!_king) return;
   ctx.save();
@@ -10264,7 +10282,7 @@ function _drawKingBody(alpha) {
     const e = spin < 0.5 ? 4*spin*spin*spin : 1 - Math.pow(-2*spin + 2, 3) / 2;
     _drawKingSpin(2 * Math.PI * e);
   } else {
-    ctx.drawImage(_renderKingBody(), -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+    _blitKingBody(_renderKingBody());
   }
   ctx.restore();
 }
@@ -10383,13 +10401,13 @@ function drawBossBattle() {
   if (sq) ctx.scale(breath * sq.sx, breath * sq.sy);
   else    ctx.scale(breath, breath);
   const bodySrc = _renderKingBody();
-  ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+  _blitKingBody(bodySrc);
   /* 5音目アクセントの全身フラッシュ。同じ絵を 'lighter' で重ねて明度を持ち上げる
      （白い板を被せると輪郭やシルエットが潰れるため、本体の色を活かして光らせる） */
   if (_kingAccentFlash > 0) {
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = (_kingAccentFlash / KING_ACCENT_FLASH_FRAMES) * 0.75;
-    ctx.drawImage(bodySrc, -_king.half, -_king.half, _king.half * 2, _king.half * 2);
+    _blitKingBody(bodySrc);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
   }
