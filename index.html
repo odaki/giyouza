@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.04';
+const VERSION = 'v8.05';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4227,7 +4227,10 @@ function _lsFlush() {
   _lsFlushDue = false;
   if (_lsPending.size === 0) return;
   const _t0 = PERF_ON ? performance.now() : 0;
-  try { for (const [k, v] of _lsPending) localStorage.setItem(k, v); } catch(e) {}
+  /* try はキーごとに掛ける。まとめて囲うと、1キーが容量超過で例外を投げた時点で
+     残りのキーが書かれないまま捨てられる（同じフラッシュに乗っていたコインや実績が
+     道連れになる）。書けないキーはそのキーだけ諦める */
+  for (const [k, v] of _lsPending) { try { localStorage.setItem(k, v); } catch(e) {} }
   _lsPending.clear();
   if (PERF_ON) _perfMark('ls', _t0);
 }
