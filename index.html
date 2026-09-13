@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.06';
+const VERSION = 'v8.07';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2234,6 +2234,38 @@ function getAudioCtx() {
    iOS Safari: interrupted 状態は resume() では復帰不可のため AudioContext ごと作り直す。
    ユーザーアクティベーション内で new AudioContext() すると iOS が即 running にする。
    AudioBuffer（bgmBuffer, _noiseBuffer）は Context 非依存なので再利用可能。 */
+/* 旧Contextの絶対時刻を持つ状態を、新しい時計の上へ載せ替える。
+   **音声時刻を控える状態を足したら、必ずここへも足すこと。**
+
+   新しいContextの currentTime は0から始まる。旧い時刻を残すと、それは新しい時計から見て
+   「遥か未来」になり、`currentTime >= 控えた時刻` という形の条件が何分も満たされない。
+   症状は状態ごとに違う顔で出る——入力ロックが解けない・ランプが終わらない・
+   演出が始まらない・予約が積み上がったまま消えない。どれも音とは無関係に見えるので、
+   Contextの作り直しが原因だと辿り着きにくい。
+
+   時刻を引き直せるものは引き直し、引き直せないものは「無かったこと」にする
+   （旧Contextに予約した音はもう鳴らないので、待ち続けるより諦めるほうが正しい）。
+   拍・フレーム・performance.now() を基準にした状態はここの対象ではない */
+function _rebaseAudioClockState() {
+  /* 次の発音時刻。0にすると次のtickで即座に鳴る */
+  if (jingleScheduler) jingleNextTime = 0;
+  /* 時計の生死判定。残すと直後に「まだ止まっている」と誤認する */
+  _ctxStallSec = 0; _ctxStallLastCtx = null; _pauseCtxTime = null;
+  /* スローランプ中の入力ロックの解除条件。残すと射撃とBET操作が戻らない
+     （解除はupdate()の中で currentTime と比べて行う。_betControlsEnabled参照） */
+  slowRampEndTime = 0;
+  /* レートランプ。旧ソースごと automation は消えているので完了扱いにする。
+     残すと _bgmRateActive() が真のままになり、ボスBGMの段階差し替えが保留され続ける
+     （実際のレートは _createBGMSource が鳴らし直すときに引き直す） */
+  _bgmRateStart = 0; _bgmRateDur = 0;
+  /* 勝利演出の「チーン」の時刻。nullにすると音声時計を諦めてフレーム側の代用へ落ちる
+     （_kingChimeElapsed参照）。残すと回転も音符も始まらないまま演出が終わる */
+  _kingSpinChimeAt = null;
+  /* 焦げ跡の帯電の進捗の分母。次のアクセントで引き直される */
+  if (_king) _king.seqAccentAt = null;
+  _dpLoopRebaseClock();
+}
+
 function _recreateAudioGraph() {
   /* 位置とレートを控えてから壊す。ここで控えないと、再作成のあと
      _resumeBgmFromPause が古いポーズ時点の位置から鳴らし直してしまう */
@@ -2241,9 +2273,6 @@ function _recreateAudioGraph() {
   /* 旧Contextに属する bgmSource 参照を破棄。残すと startBGM() が「再生中」と誤認して
      早期リターンし、interrupted 復帰後に BGM が二度と戻らなくなる */
   _destroyBGMSource();
-  /* ジングル進行中なら次発音時刻をリセット（旧Context時刻のままだと
-     新Contextの currentTime が追いつくまでジングルが停止する） */
-  if (jingleScheduler) jingleNextTime = 0;
   try { audioCtx.close(); } catch(_e) {}
   audioCtx  = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
@@ -2260,11 +2289,7 @@ function _recreateAudioGraph() {
      _audioRecreateCount / _audioSampleRateAtFirst は ?perf の診断表示用 */
   if (_audioSampleRateAtFirst === null) _audioSampleRateAtFirst = audioCtx.sampleRate;
   _audioRecreateCount++;
-  /* 新しいContextでは測り直す。残すと直後の判定が「まだ止まっている」と誤認する */
-  _ctxStallSec = 0; _ctxStallLastCtx = null; _pauseCtxTime = null;
-  /* 旧Contextの時刻を持っている再生位置は、ここで新しい時計へ載せ替える。
-     ジングル（上）と同じ理由で、置き去りにすると二度と鳴らない */
-  _dpLoopRebaseClock();
+  _rebaseAudioClockState();
   _updateBgmQuantizedLoopDur();
   _updateBeatDisplayAdvance();
   setTimeout(_updateBeatDisplayAdvance, 500);
@@ -12673,6 +12698,10 @@ function _dpLoopStart() {
    録りかけ(pass/pending)と発光の予約(viz)は、失われた時間軸の上で採ったものなので捨てる。
    確定済みのレイヤーは拍で持っているので影響を受けない */
 function _dpLoopRebaseClock() {
+  /* 予約ゲートは旧Contextのノードで、控えている時刻も旧Contextのもの。
+     残すと黙らせる相手として数え続けられ、古い時刻は新しい時計から見て常に未来なので
+     刈り取りにも掛からない（_dpCancelGateの間引き条件を参照）。_dpが無くても捨てる */
+  _dpPending = [];
   const L = _dp && _dp.loop;
   if (!L || !audioCtx) return;
   L.head = audioCtx.currentTime;
