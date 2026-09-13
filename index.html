@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.80';
+const VERSION = 'v7.81';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5482,7 +5482,8 @@ function _drawKingMarkCharges(breath, ofsX, ofsY) {
       const span = _king.seqAccentAt - m.chargedAt;
       p = span > 0.05 ? Math.max(0, Math.min(1, (ct - m.chargedAt) / span)) : 1;
     }
-    const mx = _king.dbx + ofsX + m.lx * breath, my = _king.dby + ofsY + m.ly * breath;
+    _kingLocalToWorld(m.lx, m.ly, breath, ofsX, ofsY, _kingWorldTmp);
+    const mx = _kingWorldTmp.x, my = _kingWorldTmp.y;
     /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
        面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
     const R = m.chargeR;
@@ -7474,6 +7475,59 @@ const KING_BREATH_AMP = 0.02;
 const KING_BREATH_MS  = 300;
 function _kingBreath() { return 1 + KING_BREATH_AMP * Math.sin(performance.now() / KING_BREATH_MS); }
 
+/* ── キングの「ノリ」 ──
+   こんがりが進むほど、BGMに合わせて体が勝手に動きはじめる。呼吸（_kingBreath）とは
+   別の層で、こちらだけが曲に同期する。
+   強度はKING_GROOVE_FROMから立ち上がりKING_GROOVE_FULLで満ちる。指数を掛けて
+   立ち上がりを鈍らせ「いつの間にか揺れていた」に見せる（線形だと閾値の直後から
+   動きが見えてしまい、演出の意図が割れる）。
+   時計は必ず音声基準（_bgmBeatPos）にする。フレーム基準にすると処理落ちのたびに
+   ノリが曲から外れる。タイミングの正確さが報酬になっているこのゲームで、
+   キング本人が走ったり遅れたりするのは最も避けたい破綻。
+   音が引けないときは揺れない。フレーム基準で代用してはいけない（同上）。
+   決着後（bossShatter以降）は止める。砕けながら踊らせない */
+const KING_GROOVE_FROM     = 0.50;  // ここから揺れ始める（こんがり比）
+const KING_GROOVE_FULL     = 0.80;  // ここで振り切る
+const KING_GROOVE_EXP      = 1.6;   // 立ち上がりの鈍らせ方
+const KING_GROOVE_SWAY_PX  = 9;     // 左右の振れ（2拍で1往復）
+const KING_GROOVE_LEAN_RAD = 0.055; // 振れた側へ倒れる角
+const KING_GROOVE_BOB_PX   = 5;     // 拍頭で沈む量
+/* 毎フレーム複数箇所から呼ばれるので器を使い回す（GCを出さない）。
+   cos/sin を持たせてあるのは、ローカル座標の変換側（_kingLocalToWorld）が
+   本体の回転とまったく同じ値を使う必要があるため */
+const _kingGrooveOfs = { dx: 0, dy: 0, rot: 0, cos: 1, sin: 0 };
+const _kingWorldTmp  = { x: 0, y: 0 }; // _kingLocalToWorld の受け皿（呼び出し直後に読み切る）
+function _kingGroove() {
+  const o = _kingGrooveOfs;
+  o.dx = 0; o.dy = 0; o.rot = 0; o.cos = 1; o.sin = 0;
+  if (!_king || phase !== 'boss') return o;
+  const t = (_king.cookPct / 100 - KING_GROOVE_FROM) / (KING_GROOVE_FULL - KING_GROOVE_FROM);
+  if (t <= 0) return o;
+  const pos = _bgmBeatPos();
+  if (pos === null) return o;
+  const g = Math.pow(Math.min(1, t), KING_GROOVE_EXP);
+  const sw = Math.sin(Math.PI * pos); // 2拍で1往復
+  o.rot = KING_GROOVE_LEAN_RAD * g * sw;
+  o.dx  = KING_GROOVE_SWAY_PX  * g * sw;
+  o.dy  = KING_GROOVE_BOB_PX   * g * getBeatPulse();
+  o.cos = Math.cos(o.rot); o.sin = Math.sin(o.rot);
+  return o;
+}
+
+/* 焦げ跡・文字のローカル座標を画面座標へ移す。本体の描画（translate→rotate→scale）と
+   まったく同じ変換であることが要件で、ずれると文字が本体から外れた所へ着弾し、
+   焦げ跡の発光も本体から浮く。組み立てを呼び出し側に置くと3箇所が静かに食い違うので、
+   ここに1本化する。
+   ofsX/ofsY はのけぞり等の一過性の変位で、呼び出し側によって渡したり渡さなかったりする
+   （文字の着地先には反映しない。座標計算へ一過性の揺れを持ち込まないため） */
+function _kingLocalToWorld(lx, ly, breath, ofsX, ofsY, out) {
+  const g = _kingGroove();
+  const x = lx * breath, y = ly * breath;
+  out.x = _king.dbx + g.dx + ofsX + (x * g.cos - y * g.sin);
+  out.y = _king.dby + g.dy + ofsY + (x * g.sin + y * g.cos);
+  return out;
+}
+
 const KING_MOUTH_END_Y   = 0.26; // 口の両端のY
 const KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
 const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
@@ -8857,8 +8911,8 @@ function _createKingMark() {
    誕生演出から戦闘位置へ収束中でも常に実際の描画位置に追従する */
 function _kingFlightTargetPos(f) {
   const breath = _king.dscale * _kingBreath();
-  if (f.markRef) return { x: _king.dbx + f.markRef.lx * breath, y: _king.dby + f.markRef.ly * breath };
-  return { x: _king.dbx, y: _king.dby };
+  const m = f.markRef;
+  return _kingLocalToWorld(m ? m.lx : 0, m ? m.ly : 0, breath, 0, 0, { x: 0, y: 0 });
 }
 
 /* 文字の「今」の描画位置を状態に応じて算出する（draw側から呼ぶ） */
@@ -10055,7 +10109,9 @@ function drawBossBattle() {
      （dby/dscaleは触らない。_kingSiftOffsetY / _kingSiftSquash /
      _kingBodyOffset の定義部参照）。文字の離脱位置にはこの変位を反映しない
      （ユーザー判断: 座標計算への波及を避ける） */
-  ctx.translate(_king.dbx + ofs.dx, _king.dby + _kingSiftOffsetY() + ofs.dy);
+  const gr = _kingGroove(); // BGMに乗った揺れ（_kingGroove参照）
+  ctx.translate(_king.dbx + gr.dx + ofs.dx, _king.dby + gr.dy + _kingSiftOffsetY() + ofs.dy);
+  if (gr.rot) ctx.rotate(gr.rot); // translate→rotate→scale の順（_kingLocalToWorldと同じ合成）
   const sq = _kingSiftSquash();
   if (sq) ctx.scale(breath * sq.sx, breath * sq.sy);
   else    ctx.scale(breath, breath);
@@ -10081,7 +10137,8 @@ function drawBossBattle() {
     ctx.globalAlpha = fa;
     for (const m of _kingAccentMarks) {
       const rr = m.r * breath * 1.6;
-      const mx = _king.dbx + ofs.dx + m.lx * breath, my = _king.dby + ofs.dy + m.ly * breath;
+      _kingLocalToWorld(m.lx, m.ly, breath, ofs.dx, ofs.dy, _kingWorldTmp);
+      const mx = _kingWorldTmp.x, my = _kingWorldTmp.y;
       ctx.drawImage(_kingFlashSprite, mx - rr, my - rr, rr * 2, rr * 2);
     }
     ctx.restore();
