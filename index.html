@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.78';
+const VERSION = 'v7.79';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -713,6 +713,7 @@ let _shishiSpr = null;
    位置・拡大・回転・alpha は貼るときに掛ける。雲ごとに焼き分ける案も測ったが、
    速度は同じでメモリが4.4倍（586KB 対 132KB）だった */
 let _cloudSpr = null;
+let _shishiAccent = 0;         // 獅子のアクセント反応の残量フレーム（SHISHI_ACCENT_*参照）
 let _bgAnimSec = 0;            // 背景の環境演出の経過秒（フレーム基準。_updateAlways参照）
 
 function _prebuildStaticLayers() {
@@ -7762,6 +7763,7 @@ function _cleanupKingBattleState() {
   _kingFireFlash = 0;            // 発射の放電残量（同上）
   _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
   _kingAccentRecoil = 0;
+  _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない（同上）
   _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
   _kingHits = [];                // 進行中の被弾リアクションを次戦へ持ち越さない
   _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
@@ -9339,6 +9341,7 @@ function _kingSeqAccent(e, flush) {
     if (!e.forced) {
       _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
       _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
+      _shishiAccent     = SHISHI_ACCENT_FRAMES; // 背景の獅子も同じ瞬間に反応する
       _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
       _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
     }
@@ -9566,6 +9569,7 @@ function _updateKingCommonFx() {
   if (_kingFireFlash    > 0) _kingFireFlash--;
   if (_kingAccentFlash  > 0) _kingAccentFlash--;
   if (_kingAccentRecoil > 0) _kingAccentRecoil--;
+  if (_shishiAccent     > 0) _shishiAccent--;
   /* 1文字ごとの被弾リアクション（KING_HIT_*の定義部参照） */
   for (const h of _kingHits) h.life--;
   swapRemove(_kingHits, _predKingHitAlive);
@@ -12589,8 +12593,20 @@ const SHISHI_BREATH_SEC   = 3.4;
 const SHISHI_BREATH_AMP   = 0.012; // 縦の伸縮（横は体積を保つよう逆向きに半分）
 const SHISHI_SWAY_SEC     = 5.1;
 const SHISHI_SWAY_RAD     = 0.010;
-const SHISHI_ACCENT_PX    = 4;     // キング戦のアクセントで跳ね上がる高さ
-const SHISHI_ACCENT_SCALE = 0.03;  // 跳ねに合わせた伸び
+/* キング戦の5音目への反応。外へ仰け反り、内へ振り戻して収まる。
+   キング本体ののけぞり（_kingReactEnv）とは形も軸も長さも変える。3つとも同じにすると、
+   別々の物体が反応しているのではなく画面全体が揺れているようにしか見えない
+   （実際にそうなった）。共通にしてよいのは発動する瞬間だけ。
+   左右が外向き＝互いに逆向きへ動くことも効く。カメラの揺れなら全部が同じ方向へ動く */
+const SHISHI_ACCENT_FRAMES = 34;   // 0.57秒。キングの14フレームと長さも揃えない
+const SHISHI_ACCENT_RAD    = 0.13; // 外向きの仰け反り角
+const SHISHI_ACCENT_PX     = 9;    // 外向きの後退
+const SHISHI_ACCENT_SQUASH = 0.04; // 衝撃で縦に縮む量（戻りは仰け反りより速い）
+function _shishiAccentEnv(p) {
+  /* 末尾を線形に閉じる。減衰振動は終端でちょうど0にならないので、残量が尽きた
+     フレームで姿勢が0へ跳ね戻る。山（外へp≈0.15・内へp≈0.53）はこの窓に掛からない */
+  return Math.exp(-3.2 * p) * Math.sin(p * Math.PI * 2.6) * Math.min(1, (1 - p) * 4);
+}
 
 /* _drawShishiTo: 任意のコンテキストに獅子を描く（OffscreenCanvas 事前描画用）
    drawShishi: メインcanvasへのラッパー */
@@ -12712,20 +12728,22 @@ function _drawShishiTo(c2, cx, cy, sc, mirX) {
    実測でこの形の約30倍（+0.09ms/フレーム）かかる。背景の環境演出に払う額ではない */
 function _drawShishiPair() {
   if (!_shishiSpr) return;
-  /* キング戦の5音目で跳ね上がる。キング本体ののけぞりと同じ包絡を使い、
-     2つが1つの出来事として読めるようにする。戦闘外では残量が0なので何も起きない */
-  const acc = _kingAccentRecoil > 0
-    ? _kingReactEnv(1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES) : 0;
+  /* キング戦の5音目への反応（SHISHI_ACCENT_*参照）。戦闘外では残量が0なので何も起きない。
+     潰れの戻りを仰け反りと別の速さにすると、衝撃と態勢の立て直しが分かれて見える */
+  const ap    = _shishiAccent > 0 ? 1 - _shishiAccent / SHISHI_ACCENT_FRAMES : -1;
+  const accE  = ap >= 0 ? _shishiAccentEnv(ap) : 0;
+  const accSq = ap >= 0 ? Math.exp(-5 * ap)    : 0;
   for (let i = 0; i < 2; i++) {
     /* 左右で位相を半周ずらす。揃って動くと2体が1つの仕掛けに見える */
     const ph     = i * Math.PI;
     const breath = Math.sin(_bgAnimSec / SHISHI_BREATH_SEC * Math.PI * 2 + ph) * SHISHI_BREATH_AMP;
     const sway   = Math.sin(_bgAnimSec / SHISHI_SWAY_SEC   * Math.PI * 2 + ph) * SHISHI_SWAY_RAD;
-    const sy = 1 + breath + acc * SHISHI_ACCENT_SCALE;
+    const sy = 1 + breath - SHISHI_ACCENT_SQUASH * accSq;
     const sx = 1 - breath * 0.5; // 縦に伸びたぶん横を縮めて体積を保つ
+    const side = i === 1 ? 1 : -1; // 外向き（左は左へ、右は右へ）
     ctx.save();
-    ctx.translate(SHISHI_X[i], SHISHI_Y + SHISHI_FOOT - acc * SHISHI_ACCENT_PX);
-    ctx.rotate(sway);
+    ctx.translate(SHISHI_X[i] + side * SHISHI_ACCENT_PX * accE, SHISHI_Y + SHISHI_FOOT);
+    ctx.rotate(sway + side * SHISHI_ACCENT_RAD * accE);
     ctx.scale(i === 1 ? -sx : sx, sy);
     ctx.globalAlpha = 0.6;
     ctx.drawImage(_shishiSpr, -SHISHI_SPR_AX, -SHISHI_SPR_AY - SHISHI_FOOT,
