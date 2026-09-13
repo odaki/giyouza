@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.08';
+const VERSION = 'v8.09';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3882,9 +3882,11 @@ function _slowHandRate(betVal) {
 
 /* BGMのplaybackRateを現在値から targetRate へテープカーブでなめらかに変化させる
    スローイベント開始・終了時のテンポ演出に使用 */
-/* blockInput=true のときだけランプ中のクリックを無視する
-   自動ランプ（init切替・当たり復帰・tapestart）は false、
-   チートパネルのSLOWによるインタラクティブ切り替えは true */
+/* blockInput=true のときだけランプ中のクリックを無視する。
+   true はスローハンドで**テンポが下がる向き**へ動くとき（突入・BET変更の追従・
+   ゲームオーバー復帰後）。テンポが変わりきる前の入力は、プレイヤーが見ている拍と
+   実際の拍が食い違ったまま入ることになるので受けない。
+   通常速度へ戻す向きと、チートパネルからの切り替えは false */
 function rampBGMRate(targetRate, durationMs = 1200, easeType = 'easeOut', blockInput = false) {
   if (!bgmSource || !audioCtx) return;
   const t       = audioCtx.currentTime;
@@ -12271,7 +12273,7 @@ const DP_LOOP_TICK_MS  = 10;
    16パッドとロゴを毎フレーム描く画面なので、重いフレームやタイマーの間引きで
    簡単に0.25秒を超える（このプロジェクトのプレビューはdocument.hiddenで
    setIntervalが1秒に間引かれ、実際にパターンが虫食いになった）。
-   刻みを25msに詰めたうえで窓を0.45秒まで広げ、14倍以上の余裕を持たせる。
+   刻みを詰めた（DP_LOOP_TICK_MS）うえで窓を0.45秒まで広げ、十分な余裕を持たせる。
    窓を広げると打鍵が次の周に反映されるまでの猶予が減るが、
    1周は最短でも1.2秒（200BPM・1小節）なので実用上の問題にならない */
 const DP_SCHED_AHEAD   = 0.45;
@@ -12362,8 +12364,9 @@ const DP_QUANT_LABEL = { 0: 'Q OFF', 0.25: 'Q 1/16', 0.5: 'Q 1/8', 1: 'Q 1/4' };
    扱いやすい。OFFへ回せば叩いたままの演奏が戻る（記録は常に生のまま） */
 const DP_QUANT_DEFAULT = 0.25;
 /* 操作ボタンの表示名。状態で変わるものがあるのでループ状態 L を受け取る関数で持つ。
-   ボタンを足すときは _dpBuildLayout の配置とここの2箇所を対にすること
-   （描画側で id を分岐させると、配置だけ足して表示名を忘れたときに黙って空文字になる） */
+   ボタンを足すときは _dpBuildLayout の配置・ここの表示名・下の動作の3つを対にすること
+   （描画や入力の側で id を分岐させると、配置だけ足したときに黙って空文字になったり、
+   押しても何も起きないボタンになる） */
 const DP_CTL_LABEL = {
   rec:   () => 'REC',
   play:  L => L.playing ? 'STOP' : 'PLAY',
@@ -12374,6 +12377,20 @@ const DP_CTL_LABEL = {
   quant: L => DP_QUANT_LABEL[L.quant],
   undo:  () => 'UNDO',
   redo:  () => 'REDO',
+};
+/* 操作ボタンの動作。表示名の隣に置いて、ボタンを足すときに見落としにくくする。
+   押した位置の判定は呼び出し側が済ませてあり、ここは押された後だけを引き受ける */
+const DP_CTL_ACT = {
+  rec:   () => _dpLoopRec(),
+  play:  () => _dpLoopPlayStop(),
+  click: () => _dpLoopToggleClick(),
+  /* テンポは単押しで1段、押しっぱなしで連続変化（_dpHoldBeginへ渡すのは光らせる面） */
+  bpmUp: c => { _dpLoopSetBpm(+DP_BPM_STEP); _dpHoldBegin(+DP_BPM_STEP, c); },
+  bpmDn: c => { _dpLoopSetBpm(-DP_BPM_STEP); _dpHoldBegin(-DP_BPM_STEP, c); },
+  bars:  () => _dpLoopCycleBars(),
+  quant: () => _dpLoopCycleQuant(),
+  undo:  () => _dpLoopUndo(),
+  redo:  () => _dpLoopRedo(),
 };
 const DP_BEATS_PER_BAR = 4;
 /* クリックの音量。パッドと同じ音源を使うが、伴走なので控えめにする */
@@ -12548,8 +12565,7 @@ function _dpLoopEventCount(L) {
 function _dpLoopHasPattern(L) {
   return L.layers.length > 0 || (L.take && L.take.length > 0) || (L.pass && L.pass.length > 0);
 }
-/* 再生に使う組を返す。各要素は [イベント配列, そのパターンの本来の長さ(拍)]。
-   録音中のtakeは今の長さで録っているので現在の長さを本来の長さとする */
+/* 再生に使う組を返す。各要素は [イベント配列, そのパターンの本来の長さ(拍)] */
 function _dpLoopSets(L, bpNow) {
   const sets = L.layers.map(l => [l.ev, l.len]);
   /* 録音中のtakeも、確定済みのレイヤーと同じく「打ち込んだときの長さ」で扱う。
@@ -12947,16 +12963,9 @@ function _drumPadTouch(x, y, inputPerfMs) {
   if (hitTest(DP_BACK_BTN, x, y)) { _exitDrumPad(); return; }
   if (hitTest(MUTE_BTN, x, y)) { if (!audioCtx) getAudioCtx(); toggleMute(); return; }
   for (const c of _dp.ctls) if (hitTest(c, x, y)) {
-    if (c.id === 'rec')   _dpLoopRec();
-    if (c.id === 'play')  _dpLoopPlayStop();
-    if (c.id === 'undo')  _dpLoopUndo();
-    if (c.id === 'redo')  _dpLoopRedo();
-    if (c.id === 'click') _dpLoopToggleClick();
-    if (c.id === 'bpmUp') { _dpLoopSetBpm(+DP_BPM_STEP); _dpHoldBegin(+DP_BPM_STEP, c); }
-    if (c.id === 'bpmDn') { _dpLoopSetBpm(-DP_BPM_STEP); _dpHoldBegin(-DP_BPM_STEP, c); }
-    if (c.id === 'bars')  _dpLoopCycleBars();
-    if (c.id === 'quant') _dpLoopCycleQuant();
-    return;
+    const act = DP_CTL_ACT[c.id];
+    if (act) act(c);
+    return;   // 動作が無いボタンでも、下のジョグ判定へは落とさない
   }
   /* ジョグ（丸ロゴ）はタップテンポの入力。円で判定するのは、外接矩形で取ると
      円の外の四隅を叩いても効いてしまうため */
@@ -15322,8 +15331,7 @@ function drawAchOverlay() {
     /* アイコン */
     const iconX  = lx + (IS_PORTRAIT ? 32 : 34);
     const textX  = lx + (IS_PORTRAIT ? 52 : 56);
-    const nameFs = IS_PORTRAIT ? 13 : 13;
-    const descFs = IS_PORTRAIT ? 11 : 11;
+    const nameFs = 13, descFs = 11;
     const nameOY = IS_PORTRAIT ? -7 : -7;
     const descOY = IS_PORTRAIT ?  7 :  7;
 
