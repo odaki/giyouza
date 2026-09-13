@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.82';
+const VERSION = 'v7.83';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7555,8 +7555,7 @@ function _kingGentleness(pct01) {
    のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
    pct（こんがり進行度 0〜1）で吊り眉+への字口（怒り）から、寝た眉+U字口
    （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。
-   gaze は視線（正=上／負=下）。こんがり達成後に空を見上げてから飛び去る演出
-   （_updateBossVictoryOutro）と、篩い落としで下を睨む場面（KING_SIFT_GAZE）で使う。
+   gaze は視線（正=上／負=下）。篩い落としで下を睨む場面（KING_SIFT_GAZE）で使う。
    ※ この値を変えたら _renderKingBody のキャッシュ判定にも反映が必要
    （_gazeRendered参照。忘れると顔が更新されない） */
 function _drawKingFace(c, s, pct = 0, gaze = 0) {
@@ -10397,7 +10396,7 @@ function drawBossVictory() {
    その後は失敗側と完全に同じ場面転換（_startScreenFade → tapestart）。
    初回（実績コンプリート）の真エンディングへ入る場合も、この飛び去りを見せてから暗転して
    入る */
-const _VICTORY_OUTRO_LOOKUP_FRAMES = 40; // step0: 見上げ＋タメ
+const _VICTORY_OUTRO_CROUCH_FRAMES = 40; // step0: 跳ぶ前のタメ
 const _VICTORY_OUTRO_FLY_FRAMES    = 70; // step1: 飛び去り
 const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザの舞い上がり
 /* 締め2行。周回（また集まりはじめる）を示唆して終える。文言を差し替えるときはここだけで
@@ -10421,7 +10420,7 @@ function _startBossVictoryOutro() {
     baseBy: _king.by, baseScale: _king.scale,
     msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
   };
-  _king.gaze = 0;
+  _king.gaze = 0; // 篩い落としの伏し目を演出へ持ち越さない
   playSE('kingVictoryInhale');
 }
 
@@ -10463,17 +10462,18 @@ function _updateBossVictoryOutro() {
   o.timer++;
 
   if (o.step === 0) {
-    /* 見上げる: 瞳を上へ寄せつつ、わずかに沈み込んでから戻る（跳ぶ前の予備動作）。
+    /* タメ: わずかに沈み込んでから戻る（跳ぶ前の予備動作）。
        sin(p*π) なので step0 の終わりにはちょうど元の高さへ戻り、step1 の
-       上昇へ滑らかに繋がる */
-    const p = Math.min(1, o.timer / _VICTORY_OUTRO_LOOKUP_FRAMES);
+       上昇へ滑らかに繋がる。
+       ここで視線を上へ向ける案は採らない: 白目を持たない目では、上を向いた形に
+       しても「空を見上げた」とは読めず、沈み込みの予備動作だけが伝わる */
+    const p = Math.min(1, o.timer / _VICTORY_OUTRO_CROUCH_FRAMES);
     if (_king) {
-      _king.gaze = Math.min(1, p / 0.6);             // 前半6割で見上げきる
       const sink = 10 * Math.sin(p * Math.PI);
       _king.by = o.baseBy + sink; _king.dby = _king.by; // イージングの遅れを挟まず直接置く
     }
     if (o.timer % 3 === 0 && _king) _spawnVictorySteamWisp(); // 力を溜めるイメージで湯気を増やす
-    if (o.timer >= _VICTORY_OUTRO_LOOKUP_FRAMES) {
+    if (o.timer >= _VICTORY_OUTRO_CROUCH_FRAMES) {
       o.step = 1; o.timer = 0;
       /* 溜めた湯気は飛び去りと同時に霧散させる。
          step1では新たな湯気を出さない＝「溜めた力を解き放って飛び立つ」という筋立てにする
