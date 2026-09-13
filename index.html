@@ -351,18 +351,6 @@ function _perfLogSpike(gapMs) {
   _perfLastSpikeAt = now;
   if (_perfSpikes.length > _PERF_SPIKE_KEEP) _perfSpikes.length = _PERF_SPIKE_KEEP;
 }
-/* rAFが実際に何回/秒呼ばれているかを数える。「JSは予算内なのにフレーム間隔が
-   伸びる」ときの切り分け用: JSの合計時間とrAFの実測レートを突き合わせれば、
-   残りがブラウザ側（塗り直し・GPU転送・合成）だと確定できる */
-let _perfFps = 0, _perfFrameCount = 0, _perfFpsT = 0;
-function _perfCountFrame(t) {
-  _perfFrameCount++;
-  if (_perfFpsT === 0) { _perfFpsT = t; return; }
-  if (t - _perfFpsT >= 1000) {
-    _perfFps = _perfFrameCount * 1000 / (t - _perfFpsT);
-    _perfFrameCount = 0; _perfFpsT = t;
-  }
-}
 function _perfMark(key, t0) {
   const e = _perf[key], now = performance.now(), ms = now - t0;
   e.last = ms; e.ranAt = now;
@@ -410,7 +398,7 @@ function drawPerf() {
        もう下限まで落ちているのか。段数が出ていないとこの2つを取り違える。
        「床」は一度戻して失敗した段階（_rsFloor）。この端末ではここより上へ二度と戻さない、
        と自動制御が判断済みであることを示す */
-    `rAF ${_perfFps.toFixed(0)}fps  実解像度 ${_renderScale}` +
+    `rAF ${_rafHz.toFixed(0)}fps  実解像度 ${_renderScale}` +
       (_RS_AUTO ? `自動残${_RS_LEVELS.length - 1 - _rsIdx}段${_rsFloor > 0 ? '床' + _RS_LEVELS[_rsFloor] : ''}` : '固定') +
       `(焼込${_dpr}) ${canvas.width}x${canvas.height} 取りこぼし率 ${(_rsRatio * 100).toFixed(0)}%` +
       (_RS_AUTO ? ` 判定 下${_rsDown}/${_rsRatio > _RS_PANIC_RATIO ? 1 : _RS_DOWN_WINDOWS} 上${_rsUp}/${_RS_UP_WINDOWS}` +
@@ -620,7 +608,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.95';
+const VERSION = 'v7.96';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -15256,6 +15244,11 @@ const _MAX_CATCHUP_TICKS = 3;
 let _frameTimesIdx = 0, _rafLastT = 0, _updateLastT = 0, _updateAccum = 0;
 /* rAFが実際に何Hzで呼ばれているかの推定（1秒ごとに更新）。追加フレームで描くかどうかの
    判断に使う。?perfのfps表示とは別に、常時この推定を持つ */
+/* rAFが実際に呼ばれた回数／秒。使い道は2つで、どちらも同じ値を見る:
+   高リフレッシュ端末で追加フレームを描くかの判定（_RAF_HZ_HIGH）と、?perf の表示。
+   「frame work は小さいのに gap が伸びる」ときの切り分けに使う——JSの合計時間と
+   rAFの実測レートを突き合わせれば、残りがブラウザ側（塗り直し・GPU転送・合成）だと
+   確定できる。同じ量を2箇所で数えない */
 let _rafHz = 0, _rafHzCount = 0, _rafHzT = 0;
 const _RAF_HZ_HIGH = 70; // これを超えていれば高リフレッシュレート端末とみなす
 /* 直前のtickのフェーズ。phase はここより後で宣言されるので null 始まりにする */
@@ -15286,7 +15279,6 @@ function _gameLoop(t) {
   _rafHzCount++;
   if (_rafHzT === 0) _rafHzT = t;
   else if (t - _rafHzT >= 1000) { _rafHz = _rafHzCount * 1000 / (t - _rafHzT); _rafHzCount = 0; _rafHzT = t; }
-  if (PERF_ON) _perfCountFrame(t);
   _updateCtxStall(); // AudioContextが実際に動いているかの実測（_updateCtxStall参照）
   /* 時計が死んだ（または割り込まれた）と分かった時点で「次の操作で立て直す」印を付ける。
 
