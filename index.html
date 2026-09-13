@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.05';
+const VERSION = 'v8.06';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4446,8 +4446,9 @@ function _pumpPressFlash() {
 const LS_COINS = 'game_coins';
 const LS_BEST  = 'game_best';
 const LS_BET   = 'game_bet';
+const LS_DPSEQ = 'game_dp_seq';   // ドラムパッドの打ち込み（_dpSeqSave参照）
 /* LS_COINS 等が確定した後に定義（TDZ回避） */
-const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_BET, LS_ACH, LS_MED, LS_STATS];
+const _LS_ALL_KEYS = [LS_COINS, LS_BEST, LS_BET, LS_ACH, LS_MED, LS_STATS, LS_DPSEQ];
 function lsSave() {
   /* 書き込みは _lsQueue でまとめて後送り（ゲームループのフレーム予算を削らない） */
   if (coins > bestCoins) bestCoins = coins; // bestCoins は同期更新（表示に使うため）
@@ -12192,7 +12193,7 @@ function _dpBuildLayout() {
   return { pads, panel: { x: panelX, y: panelY, w: panelW, h: panelH },
            plate, lcd, ctls, jog, body, size,
            flash: new Float32Array(DRUM_PADS.length),
-           lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0,
+           lastName: '', lastTag: '', jogRot: 0, jogSpin: 0, hits: 0, lastHit: 0,
            tap: { last: 0, iv: [] },   // タップテンポの系列（_dpTapTempo参照）
            loop: _dpLoopNew() };
 }
@@ -12200,6 +12201,7 @@ function _dpBuildLayout() {
 function _startDrumPad() {
   phase = 'drumPad';
   _dp = _dpBuildLayout();
+  _dpSeqLoad(_dp.loop);   // 前回の打ち込みを引き継ぐ（停止・非録音の状態で入る）
   if (!_dpPadSprites || _dpPadSprites.size !== _dp.size) {
     _dpPadSprites = DRUM_PADS.map(p => _dpBuildPadSprite(p, _dp.size));
     _dpPadSprites.size = _dp.size;
@@ -12359,6 +12361,69 @@ function _dpLoopNew() {
            take: null, takeLen: 0, pass: null, pending: [], passDirty: false, lastK: null,
            head: 0, schedSlot: 0, sched: null, viz: [], click: false };
 }
+/* ── 打ち込みの保存 ──────────────────────────────────────────
+   画面を抜けると _dp ごと捨てるので、残さないとサウンドテストへ一度戻るだけで
+   打ち直しになる。保存するのは確定したレイヤーと設定だけで、録音中の途中経過
+   (take/pass/pending) と UNDO の戻し先 (redo) は持ち越さない——どちらもその場の
+   操作の途中であって、次に入ってきたときに続きから触れるものではない。
+
+   **拍は丸めずに持つ。** クオンタイズは再生時に掛ける非破壊の作りなので
+   （_dpQuantBeat参照）、丸めた値を保存すると Q を OFF へ戻しても叩いたままが
+   戻らなくなる。桁だけは落とす: 1e-4拍は120BPMで50μsで、聞き分けられない一方、
+   生の倍精度をそのまま文字列にすると1イベントが倍以上の長さになる。
+
+   壊れた保存は**丸ごと**捨てる。一部だけ採ると、パッドの構成や小節数の選択肢を
+   変えたときに半端な状態が復元されて、どこがおかしいのか追えなくなる */
+const DP_SEQ_VER = 1;            // 保存の形を変えたら上げる（旧データは読まずに捨てられる）
+const DP_SEQ_MAX_CHARS = 64 * 1024;  // これを超えたら保存しない（他のキーの容量を食わない）
+const DP_SEQ_BEAT_DIGITS = 4;
+const DP_LS_QUIET_MS = 400;      // 最後の打鍵からこれだけ空いたら書いてよい
+
+/* 値が変わる操作から毎回呼ぶ。実際の書き込みは_lsQueueに預かってもらうので、
+   ここで掛かるのはJSON化だけ（2小節16分フルを8レイヤーで1828文字・0.02ms）。
+   TEMPO長押しの連続変化（最短28ms間隔）から毎回呼んでも0.1%に届かないため、
+   間引きは置かない */
+function _dpSeqSave(L) {
+  try {
+    const layers = L.layers.map(l => {
+      const ev = [];
+      for (const e of l.ev) ev.push(e.i, +e.beat.toFixed(DP_SEQ_BEAT_DIGITS));
+      return { len: l.len, ev };   // 数値を平らに並べる（{i,beat}のままだと倍以上になる）
+    });
+    const s = JSON.stringify({ v: DP_SEQ_VER, bpm: L.bpm, bars: L.bars,
+                               quant: L.quant, click: L.click ? 1 : 0, layers });
+    if (s.length > DP_SEQ_MAX_CHARS) return;  // レイヤーは際限なく積めるので上限で止める
+    _lsQueue(LS_DPSEQ, s);
+  } catch (e) {}
+}
+
+/* 保存を L へ流し込む。読めないものが1つでもあれば何も触らずに戻る（全部か無しか） */
+function _dpSeqLoad(L) {
+  let o;
+  try { o = JSON.parse(localStorage.getItem(LS_DPSEQ)); } catch (e) { return; }
+  if (!o || o.v !== DP_SEQ_VER || !Array.isArray(o.layers)) return;
+  if (!(o.bpm >= DP_BPM_MIN && o.bpm <= DP_BPM_MAX)) return;
+  if (!DP_BARS_CHOICES.includes(o.bars) || !DP_QUANT_CHOICES.includes(o.quant)) return;
+  const layers = [];
+  for (const l of o.layers) {
+    if (!l || !Array.isArray(l.ev) || l.ev.length % 2) return;
+    const len = l.len;
+    if (!DP_BARS_CHOICES.includes(len / DP_BEATS_PER_BAR)) return;
+    const ev = [];
+    for (let k = 0; k < l.ev.length; k += 2) {
+      const i = l.ev[k], beat = l.ev[k + 1];
+      /* 型まで見る。JSONには null も文字列も入りうるうえ、比較演算子は数値へ暗黙変換
+         するので（null >= 0 は真）、範囲だけを見ると null が拍として通ってしまう */
+      if (!Number.isInteger(i) || i < 0 || i >= DRUM_PADS.length) return; // パッドを減らしても落ちない
+      if (!Number.isFinite(beat) || beat < 0 || beat >= len) return;
+      ev.push({ i, beat });
+    }
+    layers.push({ ev, len });
+  }
+  L.layers = layers;
+  L.bpm = Math.round(o.bpm); L.bars = o.bars; L.quant = o.quant; L.click = !!o.click;
+}
+
 function _dpBeatDur(L) { return 60 / L.bpm; }
 function _dpBeatsPerLoop(L) { return L.bars * DP_BEATS_PER_BAR; }
 function _dpLoopDur(L) { return _dpBeatsPerLoop(L) * _dpBeatDur(L); }
@@ -12634,6 +12699,7 @@ function _dpLoopCommit(L) {
   }
   L.take = null; L.takeLen = 0; L.pass = null; L.pending = []; L.passDirty = false;
   L.lastK = null; L.rec = false;
+  _dpSeqSave(L);
 }
 
 function _dpLoopPlayStop() {
@@ -12686,6 +12752,7 @@ function _dpLoopUndo() {
   if (L.layers.length === 0) return;
   L.redo.push(L.layers.pop());
   _dpLoopRepatch();
+  _dpSeqSave(L);
 }
 
 /* UNDOで外したレイヤーを戻す。CLEARは置かない: 全部UNDOすれば同じことができるうえ、
@@ -12697,6 +12764,7 @@ function _dpLoopRedo() {
   if (L.redo.length === 0) return;
   L.layers.push(L.redo.pop());
   _dpLoopRepatch();
+  _dpSeqSave(L);
 }
 
 /* テンポ変更。今の拍位置を保ったまま基準時刻を引き直すので演奏が途切れない
@@ -12729,6 +12797,7 @@ function _dpLoopApplyBpm(bpm) {
   } else {
     L.bpm = next;
   }
+  _dpSeqSave(L);
 }
 function _dpLoopSetBpm(delta) { _dpLoopApplyBpm(_dp.loop.bpm + delta); }
 
@@ -12774,6 +12843,7 @@ function _dpLoopCycleBars() {
      headからの拍数で決まり小節数に依存しないので、そのまま使える。
      新しい小節数は先読みの残りが尽きた時点から効く。
      即座に効かせたい場合は _dpLoopRepatch() を呼ぶ */
+  _dpSeqSave(L);
 }
 
 /* クオンタイズの刻みを巡回する（OFF → 1/16 → 1/8 → 1/4 → OFF）。
@@ -12782,6 +12852,7 @@ function _dpLoopCycleQuant() {
   const L = _dp.loop;
   const i = DP_QUANT_CHOICES.indexOf(L.quant);
   L.quant = DP_QUANT_CHOICES[(i + 1) % DP_QUANT_CHOICES.length];
+  _dpSeqSave(L);
 }
 
 function _dpLoopToggleClick() {
@@ -12792,6 +12863,7 @@ function _dpLoopToggleClick() {
      入れるときは巻き戻さない（テンポ変更と同じ理由）。クリックは拍の上にしか乗らないので、
      次の先読み窓から乗り始めても頭の欠けた鳴り方にはならない */
   if (!L.click) _dpLoopRepatch();
+  _dpSeqSave(L);
 }
 
 function _dpHit(i) {
@@ -12799,6 +12871,7 @@ function _dpHit(i) {
   _dp.flash[i] = DP_FLASH_FRAMES;
   _dp.lastName = pad.name; _dp.lastTag = pad.tag;
   _dp.hits++;
+  _dp.lastHit = performance.now();   // localStorageを書く静かな瞬間の判定に使う
   /* ジョグを回す。向きは叩いた列で決まり（左2列は逆時計回り、右2列は時計回り）、
      量は音の長さに比例させる（_dpJogScale参照）。左右を交互に叩くと回転が
      打ち消し合ってスクラッチのような動きになる */
@@ -12882,6 +12955,13 @@ function _updateDrumPad() {
   _dp.jogRot += _dp.jogSpin;
   _dp.jogSpin *= DP_JOG_DAMP;
   if (Math.abs(_dp.jogSpin) < 0.0005) _dp.jogSpin = 0;
+  /* localStorageの書き出しはこの画面でも受ける。update()は音を鳴らすだけの画面では
+     早期に戻るので、ゲーム側の安全な機会（矢を放った直後）がここへは来ない。
+     **パッドから指が離れている間に書く。** この画面ではタップが演奏そのものなので、
+     書き込みで数ミリ秒止まると打ち込みのタイミングがそのままずれる。
+     叩き続けている間は保険のフラグが立ったまま待つ（離脱時は_lsFlushが拾う） */
+  if (_lsFlushDue && _lsPending.size > 0 &&
+      performance.now() - _dp.lastHit > DP_LS_QUIET_MS) _lsFlush();
 }
 
 /* パッド・操作ボタンに共通の「面」の作り: 上が明るく下が暗い縦グラデ＋内側の白ベベル＋
