@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.92';
+const VERSION = 'v7.93';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7687,7 +7687,7 @@ function _buildBossOC() {
   bc.scale(_dpr, _dpr);
   bc.translate(half, half);
   /* 焼き色はアイテムのようなランダムではなく固定（キングは1体しかいない） */
-  const grd = _gyozaBodyGradient(bc, REF, 'hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)');
+  const grd = _gyozaBodyGradient(bc, REF, ...KING_SKIN);
   bc.save();
   bc.scale(kk, kk);
   _drawGyozaBody(bc, REF, 0, 0, grd);
@@ -8293,6 +8293,10 @@ const _kingCharFontSize = f => f.tier === 'just' ? KING_RESULT_FONT * KING_CHAR_
    別途重ねてはいけない。模様と実際の着弾位置がずれると、当てた場所が焦げていないように
    見える */
 const KING_MARK_RESIDUAL_ALPHA = 0.14;
+/* キングの生地色。素のスプライト（_buildBossOC）と回転用の球の層
+   （_buildKingSpinLayers）が同じ色で焼かれていないと、回っている間だけ色の違う
+   キングになる。色を調整するときはここだけを触る */
+const KING_SKIN = ['hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)'];
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
 /* KING_RESULT_MIN_WAIT: 4本確定後、結果表示を最小何フレーム保持するか。
@@ -8832,6 +8836,36 @@ function _initBossBattle() {
   startBossBGMTape(1200); // 世界が動き出す（予告のテープストップから復帰、ボス戦は暗黒版BGM）
 }
 
+/* こんがりトーンを、いま描いてあるもののアルファ内にだけ乗せる。
+   合成モードは source-atop のままにして返す: _renderKingBody は続けて焦げ跡も
+   本体のアルファ内へ乗せたいため。独立した層へ置きたい呼び出し側は自分で戻すこと */
+function _applyKingTone(c, half, pct) {
+  c.globalCompositeOperation = 'source-atop'; // ボス本体のアルファ内にのみ合成
+  if (pct <= 0) return;
+  c.globalAlpha = pct * KING_TONE_MAX_ALPHA;
+  c.fillStyle = KING_TONE_COLOR;
+  c.fillRect(-half, -half, half * 2, half * 2);
+  c.globalAlpha = 1;
+}
+
+/* 焦げ跡本体: revealedAtがある全マーク（フェード中＋永続痕）を毎回描く。
+   alphaはt=0で1.0→t=1でKING_MARK_RESIDUAL_ALPHAへ線形補間し、以降そこで
+   下げ止まる（消え切らずごくごく薄く残る）。
+   合成モードは呼び出し側が決める（本体のアルファ内へ乗せるか、独立した層へ置くか） */
+function _drawKingScorchTo(c, marks, now) {
+  for (const m of marks) {
+    if (m.revealedAt == null) continue;
+    const t = Math.min(1, (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
+    c.save();
+    c.translate(m.lx, m.ly);
+    c.rotate(m.rot);
+    const sc = m.r / 26; // スプライト基準半径26に対する倍率
+    c.globalAlpha = 1 - (1 - KING_MARK_RESIDUAL_ALPHA) * t; // ここで減衰を掛けない（薄いとJUST/GOODのサイズ差が見えなくなる）
+    c.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
+    c.restore();
+  }
+}
+
 /* ボス本体の描画元キャンバスを返す（素のスプライト＋全身トーン＋フェード中の焦げ跡）。
    全身トーンの強さは cookPct（タップ精度で直接積算、0〜100）と厳密に連動させる
    （フェード完了を待たず、ゲージが100%になった瞬間に全身も焦茶色100%になっている
@@ -8877,27 +8911,9 @@ function _renderKingBody() {
   lc.drawImage(_bossOC.bodyOC, 0, 0); // 顔なし本体レイヤーから再構成（永続焼き込みではない）
   lc.scale(_dpr, _dpr);
   lc.translate(_king.half, _king.half);
-  lc.globalCompositeOperation = 'source-atop'; // ボス本体のアルファ内にのみ合成
-  if (pct > 0) {
-    lc.globalAlpha = pct * KING_TONE_MAX_ALPHA;
-    lc.fillStyle = KING_TONE_COLOR;
-    lc.fillRect(-_king.half, -_king.half, _king.half * 2, _king.half * 2);
-  }
-  /* 焦げ跡本体: revealedAtがある全マーク（フェード中＋永続痕）を毎回描く。
-     alphaはt=0で1.0→t=1でKING_MARK_RESIDUAL_ALPHAへ線形補間し、以降そこで
-     下げ止まる（消え切らずごくごく薄く残る） */
-  for (const m of _king.marks) {
-    if (m.revealedAt == null) continue;
-    const t = Math.min(1, (now - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
-    const alpha = 1 - (1 - KING_MARK_RESIDUAL_ALPHA) * t;
-    lc.save();
-    lc.translate(m.lx, m.ly);
-    lc.rotate(m.rot);
-    const sc = m.r / 26; // スプライト基準半径26に対する倍率
-    lc.globalAlpha = alpha; // ここで減衰を掛けない（薄いとJUST/GOODのサイズ差が見えなくなる）
-    lc.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
-    lc.restore();
-  }
+  _applyKingTone(lc, _king.half, pct);
+  /* 焦げ跡も本体のアルファ内へ（_applyKingTone が source-atop のままにしている） */
+  _drawKingScorchTo(lc, _king.marks, now);
   /* 顔（目・眉・口）はトーン・焦げ跡の影響を受けず、常に元の色で最後に上描きする
      （焦げ色に対する目の濃さのコントラストを保つ）。pctに応じて表情が変化する
      （_drawKingFace参照）ため、静的faceOCのコピーではなく毎回ベクタ描画する。
@@ -10160,19 +10176,12 @@ function _buildKingSpinLayers() {
     c.scale(_dpr, _dpr); c.translate(half, half);
     return [oc, c];
   };
-  const tone = c => {
-    c.globalCompositeOperation = 'source-atop';
-    if (pct > 0) {
-      c.globalAlpha = pct * KING_TONE_MAX_ALPHA;
-      c.fillStyle = KING_TONE_COLOR;
-      c.fillRect(-half, -half, half * 2, half * 2);
-      c.globalAlpha = 1;
-    }
-    c.globalCompositeOperation = 'source-over';
-  };
+  /* 層ごとに独立して置くので、トーンの後は source-over へ戻す
+     （_renderKingBody は戻さずそのまま焦げ跡も本体のアルファ内へ乗せる） */
+  const tone = c => { _applyKingTone(c, half, pct); c.globalCompositeOperation = 'source-over'; };
   const [spOC, sp] = prep();
   /* グラジェントは scale の前に作る（_buildBossOC と同じ手順。後で作ると寸法が変わる） */
-  const grd = _gyozaBodyGradient(sp, REF, 'hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)');
+  const grd = _gyozaBodyGradient(sp, REF, ...KING_SKIN);
   sp.save(); sp.scale(kk, kk); _drawGyozaBody(sp, REF, 0, 0, grd, 'sphere'); sp.restore();
   tone(sp);
   const [suOC, su] = prep();
@@ -10188,16 +10197,7 @@ function _buildKingSpinLayers() {
   /* 焦げ跡はトーンの後（_renderKingBodyと同じ順）。source-atopにはしない:
      この層のアルファはひだや薄皮しか無いので、焦げ跡が模様のある場所にしか出なくなる。
      本体の輪郭で切るのは貼るときの楕円クリップが受け持つ */
-  for (const m of _king.marks) {
-    if (m.revealedAt == null) continue;
-    const t = Math.min(1, (performance.now() - m.revealedAt) / (KING_MARK_FADE_SEC * 1000));
-    su.save();
-    su.translate(m.lx, m.ly); su.rotate(m.rot);
-    const sc = m.r / 26;
-    su.globalAlpha = 1 - (1 - KING_MARK_RESIDUAL_ALPHA) * t;
-    su.drawImage(_scorchBlotSprite, -26 * sc, -26 * sc, 52 * sc, 52 * sc);
-    su.restore();
-  }
+  _drawKingScorchTo(su, _king.marks, performance.now());
   _drawKingFace(su, s, pct, 0);
   _kingSpinSphere = spOC; _kingSpinSurface = suOC;
 }
