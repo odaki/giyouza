@@ -597,7 +597,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.79';
+const VERSION = 'v7.80';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1915,30 +1915,41 @@ function _bgmAccumStep() {
   _bgmAccumAudioTime += dt * _getBgmRateJS();
 }
 
-/* getBeatPulse: 同一フレーム内で複数回呼ばれるためフレームキャッシュを使用 */
-let _beatPulseCache = 0, _beatPulseCacheFrame = -1;
-function getBeatPulse() {
-  /* 同じフレーム内の2回目以降はキャッシュを返す
-     _bgmAccumStep は update()先頭 または draw-only フレームの先頭で呼ばれ、
-     _bgmAccumLastWall が更新されるとキャッシュが無効化される */
-  if (_beatPulseCacheFrame === _bgmAccumLastWall) return _beatPulseCache;
+/* 音声基準の拍位置（ループ内・拍単位の小数）。playbackRateの変動・出力遅延・
+   描画パイプラインの先読み・ループ長のサンプル丸めを、ここで一度に織り込む。
+   拍ごとの山（getBeatPulse）と、拍をまたいで続く動き（キングのノリ＝_kingGroove）が
+   同じ位置から導かれるよう計算はここだけに置く。音声が引けなければ null。
+
+   playbackRate変動を考慮した音声バッファ内位置を使う。_bgmAccumAudioTime は
+   audioCtx.currentTime 基準なので outputLatency 分を引いて実際にスピーカーから
+   出ている音に揃え、さらに描画パイプライン分だけ先読みする。
+   rate を掛けるのは latency が壁時計秒だが offset は音声秒で評価するため。
+   ループ量子化ドリフト対策として、サンプル丸めされた実ループ長で割り切る。
+
+   ループ長は通常8拍・ボス16拍でどちらも偶数なので、2拍周期の動きはループ境界を
+   またいでも途切れない。奇数拍のループを足すとここが破れる。
+   同一フレーム内で複数回呼ばれるためフレームキャッシュを使う
+   （_bgmAccumStep は update()先頭 または draw-onlyフレームの先頭で呼ばれ、
+   _bgmAccumLastWall が更新されるとキャッシュが無効化される） */
+let _beatPosCache = null, _beatPulseCacheFrame = -1;
+function _bgmBeatPos() {
+  if (_beatPulseCacheFrame === _bgmAccumLastWall) return _beatPosCache;
   _beatPulseCacheFrame = _bgmAccumLastWall;
   const loopDur = _curQuantizedLoopDur();
   if (!audioCtx || bgmPhaseRef === null || _bgmAccumLastWall === null || loopDur <= 0) {
-    return (_beatPulseCache = 0);
+    return (_beatPosCache = null);
   }
-  /* playbackRate変動を考慮した音声バッファ内位置を計算。
-     _bgmAccumAudioTime は audioCtx.currentTime 基準なので outputLatency 分を引いて
-     実際にスピーカーから出ている音に揃え、さらに描画パイプライン分だけ先読みする。
-     rate を掛けるのは latency が壁時計秒だが offset は音声秒で評価するため。 */
   const rate      = _bgmRateDur > 0 ? _getBgmRateJS() : _bgmRateTo; // ランプ中も正確に取得
   const rawPos    = _bgmAccumAudioTime + (_BEAT_DISPLAY_ADVANCE - _hwLatency) * rate;
-  /* ループ量子化ドリフト対策: loopEnd はサンプル丸めされた実ループ長で割り切る。
-     拍単位（BGM_BEAT）の判定自体はループ長（通常/ボスで異なる）に依存しない */
   const loopN     = Math.floor(rawPos / loopDur);
-  const posInLoop = rawPos - loopN * loopDur;
-  const ph = (((posInLoop % BGM_BEAT) + BGM_BEAT) % BGM_BEAT) / BGM_BEAT;
-  return (_beatPulseCache = Math.pow(Math.max(0, 1 - ph * 2.5), 2)); // ~160ms で減衰（0.4拍）
+  return (_beatPosCache = (rawPos - loopN * loopDur) / BGM_BEAT);
+}
+
+function getBeatPulse() {
+  const pos = _bgmBeatPos();
+  if (pos === null) return 0;
+  const ph = pos - Math.floor(pos);
+  return Math.pow(Math.max(0, 1 - ph * 2.5), 2); // ~160ms で減衰（0.4拍）
 }
 
 /* 現在の入力タイミングがビートにどれだけ近いかを 0-1 で返す
@@ -7456,6 +7467,13 @@ function _updateOmenFx() {
    反転で、制御点Yが端点Yを下回れば「への字（怒り）」・上回れば「U字（笑顔）」。
    地鳴りのマイルド化もこの同じ値から導くため（_kingGentleness参照）、
    マジックナンバーで散らさず定数として一箇所に置く */
+/* 呼吸の拡縮。本体の描画・文字の着地先・帯電の描画が同じ値を使わないと、
+   焦げ跡や文字が本体から外れる。式を複製せずこの関数だけを見ること。
+   BGMとは無関係な一定周期でよい（曲に乗る動きは_kingGrooveが別に受け持つ） */
+const KING_BREATH_AMP = 0.02;
+const KING_BREATH_MS  = 300;
+function _kingBreath() { return 1 + KING_BREATH_AMP * Math.sin(performance.now() / KING_BREATH_MS); }
+
 const KING_MOUTH_END_Y   = 0.26; // 口の両端のY
 const KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
 const KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
@@ -8106,8 +8124,7 @@ function drawBossOmen() {
   if (o.step >= 6 && _bossOC) {
     const bx = W/2, by = H/2 - (IS_PORTRAIT ? 60 : 0);
     const appear = o.step === 6 ? Math.min(1, o.timer / 25) : 1;
-    const breath = 1 + 0.02 * Math.sin(performance.now() / 300);
-    const k = appear * breath;
+    const k = appear * _kingBreath();
     ctx.save();
     ctx.translate(bx, by); ctx.scale(k, k);
     ctx.drawImage(_bossOC.oc, -_bossOC.half, -_bossOC.half, _bossOC.half*2, _bossOC.half*2);
@@ -8839,7 +8856,7 @@ function _createKingMark() {
    焦げ跡描画と同じ座標変換。凍結せず毎フレーム計算し直すことで、ボスがまだ
    誕生演出から戦闘位置へ収束中でも常に実際の描画位置に追従する */
 function _kingFlightTargetPos(f) {
-  const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
+  const breath = _king.dscale * _kingBreath();
   if (f.markRef) return { x: _king.dbx + f.markRef.lx * breath, y: _king.dby + f.markRef.ly * breath };
   return { x: _king.dbx, y: _king.dby };
 }
@@ -10031,7 +10048,7 @@ function drawBossBattle() {
   }
   /* ボス本体（焼き目蓄積済みライブOC・呼吸アニメ・戦闘用レイアウト縮小率を適用）。
      位置・スケールは dbx/dby/dscale（誕生演出からの収束中の表示値）を使う */
-  const breath = _king.dscale * (1 + 0.02 * Math.sin(performance.now() / 300));
+  const breath = _king.dscale * _kingBreath();
   const ofs = _kingBodyOffset(); // アクセントののけぞり＋1文字ごとの被弾（_kingBodyOffset参照）
   ctx.save();
   /* 篩い落としの縦変位とスカッシュ、アクセントののけぞりは描画時にのみ掛ける
