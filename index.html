@@ -620,7 +620,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v7.90';
+const VERSION = 'v7.91';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -10088,7 +10088,7 @@ function _kingVictoryBounce() {
    初速が速く、強い減速で失速し、その場で漂いながら消える。等速で飛ばすと
    花火になってしまうので、指数減衰であることがこの表現の要。
    1個だけにする: 数を増やすと祝祭の演出になり、ふと鼻歌が漏れた感じから離れる */
-const KING_NOTE_SEC   = 1.10;             // 寿命
+const KING_NOTE_SEC   = 2.00;             // 寿命。失速してからも漂って見えるだけの長さが要る
 const KING_NOTE_SPEED = 430;              // 初速 px/秒
 const KING_NOTE_DRAG  = 3.6;              // 減速（0.3秒でほぼ止まる）
 const KING_NOTE_GRAV  = 40;               // 失速してから軽く落ちる
