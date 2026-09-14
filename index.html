@@ -616,7 +616,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.12';
+const VERSION = 'v8.13';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4002,8 +4002,11 @@ function toggleMute() {
      キング戦系のBGMはテンポ（BOSS_BGM_RATE）・地鳴りの段階差し替え・テープ停止まで
      戦闘側の経路が一括で持っており、ミュート操作から素の startBGM（レート1.0・
      bgmPhaseRefリセット・グレースケール即時解除）を割り込ませてよい状態が無い。
-     復帰の入口はPAUSE解除（_resumeBgmFromPause）に一本化する */
-  if (!audioMuted && !_noAutoBgmPhase() && audioCtx && !bgmSource && !jingleScheduler) {
+     復帰の入口はPAUSE解除（_resumeBgmFromPause）に一本化する。
+     **PAUSE中は起動しない。** PAUSE中はBGMソースを破棄してあるので !bgmSource が真になるが、
+     ここで起動すると頭から鳴り始め、解除時の _resumeBgmFromPause は「ソースが生きている」と
+     みなして何もしない。結果、控えた位置の続きではなく曲の頭から鳴り直す */
+  if (!audioMuted && !isPaused && !_noAutoBgmPhase() && audioCtx && !bgmSource && !jingleScheduler) {
     startBGM();
   }
 }
