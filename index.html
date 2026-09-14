@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.10';
+const VERSION = 'v8.11';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -889,16 +889,14 @@ function _updateDisplayCaches() {
 }
 
 /* ── アイテムオブジェクトプール ──
-   makeItem() が毎回 Array.from + 5個のオブジェクト生成＋HSL文字列を生成するのを防ぐ。
-   greens配列も事前確保してフィールドをリセットするだけで再利用する。 */
+   makeItem() が毎回オブジェクトを生成するのを防ぐ。
+   ニラの配置の器も一度確保したら書き込み直して再利用する（makeItem参照）。 */
 const _ITEM_POOL_SIZE = 300;
 function _makePoolItem() {
   return {
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     skinL:'', skinD:'', bodyGrd:null, _spr:null, _dead:true, _rotPhase:0,
-    greens: [{dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
-             {dx:0,dy:0,rx:0,ry:0,a:0,color:''},{dx:0,dy:0,rx:0,ry:0,a:0,color:''},
-             {dx:0,dy:0,rx:0,ry:0,a:0,color:''}],
+    nira: null, // フォールバック経路でだけ使う。makeItem が初回に確保する
   };
 }
 const _itemPool = [];
@@ -6304,8 +6302,34 @@ const _ITEM_VARIANT_N   = 12;
    勝利で回すときの球の半径まで共有している。数字のまま散らすと、形を変えたときに
    どれかが取り残される（実際「_drawGyozaBodyと同じ比率」と書いたコメントが3箇所あった） */
 const GYOZA_BODY_CY = 0.08, GYOZA_BODY_RX = 0.58, GYOZA_BODY_RY = 0.48;
-/* 置き場所はここより後ろにできない。下の _itemVariantSprites は評価時に
-   _drawGyozaBody を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
+/* 頂部の薄皮の楕円（中心Y・半径）。ひだはこの中に並び、ニラもこの円周上か内側に散らす */
+const GYOZA_SKIN_TOP_CY = -0.12, GYOZA_SKIN_TOP_RX = 0.40, GYOZA_SKIN_TOP_RY = 0.14;
+/* ── ニラ（皮の内側に透ける具） ──
+   形は刻み短冊（細い帯の両端を斜めに切る）。頂部の薄皮の円周上か内側に散らし、
+   **ひだの線より下**に描く。線がニラを横切るので、皮の内側にあるように見える。
+   ハイライトはさらに上。キングの勝利回転では「表面の模様」の層に入り、ひだと一緒に回る。
+
+   却下した形:
+   ・丸（本体全体へ濃い緑で散らす）… 小さく淡くしても斑点に見え、傷んでいる印象になる
+   ・葉片（両端が尖った紡錘形）・細い弧・濃い筋を通した二色の短冊 … 実寸（42px）では
+     刻み短冊と見分けがつかない。いちばん素直な形を採る
+
+   大きさと色: これより小さく淡くすると、実寸ではニラが見えなくなる。
+   本数はキングも同じ。キングは大きく描くので増やす案も並べたが、同じ本数で揃える
+
+   散らし方は best-candidate: 1本ごとに候補を GYOZA_NIRA_CANDIDATES 点引き、
+   既にあるニラから最も離れた点を採る。一様乱数に最小間隔を足すだけでは、
+   縁に固まったり大きな隙間が空いたりする */
+const GYOZA_NIRA_N          = 5;
+const GYOZA_NIRA_CANDIDATES = 12;
+const GYOZA_NIRA_LEN   = [0.09, 0.13];   // 長さ（本体の大きさ s に対する比）
+const GYOZA_NIRA_WID   = [0.030, 0.040]; // 幅
+const GYOZA_NIRA_TILT  = 0.61;           // 薄皮の長軸からの傾き（±35°）
+const GYOZA_NIRA_DY_WEIGHT = 1.6;        // 間隔を測るときの縦の重み（薄皮は横に長いので縦の差を重く見る）
+const GYOZA_NIRA_HUE = [92, 116], GYOZA_NIRA_SAT = [38, 52], GYOZA_NIRA_LIT = [46, 58];
+const GYOZA_NIRA_ALPHA = 0.8;
+/* ここまでの置き場所はこれより後ろにできない。下の _itemVariantSprites は評価時に
+   _drawGyozaBody と _gyozaNiraSpec を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
 
 const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
 const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
@@ -6313,6 +6337,7 @@ const _itemVariantSprites = (() => {
   if (!_CACHE_OK) return null;
   const arr = [];
   const s = _ITEM_SPRITE_REF;
+  const nira = _newNiraSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
   for (let v = 0; v < _ITEM_VARIANT_N; v++) {
     const oc = _mkCache(_ITEM_SPRITE_HALF * 2 * _dpr, _ITEM_SPRITE_HALF * 2 * _dpr);
     const c  = oc.getContext('2d');
@@ -6320,17 +6345,8 @@ const _itemVariantSprites = (() => {
     c.translate(_ITEM_SPRITE_HALF, _ITEM_SPRITE_HALF);
     _drawGyozaShadow(c, s); // 関数宣言はホイスティングされるため前方参照可
     const skin = _gyozaSkinPalette();
-    _drawGyozaBody(c, s, 0, 0, _gyozaBodyGradient(c, s, skin.skinL, skin.skinD));
-    c.globalAlpha = 0.82;
-    const gs = {};
-    for (let i = 0; i < 5; i++) {
-      _gyozaGreenSpec(gs);
-      c.beginPath();
-      c.ellipse(gs.dx*s, gs.dy*s, gs.rx*s, gs.ry*s, gs.a, 0, Math.PI*2);
-      c.fillStyle = gs.color;
-      c.fill();
-    }
-    c.globalAlpha = 1;
+    _gyozaNiraSpec(nira, Math.random, false);
+    _drawGyozaBody(c, s, 0, 0, _gyozaBodyGradient(c, s, skin.skinL, skin.skinD), undefined, nira);
     arr.push(oc);
   }
   return arr;
@@ -6387,8 +6403,9 @@ function makeItem(x, y, vx, vy) {
   g.skinD  = skin.skinD;
   /* ボディグラジェントをここで1回だけ生成してキャッシュ */
   g.bodyGrd = _gyozaBodyGradient(ctx, size, g.skinL, g.skinD);
-  /* greens: 事前確保済みの配列オブジェクトを再利用してGCゼロ */
-  for (let i = 0; i < 5; i++) _gyozaGreenSpec(g.greens[i]);
+  /* ニラの器はプール要素ごとに初回だけ作り、以後は書き込み直して使い回す（GCを出さない）。
+     プールの生成時に作らないのは、プールがニラの定数より先に評価されるため */
+  _gyozaNiraSpec(g.nira || (g.nira = _newNiraSpec()), Math.random, false);
   return g;
 }
 
@@ -6571,18 +6588,12 @@ function updateItems() {
   _insertionSortY(items);
 }
 
-/* ギヨウザ本体形状を任意のコンテキストへ描画する共通関数。
-   drawOneItem()・_makeGhostCanvas() の両方から呼ばれる。
-   c2: 描画先コンテキスト / s: サイズ / ox,oy: 中心座標 / bodyGrd: 本体グラジェント
-   影・具（greens）・オーラ・ハロ・尾は呼び出し側で個別に描く。
-   オブジェクト生成なし（c2の参照とプリミティブのみ）→ GC 影響ゼロ。 */
 /* ── ギヨウザの外観パラメータ ──────────────────────────
    アイテムは「起動時に焼き込んだスプライトを転写する」経路と「毎フレーム
    ベクタで描く」フォールバック経路の2つを持ち、同じ見た目を別々のコードで
    作っていた（片方を直してもう片方が古いまま、が起きる形）。
    両経路が同じ関数を呼ぶようにして、外観の定義を1箇所にまとめる。
-   Math.randomを消費する順序は元のインライン版と同じ（皮→具、具は位置→大きさ→
-   角度→色）。ここが変わると同じ乱数列から別の見た目が出るので動かさないこと。
+   Math.randomを消費する順序は 皮→ニラ。
    これらは起動時のスプライト生成（即時実行）からも呼ばれるが、関数宣言は
    ホイスティングされるため定義位置より前から参照できる */
 
@@ -6606,17 +6617,69 @@ function _gyozaBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
   return grd;
 }
 
-/* 具（緑）1粒のランダムな配置・大きさ・角度・色。値はsizeに対する比率。
-   結果は渡されたオブジェクトへ書き込む（アイテム側は事前確保した器を
-   使い回してGCを出さない設計のため、戻り値で新しい器を作らない） */
-function _gyozaGreenSpec(out) {
-  out.dx = (Math.random()-0.5)*0.55;
-  out.dy = (Math.random()-0.5)*0.35;
-  out.rx = 0.055+Math.random()*0.04;
-  out.ry = 0.035+Math.random()*0.03;
-  out.a  = (Math.random()-0.5)*1.2;
-  out.color = `hsl(${108+Math.random()*24|0},${60+Math.random()*20|0}%,${35+Math.random()*15|0}%)`;
+/* [lo, hi] の範囲から rnd で1つ引く（分割代入は反復子を作るので使わない） */
+function _lerpRand(rnd, range) { return range[0] + (range[1] - range[0]) * rnd(); }
+
+/* ニラの配置の器（GYOZA_NIRA_N 本ぶん）。中身は _gyozaNiraSpec が書き込む */
+function _newNiraSpec() {
+  const out = [];
+  for (let i = 0; i < GYOZA_NIRA_N; i++) out.push({ dx: 0, dy: 0, ca: 1, sa: 0, len: 0, wid: 0, color: '' });
   return out;
+}
+
+/* ニラの配置・向き・大きさ・色を out へ書き込む。値は本体の大きさ s に対する比。
+   rnd は [0,1) を返す乱数（通常は Math.random。キングは固定の種の乱数を渡す）。
+   avoidBrows はキング用: 顔が上に乗るので、眉の高さの帯を避ける（KING_NIRA_AVOID_* 参照）。
+   乱数を引く順序（候補の位置→向き→長さ→幅→色）を変えると、同じ種から別の配置が出る。
+   キングの見た目は種で決まっているので動かさないこと */
+function _gyozaNiraSpec(out, rnd, avoidBrows) {
+  for (let i = 0; i < out.length; i++) {
+    let bx = 0, by = 0, bestD = -1;
+    for (let k = 0; k < GYOZA_NIRA_CANDIDATES; k++) {
+      let dx, dy;
+      do {
+        /* 楕円の中で一様（半径方向は平方根で引く）。u=1 が円周上 */
+        const t = rnd() * Math.PI * 2, u = Math.sqrt(rnd());
+        dx = GYOZA_SKIN_TOP_RX * u * Math.cos(t);
+        dy = GYOZA_SKIN_TOP_CY + GYOZA_SKIN_TOP_RY * u * Math.sin(t);
+      } while (avoidBrows && Math.abs(dx) < KING_NIRA_AVOID_X && dy > KING_NIRA_AVOID_Y);
+      let d = 1;
+      for (let j = 0; j < i; j++) {
+        d = Math.min(d, Math.hypot(out[j].dx - dx, (out[j].dy - dy) * GYOZA_NIRA_DY_WEIGHT));
+      }
+      if (d > bestD) { bestD = d; bx = dx; by = dy; }
+    }
+    const p = out[i];
+    const a = (rnd() * 2 - 1) * GYOZA_NIRA_TILT;
+    p.dx = bx; p.dy = by; p.ca = Math.cos(a); p.sa = Math.sin(a);
+    p.len = _lerpRand(rnd, GYOZA_NIRA_LEN);
+    p.wid = _lerpRand(rnd, GYOZA_NIRA_WID);
+    const h   = _lerpRand(rnd, GYOZA_NIRA_HUE) | 0;
+    const sat = _lerpRand(rnd, GYOZA_NIRA_SAT) | 0;
+    const lit = _lerpRand(rnd, GYOZA_NIRA_LIT) | 0;
+    p.color = `hsl(${h},${sat}%,${lit}%)`;
+  }
+  return out;
+}
+
+/* ニラを描く（_drawGyozaBody がひだの直前に呼ぶ）。刻み短冊＝両端を斜めに切った細い帯。
+   ギョギョ魚は毎フレームここを通るので、save/restore と変換行列を使わず頂点を直接回す */
+function _drawGyozaNira(c2, s, ox, oy, nira) {
+  const alpha = c2.globalAlpha;
+  c2.globalAlpha = alpha * GYOZA_NIRA_ALPHA;
+  for (const p of nira) {
+    const cx = ox + p.dx * s, cy = oy + p.dy * s, ca = p.ca, sa = p.sa;
+    const L = p.len * s / 2, w = p.wid * s / 2, k = w * 1.1; // k: 切り口の斜めのずれ
+    c2.beginPath();
+    c2.moveTo(cx + (-L + k) * ca + w * sa, cy + (-L + k) * sa - w * ca);
+    c2.lineTo(cx + ( L + k) * ca + w * sa, cy + ( L + k) * sa - w * ca);
+    c2.lineTo(cx + ( L - k) * ca - w * sa, cy + ( L - k) * sa + w * ca);
+    c2.lineTo(cx + (-L - k) * ca - w * sa, cy + (-L - k) * sa + w * ca);
+    c2.closePath();
+    c2.fillStyle = p.color;
+    c2.fill();
+  }
+  c2.globalAlpha = alpha;
 }
 
 /* 接地影（真下に潰した楕円） */
@@ -6629,13 +6692,16 @@ function _drawGyozaShadow(c2, s) {
   c2.restore();
 }
 
-/* part を渡すと層を選んで描く。省略時は全部を元の順序で描く（既存の呼び出しはそのまま）。
+/* ギヨウザ本体を描く。落下ギヨウザ（スプライトとフォールバック）・幽霊・ギョギョ魚・キングが
+   すべてここを通るので、本体の見た目はここだけで決まる。影・オーラ・輪・尾・顔は呼び出し側が描く。
+   nira: ニラの配置（_gyozaNiraSpec の結果）。省略するとニラを描かない
+   part を渡すと層を選んで描く。省略時は全部を元の順序で描く。
    キング戦の勝利で本体を球として回すために分けてある（_drawKingSpin参照）:
      'sphere'  球そのもの。輪郭と陰影を持つ＝回してはいけない層
      'surface' 表面の模様（接地側の焦げ色・薄皮・ひだ）＝回す層
      'gloss'   ハイライト。光なので球の上に固定する
    分けても重ね順は元と同じなので、回していないときの見た目は変わらない */
-function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part) {
+function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part, nira) {
   const all = !part;
   if (all || part === 'sphere') {
   /* 本体楕円 */
@@ -6659,12 +6725,15 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part) {
 
   /* 頂部の薄皮 */
   c2.beginPath();
-  c2.ellipse(ox, oy - s*0.12, s*0.40, s*0.14, 0, 0, Math.PI*2);
+  c2.ellipse(ox, oy + s*GYOZA_SKIN_TOP_CY, s*GYOZA_SKIN_TOP_RX, s*GYOZA_SKIN_TOP_RY, 0, 0, Math.PI*2);
   c2.fillStyle = 'hsl(50,55%,88%)';
   c2.fill();
   c2.strokeStyle = 'rgba(120,90,50,0.4)';
   c2.lineWidth = 0.8;
   c2.stroke();
+
+  /* ニラ。ひだの線より下に置き、皮の内側に透けて見せる */
+  if (nira) _drawGyozaNira(c2, s, ox, oy, nira);
 
   /* ひだ（9本を1回のstrokeでGPUフラッシュ削減） */
   c2.strokeStyle = 'rgba(140,105,55,0.55)';
@@ -6694,7 +6763,7 @@ function drawOneItem(g) {
   ctx.rotate(g.rot);
 
   if (g._spr) {
-    /* スプライトモード: 影・本体・具を焼き込み済みのOCを基準サイズ比で1回転写 */
+    /* スプライトモード: 影・本体・ニラを焼き込み済みのOCを基準サイズ比で1回転写 */
     const k = s / _ITEM_SPRITE_REF, r = _ITEM_SPRITE_RECT;
     if (r) ctx.drawImage(g._spr, r.sx, r.sy, r.sw, r.sh, r.x * k, r.y * k, r.w * k, r.h * k);
     else {
@@ -6706,20 +6775,7 @@ function drawOneItem(g) {
   }
 
   _drawGyozaShadow(ctx, s);
-
-  /* 本体形状（共通） */
-  _drawGyozaBody(ctx, s, 0, 0, g.bodyGrd);
-
-  /* 具（drawOneItem固有 / greens は per-item ランダムデータ） */
-  ctx.globalAlpha = 0.82;
-  for (const gr of g.greens) {
-    ctx.beginPath();
-    ctx.ellipse(gr.dx*s, gr.dy*s, gr.rx*s, gr.ry*s, gr.a, 0, Math.PI*2);
-    ctx.fillStyle = gr.color; // 生成時にキャッシュ済み
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
+  _drawGyozaBody(ctx, s, 0, 0, g.bodyGrd, undefined, g.nira);
   ctx.restore();
 }
 
@@ -6991,6 +7047,7 @@ function initUuuu() {
 
 /* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
    ギヨウザ本体を青白グラデーション+半透明で描き、天使の輪と幽霊の尾を追加する */
+let _ghostNira = null; // 焼き込んだら読み捨てるので、幽霊どうしで使い回す
 function _makeGhostCanvas(r) {
   /* キャンバスサイズ: ギヨウザ本体 + 上の天使の輪 + 下の幽霊の尾 を収める */
   const bodyH  = r * 1.2;  // ギヨウザ縦半径
@@ -7038,7 +7095,8 @@ function _makeGhostCanvas(r) {
   bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
   bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
   bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
-  _drawGyozaBody(c2, r, cx, cy, bodyGrd);
+  _drawGyozaBody(c2, r, cx, cy, bodyGrd, undefined,
+                 _gyozaNiraSpec(_ghostNira || (_ghostNira = _newNiraSpec()), Math.random, false));
 
   /* ── 天使の輪（ギヨウザ上方に浮かぶ金色の楕円リング） ── */
   const haloY  = cy - r * 0.72; // 頭上に浮かせる
@@ -7205,6 +7263,7 @@ function initGyogyo() {
       phase: Math.random() * Math.PI * 2,
       col:   ['#f0a030','#e06820','#ff8040','#ffcc44','#dd6644'][Math.floor(Math.random()*5)],
       bodyGrd,
+      nira: _gyozaNiraSpec(_newNiraSpec(), Math.random, false), // 泳いでいる間は同じ配置
       exclamTimer: 0,
       exclamDur:   0,
     });
@@ -7242,7 +7301,7 @@ function drawFish(f, t) {
   ctx.globalAlpha = 0.97;
   _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'sphere'); // bodyGrd は initGyogyo() で事前生成済み
   ctx.globalAlpha = 1;
-  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'surface');
+  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'surface', f.nira);
   _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'gloss');
 
   /* びっくり目（ひだの右寄りに配置） */
@@ -7720,7 +7779,7 @@ function _buildBossOC() {
   const grd = _gyozaBodyGradient(bc, REF, ...KING_SKIN);
   bc.save();
   bc.scale(kk, kk);
-  _drawGyozaBody(bc, REF, 0, 0, grd);
+  _drawGyozaBody(bc, REF, 0, 0, grd, undefined, _kingNiraSpec());
   bc.restore();
   /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
      ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
@@ -8328,6 +8387,23 @@ const KING_MARK_RESIDUAL_ALPHA = 0.14;
    （_buildKingSpinLayers）が同じ色で焼かれていないと、回っている間だけ色の違う
    キングになる。色を調整するときはここだけを触る */
 const KING_SKIN = ['hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)'];
+/* キングのニラ。焼き色と同じく固定（キングは1体しかいない）。配置は種から毎回同じものを作る。
+   本体レイヤー（_buildBossOC）と勝利回転の表面の層（_buildKingSpinLayers）の**両方に
+   同じ配置を渡す**。片方だけだと、回り始めた瞬間にニラが消えたり位置が飛んだりする。
+
+   避ける帯: 顔は本体レイヤーの上に描くので、ニラが眉に掛かると眉の脇に緑が付いて見える。
+   薄皮の下の方には眉が入り込んでいる（眉は目の上 x=±0.11〜0.23、y=-0.07〜0 を通る）ので、
+   中心から |x| < AVOID_X かつ y > AVOID_Y の帯にはニラの中心を置かない。
+   帯を眉の上だけにして眉と眉の間を空けると、そこへ入ったニラが両眉をつなぐ緑の線に見える */
+const KING_NIRA_SEED = 909;
+const KING_NIRA_AVOID_X = 0.29, KING_NIRA_AVOID_Y = -0.105;
+let _kingNira = null;
+function _kingNiraSpec() {
+  if (_kingNira) return _kingNira;
+  let st = KING_NIRA_SEED >>> 0;
+  const rnd = () => (st = (st * 1664525 + 1013904223) >>> 0) / 4294967296; // 32bit線形合同法
+  return (_kingNira = _gyozaNiraSpec(_newNiraSpec(), rnd, true));
+}
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
 /* KING_RESULT_MIN_WAIT: 4本確定後、結果表示を最小何フレーム保持するか。
@@ -10227,7 +10303,7 @@ function _buildKingSpinLayers() {
   tone(sp);
   const [suOC, su] = prep();
   su.save(); su.scale(kk, kk);
-  _drawGyozaBody(su, REF, 0, 0, null, 'surface');
+  _drawGyozaBody(su, REF, 0, 0, null, 'surface', _kingNiraSpec()); // 本体レイヤーと同じ配置（_kingNiraSpec参照）
   /* ハイライトも模様と一緒に回す。球の上に固定するほうが光としては正しいが、そうすると
      ハイライトだけトーンの外に出る（元は生地と一緒にトーンを浴びている）か、ひだの下へ
      潜って隠れるかのどちらかになり、回っていないときの見た目が変わってしまう。
