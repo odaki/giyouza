@@ -614,7 +614,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.09';
+const VERSION = 'v8.10';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -7236,52 +7236,14 @@ function drawFish(f, t) {
   ctx.stroke();
   ctx.restore();
 
-  /* ── ギヨウザ本体（drawOneItem と同じパス構成） ── */
-  /* 本体楕円（焼きギヨウザカラー） */
-  ctx.beginPath();
-  ctx.ellipse(0, s*GYOZA_BODY_CY, s*GYOZA_BODY_RX, s*GYOZA_BODY_RY, 0, 0, Math.PI*2);
-  ctx.fillStyle = f.bodyGrd; // initGyogyo()で事前生成済み
+  /* ── ギヨウザ本体 ──
+     本体楕円だけ不透明度0.97で塗り、後ろの尾ひれをわずかに透かす。
+     模様とハイライトは不透明で描く（層を分けて呼ぶのはこのため） */
   ctx.globalAlpha = 0.97;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(120,90,50,0.55)';
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-
-  /* 蒸し焼き底面の焦げ色 */
-  ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(0, s*0.32, s*0.46, s*0.18, 0, 0, Math.PI*2);
-  ctx.fillStyle = 'hsl(30,60%,52%)';
-  ctx.globalAlpha = 0.45;
-  ctx.fill();
-  ctx.restore();
-
-  /* 頂部の薄皮 */
-  ctx.beginPath();
-  ctx.ellipse(0, -s*0.12, s*0.40, s*0.14, 0, 0, Math.PI*2);
-  ctx.fillStyle = 'hsl(50,55%,88%)';
+  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'sphere'); // bodyGrd は initGyogyo() で事前生成済み
   ctx.globalAlpha = 1;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(120,90,50,0.4)';
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-
-  /* ひだ */
-  ctx.strokeStyle = 'rgba(140,105,55,0.55)';
-  ctx.lineWidth = 0.9;
-  ctx.beginPath();
-  for (let i = -4; i <= 4; i++) {
-    const bx = i * s * 0.095;
-    ctx.moveTo(bx, -s*0.04);
-    ctx.bezierCurveTo(bx - s*0.04, -s*0.22, bx + s*0.04, -s*0.22, bx + s*0.07, -s*0.04);
-  }
-  ctx.stroke();
-
-  /* ハイライト */
-  ctx.beginPath();
-  ctx.ellipse(-s*0.18, -s*0.08, s*0.16, s*0.09, -0.4, 0, Math.PI*2);
-  ctx.fillStyle = 'rgba(255,255,255,0.28)';
-  ctx.fill();
+  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'surface');
+  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'gloss');
 
   /* びっくり目（ひだの右寄りに配置） */
   const ex = s * 0.30, ey = -s * 0.04;
