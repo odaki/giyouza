@@ -616,7 +616,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.13';
+const VERSION = 'v8.14';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1720,6 +1720,11 @@ function _markPauseCtxClock() {
   _pauseCtxWall = performance.now() / 1000;
 }
 function _foldPauseCtxStall() {
+  /* PAUSE のためにこちらから止めていた区間は、時計が進まなくて当然なので判定しない
+     （PAUSE_SUSPEND_ON 参照）。判定しないとその区間を「割り込みで時計が止まった」とみなし、
+     次の PAUSE 解除で作り直しが走る。呼び出し元は PAUSE 解除だけでなく、背面から戻ったときの
+     visibilitychange もあるので、除外は呼び出し側ではなくここに置く */
+  if (_pauseSuspended) { _pauseCtxTime = null; return; }
   if (!audioCtx || _pauseCtxTime === null) return;
   const dWall = performance.now() / 1000 - _pauseCtxWall;
   const dCtx  = audioCtx.currentTime - _pauseCtxTime;
@@ -1732,6 +1737,12 @@ function _foldPauseCtxStall() {
 
 function _updateCtxStall() {
   if (!audioCtx) { _ctxStallSec = 0; _ctxStallLastCtx = null; return; }
+  /* タッチ非対応の端末では、suspended は「PAUSE でこちらが止めた」か「解除して resume() が
+     効くのを待っている」状態で、時計が進まないのは当然。数えると、resume() が効くまでに
+     0.5秒以上かかった場合（背面から戻った直後など）に時計が死んだと誤認し、次の PAUSE 解除や
+     ミュート解除で作り直しが走る。iOS では suspended でも数える（resume() で戻らない
+     suspended を作り直しで拾うため。PAUSE_SUSPEND_ON 参照） */
+  if (PAUSE_SUSPEND_ON && audioCtx.state === 'suspended') { _ctxStallSec = 0; _ctxStallLastCtx = null; return; }
   const wall = performance.now() / 1000;
   const ct   = audioCtx.currentTime;
   if (_ctxStallLastCtx === null) { _ctxStallLastCtx = ct; _ctxStallLastWall = wall; return; }
@@ -15736,7 +15747,13 @@ function _enterPause() {
     clearTimeout(_pauseSuspendTimer);
     _pauseSuspendTimer = setTimeout(() => {
       _pauseSuspendTimer = 0;
-      if (!isPaused || !audioCtx || audioCtx.state !== 'running') return;
+      if (!isPaused || !audioCtx) return;
+      /* suspended も自分で止めた扱いにする。解除した直後、resume() が効く前にまた PAUSE すると
+         ここで suspended に出会う。印を付けないと、次の解除で「PAUSE 中に時計が進まなかった」
+         と判定されて作り直しが走る。interrupted・closed は割り込みなので触らない
+         （解除時に _resumeAudioCtx が作り直す） */
+      const st = audioCtx.state;
+      if (st !== 'running' && st !== 'suspended') return;
       _pauseSuspended = true;
       audioCtx.suspend().catch(() => {});
     }, (_GAIN_RAMP_SEC + 0.05) * 1000);
@@ -15751,13 +15768,12 @@ function _exitPause() {
     _arrowProgressAtPause = -1;
   }
   clearTimeout(_pauseSuspendTimer); _pauseSuspendTimer = 0;
-  /* こちらから止めていたなら、ポーズ中に時計が進んでいないのは当然なので、停止の判定から外す。
-     外さないと「割り込みで時計が止まった」とみなされ、解除のたびに作り直しが走る。
-     再開は _resumeAudioCtx が state（suspended）を見て resume() で行う */
-  if (_pauseSuspended) { _pauseSuspended = false; _pauseCtxTime = null; }
   /* ポーズ中にAudioContextが死んでいないかを、突入時の時計と突き合わせて判定する。
-     _resumeAudioCtx がこの結果を見て再作成するかを決める */
+     _resumeAudioCtx がこの結果を見て再作成するかを決める。こちらから止めていた場合は
+     判定しない（_foldPauseCtxStall 参照）ので、印を降ろすのは判定のあと。
+     再開は _resumeAudioCtx が state（suspended）を見て resume() で行う */
   _foldPauseCtxStall();
+  _pauseSuspended = false;
   _rafId = requestAnimationFrame(_gameLoop);
   if (audioCtx) _resumeAudioCtx(_resumeAudioAfterInterrupt);
 }
