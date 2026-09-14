@@ -146,7 +146,7 @@ canvas:focus-visible { outline: none; }
    有無フラグ: portrait（縦レイアウトを強制）/ cheatpanel（チートパネル）/ perf（性能オーバーレイ）
                soundtest（サウンドテストを常時解禁）/ mark（焦げ跡の当たり判定を可視化）
                nooc（OffscreenCanvas非対応の経路）/ noelev（無音<audio>の昇格を止める）
-               noresblur（結果文字のグローを外す）
+               noresblur（結果文字のグローを外す）/ nopausesuspend（PAUSE中にContextを止めない）
    数値:       dpr（実解像度倍率）/ king（キング蓄積の初期値）/ lat・jlat・sepad（音の遅延較正）
                perfms（性能オーバーレイのスパイク閾値ms） */
 const _DBG_QUERY = new URLSearchParams(location.search);
@@ -417,8 +417,10 @@ function drawPerf() {
       ` part ${_partPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_partPool.length}` +
       `  oc w${_freeWheelOCs.length} r${_freeResultOCs.length} k${_freeKingReelOCs.length} g${_freeGhostCanvases.length}`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
-       el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠 */
-    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(1)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}`,
+       el= <audio>要素の状態（p:paused t:currentTime）で、昇格と待避の判定根拠
+       psusp= PAUSE中にAudioContextを止める端末か（1=止める。PAUSE_SUSPEND_ON参照） */
+    `sess ${_iosSessionElevated ? 1 : 0}/${_iosSessionTries}try el p${_iosAudioEl.paused ? 1 : 0}t${_iosAudioEl.currentTime.toFixed(1)} route ${_speakerRouteEstablished ? 1 : 0} ctx ${audioCtx ? audioCtx.state : '-'}` +
+      ` psusp ${PAUSE_SUSPEND_ON ? 1 : 0}`,
     /* 割り込み（他アプリが音を鳴らす）からの復帰を切り分けるための行。
        re   = AudioContextを作り直した回数。0のまま音が出ないなら割り込みを検知できていない
        sr   = 現在／最初のsampleRate。変わっていれば復帰時にデバイスが切り替わっている
@@ -614,7 +616,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.11';
+const VERSION = 'v8.12';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -3985,7 +3987,8 @@ function toggleMute() {
   applyMuteGain();
   /* ミュート解除時: interrupted/suspended 状態を _resumeAudioCtx で確実に解消する。
      interrupted は再作成、suspended は resume() で対応。 */
-  if (!audioMuted && audioCtx && (audioCtx.state !== 'running' || _ctxLooksStalled())) {
+  /* PAUSE のために止めている間は再開しない（解除のときに _exitPause が再開する） */
+  if (!audioMuted && audioCtx && !_pauseSuspended && (audioCtx.state !== 'running' || _ctxLooksStalled())) {
     /* ここは AudioContext を作り直すことがあり、その場合 BGMソースも道連れになる。
        音量を戻すだけでは足りないので、復帰処理一式（_resumeAudioAfterInterrupt）を通す。
        ソースが生きていれば _resumeBgmFromPause は何もしない */
@@ -15684,8 +15687,24 @@ function _resumeAudioAfterInterrupt() {
   _resumeBgmFromPause();
 }
 
+/* ── タッチ非対応の端末（Mac など）では、PAUSE 中に AudioContext を止める ──
+   iOS・iPadOS では止めない（suspend() すると復帰できなくなる。README「iOS Safari Web Audio
+   実装ノート」参照）。iPad の Safari は Mac と名乗るので、UA ではなくタッチ対応かどうかで分ける。
+
+   Mac の Safari では、自動 PAUSE で背面に回したまま長時間（数十分）放置すると、そのタブの
+   音声出力だけが戻らなくなる。state は running・時計も実時間どおり進み、ページの中では
+   音が正しく計算されているのに、出力デバイスへ渡らない。再読み込みしても、新しい
+   AudioContext を作っても戻らず、同じ Safari の別のタブは Web Audio も <audio> も鳴り、
+   別のタブで開き直したゲームも鳴る。ページからは検知も修復もできないので、引き金になりうる
+   「背面で無音の Context を動かし続ける」状態そのものを作らない。これで防げるかは
+   長時間放置で確かめている段階で、比べられるよう ?nopausesuspend で従来の動作に戻せる */
+const PAUSE_SUSPEND_ON = !IS_TOUCH && !_dbgFlag('nopausesuspend');
+let _pauseSuspendTimer = 0;
+let _pauseSuspended = false;   // PAUSE のためにこちらから止めた（時計が止まっても異常ではない）
+
 /* ポーズ突入: 描画と音を止め、復帰に必要な位置・時刻を控える。
-   AudioContext自体は動かし続ける（iOS Safari: audioCtx.suspend()禁止） */
+   AudioContext は iOS では動かし続ける（suspend()禁止）。タッチ非対応の端末では止める
+   （PAUSE_SUSPEND_ON 参照） */
 function _enterPause() {
   cancelAnimationFrame(_rafId);
   /* shooting 中にポーズした場合: arrowProgress を保存し、復帰後に _arrowStartWallTime を
@@ -15707,6 +15726,18 @@ function _enterPause() {
     _destroyBGMSource(_GAIN_RAMP_SEC); // 段差を作らずに止める（上記参照）
   }
   applyMuteGain();
+  if (PAUSE_SUSPEND_ON && audioCtx) {
+    /* 止めるのは音量を0へ下げきってから。下げている途中で止めると、そこで波形が途切れて
+       段差がそのまま出力に残る（_destroyBGMSource のフェードと同じ理由）。
+       背面ではタイマーが間引かれて遅れるが、止めるのが遅れるだけで害は無い */
+    clearTimeout(_pauseSuspendTimer);
+    _pauseSuspendTimer = setTimeout(() => {
+      _pauseSuspendTimer = 0;
+      if (!isPaused || !audioCtx || audioCtx.state !== 'running') return;
+      _pauseSuspended = true;
+      audioCtx.suspend().catch(() => {});
+    }, (_GAIN_RAMP_SEC + 0.05) * 1000);
+  }
   draw(); // オーバーレイを即座に描画
 }
 
@@ -15716,6 +15747,11 @@ function _exitPause() {
     _arrowStartWallTime = performance.now() / 1000 - _arrowProgressAtPause * ARROW_FLIGHT_SEC;
     _arrowProgressAtPause = -1;
   }
+  clearTimeout(_pauseSuspendTimer); _pauseSuspendTimer = 0;
+  /* こちらから止めていたなら、ポーズ中に時計が進んでいないのは当然なので、停止の判定から外す。
+     外さないと「割り込みで時計が止まった」とみなされ、解除のたびに作り直しが走る。
+     再開は _resumeAudioCtx が state（suspended）を見て resume() で行う */
+  if (_pauseSuspended) { _pauseSuspended = false; _pauseCtxTime = null; }
   /* ポーズ中にAudioContextが死んでいないかを、突入時の時計と突き合わせて判定する。
      _resumeAudioCtx がこの結果を見て再作成するかを決める */
   _foldPauseCtxStall();
