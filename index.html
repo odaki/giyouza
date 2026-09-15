@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.17';
+const VERSION = 'v8.18';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2157,21 +2157,41 @@ function _scheduleBossBgmRenders(immediate = false) {
    renderBGMBuffer() はジングル（約5.7秒）より先に完了するため BGM 再生に間に合う。
    _unlockAudio() / _onFirstGesture() / 各ボタンハンドラが初回ジェスチャーで呼ぶ。 */
 
+/* AudioContext と、それに属する配線一式を作る。初回（getAudioCtx）と作り直し
+   （_recreateAudioGraph）の両方がここを通る。**Context に属するもの・sampleRate で値が
+   変わるものは、必ずここに置くこと。** 片方の経路にだけ置くと、AirPods の接続変化や
+   他アプリのセッション変更で作り直したときに旧い値のまま残る（ループ長の量子化＝拍グリッドの
+   基準、ビート表示の先読み、など）。
+   ここに置かないもの:
+   ・BGM/ボスのバッファ … AudioBuffer は Context に束縛されず、作り直しをまたいで使える
+     （sampleRate が違えば再生時にリサンプルされる）。焼くのは初回だけ
+   ・ノイズバッファ … playNoise 側が sampleRate の不一致を検出して作り直す */
+function _createAudioGraph() {
+  audioCtx   = new AudioContext({ latencyHint: 'interactive' });
+  masterGain = audioCtx.createGain();
+  /* ここで audioMuted を直接反映する。タイトル画面の真エンディング再生ボタンは
+     initGame() を経由せず直接 getAudioCtx() を呼ぶため、ここを無条件で1にして
+     「後で applyMuteGain() が呼ばれる」ことに依存すると、その経路の初回再生で
+     ミュート設定が反映されず音が鳴ってしまう。lsLoad() はページ読み込み時点で
+     必ず完了しており（getAudioCtx はユーザー操作でしか呼ばれない）、
+     ここで audioMuted を見て差し支えない */
+  masterGain.gain.value = audioMuted ? 0 : 1;
+  /* ?perf の sr 表示の基準（作り直しで sampleRate が変わったかを見る）。最初の1回だけ控える */
+  if (_audioSampleRateAtFirst === null) _audioSampleRateAtFirst = audioCtx.sampleRate;
+  masterGain.connect(_createMasterLimiter(audioCtx));
+  /* BGM: bgmGain → bgmToneShelf → masterGain → destination（_buildBgmGainChain参照） */
+  _buildBgmGainChain(audioCtx, masterGain);
+  /* sampleRate が確定してから決まる値 */
+  _updateBgmQuantizedLoopDur(); // ループ量子化ドリフト補正用の実ループ長
+  /* デバイス遅延を実測してビート表示先読みを更新する。resume() のあとに値が確定するので、
+     少し待ってもう一度測る */
+  _updateBeatDisplayAdvance();
+  setTimeout(_updateBeatDisplayAdvance, 500);
+}
+
 function getAudioCtx() {
   if (!audioCtx) {
-    audioCtx   = new AudioContext({ latencyHint: 'interactive' });
-    masterGain = audioCtx.createGain();
-    /* ここで audioMuted を直接反映する。タイトル画面の真エンディング再生ボタンは
-       initGame() を経由せず直接 getAudioCtx() を呼ぶため、ここを無条件で1にして
-       「後で applyMuteGain() が呼ばれる」ことに依存すると、その経路の初回再生で
-       ミュート設定が反映されず音が鳴ってしまう。lsLoad() はページ読み込み時点で
-       必ず完了しており（getAudioCtx はユーザー操作でしか呼ばれない）、
-       ここで audioMuted を見て差し支えない */
-    masterGain.gain.value = audioMuted ? 0 : 1;
-    _audioSampleRateAtFirst = audioCtx.sampleRate; // ?perf の sr 表示（再作成での変化を見る基準）
-    masterGain.connect(_createMasterLimiter(audioCtx));
-    /* BGM: bgmGain → bgmToneShelf → masterGain → destination（_buildBgmGainChain参照） */
-    _buildBgmGainChain(audioCtx, masterGain);
+    _createAudioGraph();
     /* BGMループを非同期でオフラインレンダリング（完了後 bgmBuffer にセット）
        startBGM() がバッファ未完状態で呼ばれていた場合は完了後に起動する */
     renderBGMBuffer(audioCtx.sampleRate).then(buf => {
@@ -2192,15 +2212,9 @@ function getAudioCtx() {
        同一内容 */
     bossBgmBuffers = new Array(BGM_TIER_COUNT).fill(null);
     _scheduleBossBgmRenders();
-    /* AudioContext生成直後にデバイス遅延を実測してビート表示先読みを更新
-       resume()後に値が確定するので少し待って再計測 */
-    _updateBeatDisplayAdvance();
-    setTimeout(_updateBeatDisplayAdvance, 500);
     /* ホワイトノイズバッファを事前生成（最長ノイズ使用: reach_jackpot dur=0.3+0.05=0.35s → 0.45s確保）
        playNoise() はこのバッファを参照するだけでフレームごとのランダム生成ループが不要になる */
     _buildNoiseBuffer();
-    /* ループ量子化ドリフト補正用: sampleRate確定後に実ループ長を計算 */
-    _updateBgmQuantizedLoopDur();
   }
   return audioCtx;
 }
@@ -2249,25 +2263,10 @@ function _recreateAudioGraph() {
      早期リターンし、interrupted 復帰後に BGM が二度と戻らなくなる */
   _destroyBGMSource();
   try { audioCtx.close(); } catch(_e) {}
-  audioCtx  = new AudioContext({ latencyHint: 'interactive' });
+  _createAudioGraph(); // 配線と sampleRate 依存の値は初回と共通（_createAudioGraph参照）
   audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
-  masterGain = audioCtx.createGain();
-  masterGain.gain.value = audioMuted ? 0 : 1;
-  masterGain.connect(_createMasterLimiter(audioCtx));
-  _buildBgmGainChain(audioCtx, masterGain); // 配線はgetAudioCtxと共通（片方だけ直し忘れる事故を防ぐ）
-  /* sampleRate依存の初期化は再作成側にも必ず置くこと。getAudioCtx 側だけに置くと、
-     AirPodsの接続変化や他アプリのセッション変更で新しいContextのsampleRateが変わったときに、
-     ループ長の量子化（拍グリッドの基準）とビート表示の先読みが旧値のまま残る。
-     ノイズバッファは playNoise 側が sampleRate 不一致を検出してフォールバックするので
-     ここでは作り直さない。BGM/ボスのバッファはAudioBufferなのでContextに束縛されず、
-     再作成をまたいでそのまま使える（sampleRateが違えば再生時にリサンプルされる）。
-     _audioRecreateCount / _audioSampleRateAtFirst は ?perf の診断表示用 */
-  if (_audioSampleRateAtFirst === null) _audioSampleRateAtFirst = audioCtx.sampleRate;
-  _audioRecreateCount++;
+  _audioRecreateCount++; // ?perf の診断表示用
   _rebaseAudioClockState();
-  _updateBgmQuantizedLoopDur();
-  _updateBeatDisplayAdvance();
-  setTimeout(_updateBeatDisplayAdvance, 500);
   _speakerRouteEstablished = false; // 新しいContextではルート再確立が必要
   /* AVAudioSessionの昇格も作り直しで失われうるので再武装する（_elevateAudioSession参照）。
      消音モードではこの昇格が唯一の発音経路なので、取りこぼすと無音になる。
