@@ -618,7 +618,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.30';
+const VERSION = 'v8.31';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1315,6 +1315,86 @@ const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロ�
 let worms = [], uzaTexts = [], dumplings = [];
 let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
 
+/* ════════════════ 画面（フェーズ）の性質 ════════════════
+   phase ごとの性質を1行ずつ持つ。phase を足すときはここへ1行足し、全部の列を決める。
+   判定は下の述語から引くこと。phase の並びを判定の場所ごとに書き写すと、phase を足したときに
+   広げ忘れた場所だけが黙って古い扱いのまま残る。
+
+   update       その phase の1フレームぶんの更新。必ず持たせる（無いと起動時に例外で止まる）
+   draw         全画面演出の層（ボタン類より下、バッジ類より上）で描くもの。無ければ null。
+                タイトル・サウンドテスト・ドラムパッドはそれぞれ別の層で描く（draw() 参照）。
+                描く関数は自前でも phase を確かめるので、表と関数のどちらかが欠けても
+                別の phase で誤って描かれることはない
+   pauseBtn     PAUSE ボタンを持つか。持たない画面は自動 PAUSE もしない（autoPauseExempt）。
+                入ってしまうと解除する手段が無いため
+   ach          実績ボタンを出して押せるか（achBtnEnabled）。描画と当たり判定の両方がこれを見る
+   bgmResume    止まる前の続きから BGM を鳴らし直してよいか（noBgmResumePhase）。
+                false にするのは「そもそも鳴らすものが無い」phase だけ。キング戦系は true のまま
+                にする: 位置とレートを保って作り直す復帰（_resumeBgmFromPause）はボス用バッファ・
+                ボスのテンポをそのまま引き継ぐので正しく戻る。false にすると、戦闘中にソースを
+                失う経路（PAUSE 解除・AudioContext の作り直し）のすべてで二度と BGM が戻らない
+   kingBattle   キング戦系か（isKingBattlePhase）。通常 UI（ホイール・BET バー・シンクメーター等）を
+                隠し、テンポ・段階差し替え・テープ停止を戦闘側が一括で持つので BGM を自動で鳴らさない
+   tapeStopped  敗北が確定してテープが止まっている（stopBGMTape でレートが 0.001 まで落ちている）か。
+                コイン表示の追従に下限レートを与える（_updateAlways 内の coinsDisp 参照） */
+const PHASE_TRAITS = _definePhaseTraits({
+  /* タイトル。進行中の状態が無いので PAUSE しない。BGM はまだ始まっていない */
+  startup:          { update: updateStartup,          draw: null, pauseBtn: false, bgmResume: false },
+  tapestart:        { update: updateTapestart,        draw: null },
+  idle:             { update: updateTrial,            draw: null },
+  reach:            { update: updateTrial,            draw: null },
+  shooting:         { update: updateTrial,            draw: null },
+  done:             { update: updateTrial,            draw: null },
+  /* 音を鳴らすだけのモード。ゲームは進めない（ドラムパッドは叩いた光とジョグの回転だけ進める）。
+     演奏の邪魔になるので PAUSE ボタンを描かない。鳴らす音はモード側が完全に握っている */
+  soundTest:        { update: () => {},               draw: null, pauseBtn: false, ach: false, bgmResume: false },
+  drumPad:          { update: updateDrumPad,          draw: null, pauseBtn: false, ach: false, bgmResume: false },
+  /* 予告中はテープストップで BGM を畳んでいる最中で、次は initKingBattle が起こす
+     （startBGM で割り込むとグレースケールも即時に解けてしまう）。
+     ホイール等の通常 UI はまだ出しているので、キング戦系には入れない */
+  kingOmen:         { update: updateKingOmen,         draw: drawKingOmen, bgmResume: false },
+  kingBattle:       { update: updateKingBattle,       draw: drawKingBattle, kingBattle: true },
+  /* 違うのは的の破片だけで、本体とゲージは戦闘中と同じなので drawKingBattle が受け持つ */
+  kingShatter:      { update: updateKingReelShatter,  draw: drawKingBattle, kingBattle: true },
+  /* 以下の3つは bgmSource を持たない。kingVictory は勝利ファンファーレのために
+     stopKingBGMForVictory で破棄し、kingVictoryOutro は無音を保って復帰時のテープ加速
+     （tapestart）で世界が動き出す対比を作り、trueEnding は専用のオシレーターテーマだけを鳴らす。
+     PAUSE 解除で BGM を作り直すと演出が壊れる */
+  kingVictory:      { update: updateKingVictory,      draw: drawKingVictory,      kingBattle: true, bgmResume: false },
+  kingVictoryOutro: { update: updateKingVictoryOutro, draw: drawKingVictoryOutro, kingBattle: true, bgmResume: false },
+  /* エンドロールは全画面の演出で、どこをタップしても段送りする。実績パネルが重なると
+     演出が読めなくなるので、実績ボタンは描かず、その領域のタップも段送りとして扱う */
+  trueEnding:       { update: updateTrueEnding,       draw: drawTrueEnding,       kingBattle: true, bgmResume: false, ach: false },
+  /* 没収（_startKingDefeat）で kingDefeat に入った時点からテープが止まっている。
+     kingShatter はその前なので tapeStopped に入れない */
+  kingDefeat:       { update: updateKingDefeat,       draw: drawKingDefeat,       kingBattle: true, tapeStopped: true },
+  kingDefeatShrink: { update: updateKingDefeatShrink, draw: drawKingDefeatShrink, kingBattle: true, tapeStopped: true },
+  kingDefeatOutro:  { update: updateKingDefeatOutro,  draw: drawKingDefeatOutro,  kingBattle: true, tapeStopped: true },
+});
+
+/* 省略した列を既定値で埋め、欠けている列があれば読み込み時に止める。
+   参照している関数はすべて function 宣言で巻き上げられるので、表はこの位置で作れる */
+function _definePhaseTraits(rows) {
+  const defaults = { pauseBtn: true, ach: true, bgmResume: true, kingBattle: false, tapeStopped: false };
+  for (const [name, row] of Object.entries(rows)) {
+    if (typeof row.update !== 'function' || !('draw' in row)) throw new Error(`phase ${name} の update か draw が無い`);
+    rows[name] = Object.freeze({ ...defaults, ...row });
+  }
+  return Object.freeze(rows);
+}
+
+/* 自動PAUSEの対象外か。ゲーム本編を同じように自動解除しないのは意図的で、復帰時の
+   audioCtx 回復（interrupted 状態の再作成）を PAUSE 解除のタップ＝ユーザージェスチャーに
+   一本化しているため。ジェスチャー無しで解除すると iOS でその経路が働かない */
+function autoPauseExempt() { return !PHASE_TRAITS[phase].pauseBtn; }
+function achBtnEnabled() { return PHASE_TRAITS[phase].ach; }
+function isKingBattlePhase() { return PHASE_TRAITS[phase].kingBattle; }
+function noBgmResumePhase() { return !PHASE_TRAITS[phase].bgmResume; }
+/* 「ゲームのBGMを自動で鳴らしてはいけない」phase。ミュート解除やPAUSE解除の補償経路
+   （bgmSourceが無ければ起動する、という善意の処理）から通常BGMが割り込むのを止める。
+   鳴らし直してはいけない phase に、BGM を戦闘側が握るキング戦系を足したもの */
+function noAutoBgmPhase() { return noBgmResumePhase() || isKingBattlePhase(); }
+
 /* ════════════════ 実績システム ════════════════ */
 /* 注意: id は _SCHEMA_HASH に含まれるため、リネームすると全セーブデータが消去される。
    play_10/shot_100/coins_500 等の数値は実際の閾値（100回/1000本/1000枚）と一致して
@@ -1507,12 +1587,6 @@ const TRUE_ENDING_BTN = { x: BTN_RIGHT + BTN_SIZE + _BTN_GAP, y: BTN_TOP, w: BTN
    市販ゲームの「クリア後に解禁」の作法に合わせ、真エンディングを見るまでは
    描画も判定もしない（drawSoundTest参照） */
 const SOUND_TEST_BTN = { x: BTN_RIGHT + (BTN_SIZE + _BTN_GAP) * 2, y: BTN_TOP, w: BTN_SIZE, h: BTN_SIZE };
-/* エンドロール中は実績ボタンを無効にする。全画面の演出中に実績パネルが重なると
-   演出が読めなくなる。ボタン自体も描画しない: 見えているのに反応しないほうが
-   迷わせるうえ、エンドロールはどこをタップしても段送りする画面なので、この領域の
-   タップも素直に段送りとして扱えばよい（drawの右上ボタン群と各入力ハンドラの
-   両方でこの述語を使う＝表示と当たり判定を一箇所で揃える） */
-function achBtnEnabled() { return phase !== 'trueEnding' && phase !== 'soundTest' && phase !== 'drumPad'; }
 
 /* 全画面ボタンのアイコン。Path2D で SVG パスをそのまま利用（viewBox="0 0 24 24"）。
    スケール = BTN_SIZE / 24 でボタン全体に合わせ、(-12,-12) オフセットで中央揃え。 */
@@ -3944,16 +4018,6 @@ document.addEventListener('mousedown', _onFirstGesture, true);
      ・AudioContext を閉じる（?closebg）→ 閉じてもキューの中身は消えない
      ・無音<audio>要素の有無（?noelev）→ 無関係。出力先(スピーカー/AirPods)にも依らない
    OSの出力キューに渡った音声はこちらのどの操作でも取り消せない。追わないこと */
-/* 自動PAUSEの対象外フェーズ。タイトルは進行中の状態が無く、サウンドテストと
-   ドラムパッドは演奏の邪魔になるのでPAUSEボタンを描いていない＝入ってしまうと
-   解除する手段が無くなる。
-   ゲーム本編を同じように自動解除しないのは意図的で、復帰時のaudioCtx回復
-   （interrupted状態の再作成）をPAUSE解除のタップ＝ユーザージェスチャーに
-   一本化しているため。ジェスチャー無しで解除するとiOSでその経路が働かない */
-function autoPauseExempt() {
-  return phase === 'startup' || phase === 'soundTest' || phase === 'drumPad';
-}
-
 /* 背面から戻ったあと、最初のユーザー操作で音声を立て直す。
 
    iOSでは中断からの復帰（AudioContextの作り直し）がユーザージェスチャーの中でしか
@@ -4587,7 +4651,7 @@ function initGame() {
 /* bgmSourceがまだ無い間、的を止めたまま待つ上限時刻（performance.now()基準）。
    tapestartの回転係数は tapeRate = bgmSource ? getBgmRateJS() : 1 で、ソースが
    無い場合は1（全速）にフォールバックする。こんがり達成の復帰は
-   _NO_BGM_SOURCE_PHASES（kingVictory等）でソースを破棄済みなので、何もしないと
+   kingVictory 等でソースを破棄済み（PHASE_TRAITS の bgmResume 参照）なので、何もしないと
    1フレーム目でtapeRate=1になり、的が全速で回ったうえ即座にidleへ移行して
    スピンアップが丸ごと飛ぶ（startBGMTape は resumeAudioCtx 経由で必ず非同期に走る）。
    そこで「audioCtxはあるがソース生成待ち」の間だけ回転係数を0に held する。
@@ -4834,7 +4898,7 @@ function init(fromStartup, fromGameOver) {
        startBGM()を呼ぶと即時フルテンポで鳴り出してテープ加速が丸ごと飛ぶ
        （的も回転係数1で全速スピンになる）。
        条件（!bgmSource 等）ではなく引数で明示的に抑制する: こんがり達成の復帰は
-       _NO_BGM_SOURCE_PHASES でソースを破棄済み、失敗の復帰は stopBGMTape がソースを
+       kingVictory 等でソースを破棄済み、失敗の復帰は stopBGMTape がソースを
        極低速で生かしたまま保持、と経路ごとに状態が違うため、状態を見る書き方では
        片方だけ通ってしまう */
     if (audioCtx && !bgmSource && !jingleScheduler && !fromGameOver) startBGM();
@@ -5403,7 +5467,7 @@ function _updateAlways() {
        （下限0.5なら500枚でも約1.4秒）。プレイ中・tapestartの加速中は生のレートを
        使うので、「tapestart中はコイン表示が0で止まる」等の見え方は変わらない */
     const _rateRaw = audioCtx ? getBgmRateJS() : 1;
-    const _rate = (isGameOver || KING_DEFEAT_PHASES.has(phase))
+    const _rate = (isGameOver || PHASE_TRAITS[phase].tapeStopped)
       ? Math.max(_rateRaw, COIN_DISP_MIN_RATE) : _rateRaw;
     /* 最低ステップ3/フレーム: 指数減衰の尻尾（1コイン刻みの長期化）を打ち切る。
        BET100 の減算が約60→24フレームに短縮され、終盤に毎フレーム続いていた
@@ -5416,81 +5480,40 @@ function _updateAlways() {
   grayRateCur += (grayRateTarget - grayRateCur) * 0.04;
 }
 
-/* phase ごとの update。ここに載っているphaseは自前のupdateへ委譲してそのまま終わり、
-   通常モードのトライ進行（ホイールの回転・矢の判定など）は走らない。
-   phaseを追加したらここへ1行足すこと。if連鎖で書くと、足したときに書き忘れても
-   何も起きない（通常モードの処理へ落ちる）ぶん気づきにくい。
-   startup / tapestart は通常モードの状態を共有していて委譲では書けないので、
-   update() 側の分岐に残してある。
-   参照している関数はすべて function 宣言で巻き上げられるため、この位置で構わない */
-/* phase ごとの全画面演出の描画。_PHASE_UPDATERS と対で持つ:
-   phaseを追加したら「update をどうするか」と「何を描くか」の両方がここに並ぶので、
-   片方だけ足して気づかない状態になりにくい。
-   kingShatter は的の破片だけが違って本体とゲージは戦闘中と同じなので、drawKingBattle が
-   2つのphaseを受け持つ（関数側のガードも同じ2つを見ている）。
-   各関数は自前でも phase を確認するので、表と関数のどちらか片方が欠けても
-   誤って描かれることはない */
-const PHASE_DRAWERS = {
-  kingOmen:         drawKingOmen,
-  kingBattle:             drawKingBattle,
-  kingShatter:      drawKingBattle,
-  kingVictory:      drawKingVictory,
-  kingVictoryOutro: drawKingVictoryOutro,
-  trueEnding:       drawTrueEnding,
-  kingDefeat:       drawKingDefeat,
-  kingDefeatShrink: drawKingDefeatShrink,
-  kingDefeatOutro:  drawKingDefeatOutro,
-};
-
-const _PHASE_UPDATERS = {
-  kingOmen:         updateKingOmen,
-  kingBattle:             updateKingBattle,
-  kingShatter:      updateKingReelShatter,
-  kingVictory:      updateKingVictory,
-  kingVictoryOutro: updateKingVictoryOutro,
-  trueEnding:       updateTrueEnding,
-  kingDefeat:       updateKingDefeat,
-  kingDefeatShrink: updateKingDefeatShrink,
-  kingDefeatOutro:  updateKingDefeatOutro,
-};
-
 function update() {
   _updateAlways();
-  /* サウンドテスト・ドラムパッド中はゲームを進めない（音を鳴らすだけのモード）。
-     ドラムパッドは叩いた光とジョグの回転だけ進める */
-  if (phase === 'soundTest') return;
-  if (phase === 'drumPad') { updateDrumPad(); return; }
-  if (phase === 'startup') {
-    /* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
-       その回転角は startupTimer と w.speed から直接求める（draw側参照）。
-       w.rot は誰も読まないため加算しない（ゲーム開始時に init() がホイールを
-       作り直すので、ここで進めておく必要も無い） */
-    startupTimer++; // draw()ではなくupdate()でカウント（draw分離後も60fps固定）
-    return;
+  PHASE_TRAITS[phase].update();
+}
+
+/* タイトル画面の背景はホイールではなく丸いギヨウザロゴに差し替え済みで、
+   その回転角は startupTimer と w.speed から直接求める（draw側参照）。
+   w.rot は誰も読まないため加算しない（ゲーム開始時に init() がホイールを
+   作り直すので、ここで進めておく必要も無い） */
+function updateStartup() {
+  startupTimer++; // draw()ではなくupdate()でカウント（draw分離後も60fps固定）
+}
+
+/* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期
+   .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算。
+   ソースがまだ無い場合は、生成待ち（startBGMTapeが非同期で走る）の間だけ0で止めて待ち、
+   上限を過ぎたら1で即座に回り出す（tapestartSrcWaitUntil の定義部コメント参照） */
+function updateTapestart() {
+  const tapeRate = bgmSource ? Math.max(0, Math.min(1, getBgmRateJS()))
+    : (performance.now() < tapestartSrcWaitUntil ? 0 : 1);
+  for (const w of wheels) w.rot += w.speed * tapeRate;
+  /* テープ加速完了（色が完全に戻った）ら射撃解放 */
+  if (tapeRate >= 0.99) {
+    phase = 'idle';
+    /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
+    if (isSlowSpin) rampBGMRate(slowHandRate(bet), 1200, 'easeOut', true); // ゲームオーバーリカバリー後もBET対応速度へ
+    /* ここは新しいトライの開始ではなくphase遷移なので、init()は呼ばず先打ちだけ消費する
+       （ガード解除はconsumePendingShoot側の責任） */
+    consumePendingShoot();
   }
-  if (phase === 'tapestart') {
-    /* テープ速度をそのまま回転係数に使う → 音・色・回転が完全同期
-       .value は setValueCurveAtTime 中に intrinsic 値を返すブラウザがあるため JS 側で計算。
-       ソースがまだ無い場合は、生成待ち（startBGMTapeが非同期で走る）の間だけ0で止めて待ち、
-       上限を過ぎたら1で即座に回り出す（tapestartSrcWaitUntil の定義部コメント参照） */
-    const tapeRate = bgmSource ? Math.max(0, Math.min(1, getBgmRateJS()))
-      : (performance.now() < tapestartSrcWaitUntil ? 0 : 1);
-    for (const w of wheels) w.rot += w.speed * tapeRate;
-    /* テープ加速完了（色が完全に戻った）ら射撃解放 */
-    if (tapeRate >= 0.99) {
-      phase = 'idle';
-      /* ゲームオーバーリカバリー後にスローイベントなら、復帰完了後にテンポ半減 */
-      if (isSlowSpin) rampBGMRate(slowHandRate(bet), 1200, 'easeOut', true); // ゲームオーバーリカバリー後もBET対応速度へ
-      /* ここは新しいトライの開始ではなくphase遷移なので、init()は呼ばず先打ちだけ消費する
-         （ガード解除はconsumePendingShoot側の責任） */
-      consumePendingShoot();
-    }
-    return;
-  }
-  /* 自前のupdateを持つphaseはここで委譲して終わる（_PHASE_UPDATERS参照）。
-     以降は通常モードのトライ進行 */
-  const _pu = _PHASE_UPDATERS[phase];
-  if (_pu) { _pu(); return; }
+}
+
+/* 通常モードのトライ進行（idle・reach・shooting・done）。ホイールの回転・矢の判定・結果表示 */
+function updateTrial() {
   for (const w of wheels) {
     if (!w.locked) w.rot += w.speed;
     if (w.result && w.resultPop < 1) w.resultPop = Math.min(1, w.resultPop + 0.045);
@@ -6914,61 +6937,7 @@ function drawScreenFade() {
   ctx.restore();
 }
 
-/* ════════════════ キングギヨウザ フェーズの区分と後片付け ════════════════ */
-/* ボス戦闘系フェーズ（kingOmenは含まない: 予兆中はホイール等の通常UIをまだ表示する）。
-   通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは必ずこの述語を使うこと。
-   phase比較のチェーンを各ガードにコピーすると、フェーズを追加したとき（kingShatter等）に
-   広げ忘れが実バグになる。一元化により全ガードへ同時反映される */
-const _KING_BATTLE_PHASES = new Set(
-  ['kingBattle', 'kingShatter', 'kingVictory', 'kingVictoryOutro', 'trueEnding',
-   'kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
-function isKingBattlePhase() { return _KING_BATTLE_PHASES.has(phase); }
-/* 敗北が確定してテープが止まっている（stopBGMTapeでレートが0.001まで落ちている）
-   フェーズ。コイン表示の追従に下限レートを与えるために使う（update内のcoinsDisp参照）。
-   kingShatterは含めない: 没収（_startKingDefeat）はその後なので表示は動いていない */
-const KING_DEFEAT_PHASES = new Set(['kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
-
-/* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
-   kingBattle/kingShatter/kingDefeat系はstopBGMTapeでソースを極低速のまま生かして
-   いるため一時停止からの復帰でそのまま再開できるが、kingVictory（勝利
-   ファンファーレ用にstopKingBGMForVictoryで破棄）とtrueEnding（専用の
-   オシレーターテーマのみでbgmSourceを使わない）はソースが存在しない前提の
-   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない。
-   kingVictoryOutro（飛び去り演出）も同様。ここは意図的に無音を保ち、復帰時の
-   テープ加速（tapestart）で世界が動き出す対比を作っている区間なので、
-   ポーズ→再開でBGMが鳴り出すと演出が壊れる */
-const _NO_BGM_SOURCE_PHASES = new Set(['kingVictory', 'kingVictoryOutro', 'trueEnding']);
-
-/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の補償経路
-   （bgmSourceが無ければ起動する、という善意の処理）から通常BGMが割り込むのを止めるための述語。
-   内訳:
-     startup            まだ始まっていない
-     kingOmen           予告中（startBGMがグレースケールを即時解除してしまう）
-     soundTest/drumPad  鳴らす音をモード側が完全に握っている
-     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ
-     キング戦系         テンポ・段階差し替え・テープ停止を戦闘側が一括で持つ
-   判定は必ずこの述語に集約すること。除外条件を各ガードにコピーすると、新しいモードを足す
-   たびに片方だけ直す事故が起き、そのモードでミュート解除すると通常BGMが鳴り出す */
-function noAutoBgmPhase() {
-  return noBgmResumePhase() || isKingBattlePhase();
-}
-
-/* 「止まる前の続きから鳴らし直してはいけない」フェーズ。noAutoBgmPhase より狭い。
-   **キング戦系は含めない。** 位置とレートを保って作り直す復帰（_resumeBgmFromPause）は
-   ボス用バッファ・ボスのテンポをそのまま引き継ぐので、キング戦でも正しい復帰になる。
-   ここにキング戦を入れると、戦闘中にソースを失う経路（PAUSE解除・AudioContext再作成）の
-   すべてで二度とBGMが戻らなくなる。
-   除外するのは「そもそも鳴らすものが無い」フェーズだけ:
-     startup            まだ始まっていない
-     kingOmen           テープストップでBGMを畳んでいる最中。次はinitKingBattleが起こす
-     soundTest/drumPad  鳴らす音をモード側が完全に握っている
-     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ */
-function noBgmResumePhase() {
-  return phase === 'startup' || phase === 'kingOmen' ||
-         phase === 'soundTest' || phase === 'drumPad' ||
-         _NO_BGM_SOURCE_PHASES.has(phase);
-}
-
+/* ════════════════ キングギヨウザ 後片付け ════════════════ */
 let defeatOutro = null; // { step, timer, dumplings } つなぎ演出の状態（null=非表示）
 /* こんがり達成側の退場演出の状態（null=非表示、drawKingVictoryOutro参照）。
    敗北側（defeatOutro）と並べて、両方を片付ける cleanupKingBattleState の隣に置く */
@@ -13611,14 +13580,14 @@ function _drawPauseIcon() {
    エンディング タイトル画面かつ視聴済みのみ。ゲーム途中で見るものではなく
                 スタートと並列の選択肢という位置づけのため実績パネル内には置かない
    全画面       Fullscreen API 対応環境のみ
-   ポーズ       タイトル画面以外 */
+   ポーズ       PAUSE ボタンを持つ画面のみ（PHASE_TRAITS の pauseBtn） */
 function drawTopButtons() {
   if (achBtnEnabled())                      _drawTopBtn(ACH_TROPHY,      showAchievements, _drawTrophyIcon);
   if (phase === 'startup' && trueEndingSeen) _drawTopBtn(TRUE_ENDING_BTN, false,            _drawEndingMedalIcon);
   if (phase === 'startup' && soundTestUnlocked()) _drawTopBtn(SOUND_TEST_BTN, false,        _drawSoundTestIcon);
   if (FS_SUPPORTED)                          _drawTopBtn(FS_BTN_RECT,     false,            _drawFullscreenIcon);
                                              _drawTopBtn(MUTE_BTN,        false,            _drawMuteIcon);
-  if (phase !== 'startup' && phase !== 'soundTest' && phase !== 'drumPad') _drawTopBtn(PAUSE_BTN, false, _drawPauseIcon);
+  if (PHASE_TRAITS[phase].pauseBtn)          _drawTopBtn(PAUSE_BTN,       false,            _drawPauseIcon);
   if (phase === 'drumPad')                   _drawTopBtn(DP_BACK_BTN,     false,            _drawReturnIcon);
 }
 
@@ -13735,7 +13704,7 @@ function _drawForeground() {
      ここは通常モードのfx/whl/txtプローブの範囲外なので、独立して計測する
      （戦闘中に全プローブが0.0なのにgapが50msという実機データの死角だった） */
   const _tKing = PERF_ON ? performance.now() : 0;
-  const _pd = PHASE_DRAWERS[phase];
+  const _pd = PHASE_TRAITS[phase].draw;
   if (_pd) _pd();
   if (PERF_ON) perfMark('king', _tKing);
 
@@ -13852,7 +13821,7 @@ function _drawFrameEffects() {
      bgmSourceがある（＝拍位置が実際に進んでいる）ときだけ描くこと。
      getBeatPulseはbgmAccumStepの積算に依存し、bgmAccumStepはbgmSourceが無いと早期return
      するため、ソースを破棄しているフェーズ（kingVictory / kingVictoryOutro / trueEnding、
-     _NO_BGM_SOURCE_PHASES参照）ではパルスが最後の値のまま凍結する。その値が0以外だと
+     PHASE_TRAITS 参照）ではパルスが最後の値のまま凍結する。その値が0以外だと
      半透明の金枠が一定の太さで描かれ続け、外枠の色が変わったように見える
      （ミュートを切り替えると出たり消えたりするのはこの枠の描画条件そのもの）。
      実測: ソース破棄の瞬間のpulseが0.9344なら5.6px幅で固定表示され続ける */
