@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.18';
+const VERSION = 'v8.19';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5846,9 +5846,8 @@ function _updateAlways() {
   /* キングギヨウザ予兆（KING_OMEN_FX_*の定義部参照）。出現へ近づくほど、そのときの収束を
      予告する動きが強まる。
      蓄積と実績の条件は _kingOmenProgress が両方まとめて持つ（どちらかが足りなければ0を
-     返す）ので、ここで実績を別に見ない。以前は「こんがり以外の全実績」を要求していたが、
-     それだと初回は最後の実績が解除された瞬間にいきなり最終段から始まり、浅い段が一度も
-     起きなかった。 */
+     返す）ので、ここで実績を別に見ない。「こんがり以外の全実績」をここでも条件にすると、
+     初回は最後の実績が解除された瞬間にいきなり最終段から始まり、浅い段が一度も起きない */
   if (_omenFx.length === 0 && _isSpinPhase() && !isFever) {
     const u = _kingOmenProgress();
     if (u > 0 && Math.random() < _kingOmenLerp(KING_OMEN_FX_RATE, u)) _spawnOmenFx();
