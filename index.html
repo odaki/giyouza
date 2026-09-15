@@ -618,7 +618,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.28';
+const VERSION = 'v8.29';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1394,8 +1394,6 @@ let trueEndingSeen = false; // 真エンディングを一度視聴済みか（�
 let achBannerQueue = [], achBannerCurrent = null, achBannerTimer = 0;
 let showAchievements = false;
 let isPaused = false;
-let pauseBgmPos  = 0;   // ポーズ時のBGM再生位置（秒）
-let pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
 /* ── ホイール事前構築 & OffscreenCanvas プール ──────────────────────────────
    プレイヤーがエフェクトを見ている間に次トライのホイールを構築し、
    タップ時の同期処理（GCスパイク）を削減する。
@@ -3891,21 +3889,6 @@ function startKingBGMTape(durationMs = 1400) {
   grayRateTarget = 1.0;
 }
 
-/* BET操作が今できるかどうか。描画（ボタンの点灯）と入力（当たり判定）の両方が
-   これ1つを見る（条件を分散させると、足すたびに複数箇所を揃える必要が出る）。
-   ・betLocked      : 1的目を射ったらそのトライではもう変えられない
-   ・betUnlockAt   : トライ開始から2拍強は解放しない（BET_UNLOCK_BEATS参照）
-   ・phase          : 回転中（idle/reach）のみ
-   ・スローハンドランプ中はロック（suspended時はcurrentTimeが止まるので免除） */
-function betControlsEnabled() {
-  if (betLocked) return false;
-  if (performance.now() < betUnlockAt) return false;
-  if (!isSpinPhase()) return false;
-  if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
-      && audioCtx.currentTime < slowRampEndTime) return false;
-  return true;
-}
-
 /* BET額に対応するスローハンドBGM速度比率を返す
    BET=1→30%, BET=100000→90%, 対数補間 */
 function slowHandRate(betVal) {
@@ -4984,6 +4967,21 @@ function calcPayout() {
   const base = entry ? bet * PAYOUT_RATE[entry.payout] : 0;
   const feverMult = feverEndedReason === 'complete' ? 2 : 1;
   return base * feverMult * beatMult;
+}
+
+/* BET操作が今できるかどうか。描画（ボタンの点灯）と入力（当たり判定）の両方が
+   これ1つを見る（条件を分散させると、足すたびに複数箇所を揃える必要が出る）。
+   ・betLocked      : 1的目を射ったらそのトライではもう変えられない
+   ・betUnlockAt   : トライ開始から2拍強は解放しない（BET_UNLOCK_BEATS参照）
+   ・phase          : 回転中（idle/reach）のみ
+   ・スローハンドランプ中はロック（suspended時はcurrentTimeが止まるので免除） */
+function betControlsEnabled() {
+  if (betLocked) return false;
+  if (performance.now() < betUnlockAt) return false;
+  if (!isSpinPhase()) return false;
+  if (slowRampEndTime > 0 && audioCtx && audioCtx.state !== 'suspended'
+      && audioCtx.currentTime < slowRampEndTime) return false;
+  return true;
 }
 
 /* ホイールOCのCSSピクセル半径（WR+余白・定数）。drawWheel でも参照 */
@@ -15526,6 +15524,8 @@ function resumeAudioAfterInterrupt() {
 const PAUSE_SUSPEND_ON = !IS_TOUCH && !dbgFlag('nopausesuspend');
 let _pauseSuspendTimer = 0;
 let pauseSuspended = false;   // PAUSE のためにこちらから止めた（時計が止まっても異常ではない）
+let pauseBgmPos  = 0;   // ポーズ時のBGM再生位置（秒）
+let pauseBgmRate = 1.0; // ポーズ時のBGM再生レート
 
 /* ポーズ突入: 描画と音を止め、復帰に必要な位置・時刻を控える。
    AudioContext は iOS では動かし続ける（suspend()禁止）。タッチ非対応の端末では止める
