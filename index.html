@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.21';
+const VERSION = 'v8.22';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -688,7 +688,7 @@ let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（play
    このゲームの高速化は全て「一度描いて焼いておき、あとは drawImage で貼る」に
    依存している（背景・ホイール・グロー・文字・ボス・各種スプライト）。
    焼き先は OffscreenCanvas。対応していない環境（iOS 16.4 未満）は動作対象にしない */
-function _mkCache(w, h) {
+function _createCache(w, h) {
   return new OffscreenCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
 }
 
@@ -708,8 +708,8 @@ let _cloudSpr = null;
 let _shishiAccent = 0;         // 獅子のアクセント反応の残量フレーム（SHISHI_ACCENT_*参照）
 let _bgAnimSec = 0;            // 背景の環境演出の経過秒（フレーム基準。_updateAlways参照）
 
-function _prebuildStaticLayers() {
-  const oc  = _mkCache(W * _dpr, H * _dpr);
+function _buildStaticLayers() {
+  const oc  = _createCache(W * _dpr, H * _dpr);
   const oc2 = oc.getContext('2d');
   oc2.scale(_dpr, _dpr);
 
@@ -724,7 +724,7 @@ function _prebuildStaticLayers() {
   /* 雲スプライト（不透明・等倍・無回転で1枚だけ）。位置は画面幅に依存するので、
      向きを変えたときに画面外へ取り残されないよう流れる位置も初期値へ戻す */
   {
-    const cs  = _mkCache(CLOUD_SPR_W * _dpr, CLOUD_SPR_H * _dpr);
+    const cs  = _createCache(CLOUD_SPR_W * _dpr, CLOUD_SPR_H * _dpr);
     const cs2 = cs.getContext('2d');
     cs2.scale(_dpr, _dpr);
     cs2.translate(CLOUD_SPR_W / 2, CLOUD_SPR_H / 2);
@@ -738,7 +738,7 @@ function _prebuildStaticLayers() {
      体が透けたX線状態になる。「内部は不透明・全体を0.6でブレンド」はこの2段構えでしか作れない */
   _shishiSpr = null;
   if (!IS_PORTRAIT) {
-    const sp  = _mkCache(SHISHI_SPR_W * _dpr, SHISHI_SPR_H * _dpr);
+    const sp  = _createCache(SHISHI_SPR_W * _dpr, SHISHI_SPR_H * _dpr);
     const sp2 = sp.getContext('2d');
     sp2.scale(_dpr, _dpr);
     sp2.translate(SHISHI_SPR_AX, SHISHI_SPR_AY);
@@ -796,7 +796,7 @@ function _ensureCoinsTextOC(color) {
   ctx.restore();
   /* 幅が足りない時のみ再確保（桁数増加時）。既存が大きければ clearRect で再利用 */
   if (!_coinsTextOC || _coinsTextOC.width < tw * _dpr) {
-    _coinsTextOC = _mkCache(tw * _dpr, _COINS_TEXT_H * _dpr);
+    _coinsTextOC = _createCache(tw * _dpr, _COINS_TEXT_H * _dpr);
   }
   const c = _coinsTextOC.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -819,7 +819,7 @@ function _ensureBetTextOC() {
   if (_betTextOC && _betTextStr === _cachedBetStr) return _betTextOC;
   const tw = Math.ceil(_cachedBetNumW) + 8; // _updateDisplayCaches で計測済み
   if (!_betTextOC || _betTextOC.width < tw * _dpr) {
-    _betTextOC = _mkCache(tw * _dpr, _BET_TEXT_H * _dpr);
+    _betTextOC = _createCache(tw * _dpr, _BET_TEXT_H * _dpr);
   }
   const c = _betTextOC.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
@@ -860,23 +860,23 @@ function _updateDisplayCaches() {
 }
 
 /* ── アイテムオブジェクトプール ──
-   makeDumpling() が毎回オブジェクトを生成するのを防ぐ。 */
+   createDumpling() が毎回オブジェクトを生成するのを防ぐ。 */
 const _DUMPLING_POOL_SIZE = 300;
-function _makePoolDumpling() {
+function _createPoolDumpling() {
   return {
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     _spr:null, _dead:true, _rotPhase:0,
   };
 }
 const _dumplingPool = [];
-for (let _i = 0; _i < _DUMPLING_POOL_SIZE; _i++) _dumplingPool.push(_makePoolDumpling());
+for (let _i = 0; _i < _DUMPLING_POOL_SIZE; _i++) _dumplingPool.push(_createPoolDumpling());
 function _dumplingAlloc() {
   for (let i = 0; i < _dumplingPool.length; i++) {
     if (_dumplingPool[i]._dead) return _dumplingPool[i];
   }
   /* 満杯: 生きているエントリを乗っ取ると dumplings 等の配列に同一オブジェクトが
      二重登録され物理・描画が破綻する。新規生成してプールに加える（レアな1回のみGC） */
-  const g = _makePoolDumpling();
+  const g = _createPoolDumpling();
   _dumplingPool.push(g);
   return g;
 }
@@ -985,7 +985,7 @@ const KING_DEFEAT_RESTART_RATIO = 0.35;
    t が小さいと軌道がほとんど曲がらず流れ星に見え、大きいと中心まで来て弾ける。
    1本の径の変化で両端が出るので、見え方ごとの分岐を持たない。
 
-   使うギヨウザは本番の収束・退場と同じ makeDumpling。予兆だけ別のキャラクター（天使の輪と
+   使うギヨウザは本番の収束・退場と同じ createDumpling。予兆だけ別のキャラクター（天使の輪と
    尾を持つウウウウの霊）にすると、直後に現れるキング戦の演出と繋がらない。
 
    中心への引きを加速度で書いてはいけない。強くすると中心を行き過ぎて周回し、最接近距離が
@@ -1080,7 +1080,7 @@ const _wheelGlowSprites = (() => {
   for (let i = 0; i < _GLOW_LEVELS; i++) {
     const blur = 50 + (i / (_GLOW_LEVELS - 1)) * 40;
     const half = Math.ceil(WR + 2 + blur * 0.9 + 8);
-    const oc = _mkCache(half * 2, half * 2);
+    const oc = _createCache(half * 2, half * 2);
     const c  = oc.getContext('2d');
     c.translate(half - OFF, half);
     c.shadowColor = Y; c.shadowBlur = blur; c.shadowOffsetX = OFF;
@@ -1101,7 +1101,7 @@ function _buildPointerSprite(fill, glow, blur) {
   const bw  = IS_PORTRAIT ? 21 : 26;
   const bh  = IS_PORTRAIT ? 24 : 23;
   const cw = bw + _PTR_PAD * 2, ch = bh + _PTR_PAD * 2;
-  const oc = _mkCache(Math.ceil(cw * _dpr), Math.ceil(ch * _dpr));
+  const oc = _createCache(Math.ceil(cw * _dpr), Math.ceil(ch * _dpr));
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.translate(_PTR_PAD - bx0, _PTR_PAD - by0); // ローカル座標 → スプライト座標
@@ -1125,7 +1125,7 @@ const _GIGI_SPRITE_R = 4, _GIGI_SPRITE_HALF = 14; // 描画半径4 + グロー�
 const _gigiSparkSprites = (() => {
   const m = {};
   for (const col of ['#fff', '#ffaa00', '#ff4400']) {
-    const oc = _mkCache(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
+    const oc = _createCache(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
     const c  = oc.getContext('2d');
     c.shadowColor = col; c.shadowBlur = 6;
     c.fillStyle = col;
@@ -1139,7 +1139,7 @@ const _gigiSparkSprites = (() => {
    gigiSparks: 最大レート8/frame×寿命24f ≈ 200同時、余裕を持って256
    rainDrops:  最大レート20/frame×寿命30f ≈ 600 + 波紋20 → 800
    uzaTexts:   最大1/2f×寿命240f ≈ 120同時 → 160 */
-function _makePool(size, factory) {
+function _createPool(size, factory) {
   const pool = [];
   for (let i = 0; i < size; i++) pool.push(factory());
   pool._factory = factory; // 満杯時の追加生成用
@@ -1153,11 +1153,11 @@ function _poolAlloc(pool) {
   return o;
 }
 
-const _gigiPool = _makePool(256, () =>
+const _gigiPool = _createPool(256, () =>
   ({ x:0, y:0, vx:0, vy:0, life:0, color:'', r:0, _dead:true }));
-const _rainPool = _makePool(800, () =>
+const _rainPool = _createPool(800, () =>
   ({ x:0, y:0, vx:0, vy:0, len:0, a:0, splashed:false, ripple:false, life:0, maxLife:0, _dead:true }));
-const _uzaPool  = _makePool(160, () =>
+const _uzaPool  = _createPool(160, () =>
   ({ x:0, y:0, text:'', rot:0, size:0, alpha:0, peak:0, color:'', age:0, life:0, _dead:true }));
 
 /* ── パーティクルプール ──
@@ -1480,7 +1480,7 @@ function _buildResultOC(w) {
   const _t0 = PERF_ON ? performance.now() : 0;
   _mark('resOC');
   const sz = _RESULT_OC_HALF * 2 * _dpr;
-  const oc = _freeResultOCs.pop() || _mkCache(sz, sz);
+  const oc = _freeResultOCs.pop() || _createCache(sz, sz);
   const c  = oc.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, sz, sz);
@@ -5111,7 +5111,7 @@ function _buildSegWheelOC(w, opt) {
   const sz = Math.ceil(opt.ocR * 2 * _dpr);
   /* プールから再利用、なければ新規生成。サイズ不一致はwidth代入でリサイズ
      （キング的はKING_WRが縦画面初期化で確定するため、念のための保険） */
-  const oc = opt.pool.pop() || _mkCache(sz, sz);
+  const oc = opt.pool.pop() || _createCache(sz, sz);
   if (oc.width !== sz || oc.height !== sz) { oc.width = sz; oc.height = sz; }
   const c = oc.getContext('2d');
   /* 再利用時に残っている transform と内容をクリア */
@@ -6207,7 +6207,7 @@ function spawnWorm() {
   else if (side===2){ x=Math.random()*W; y=H+40;  angle=-Math.PI/2; }
   else              { x=-40;   y=Math.random()*H; angle= 0;          }
   angle += (Math.random()-0.5)*0.8;
-  const g       = makeDumpling(x, y, 0, 0);
+  const g       = createDumpling(x, y, 0, 0);
   g.angle       = angle;
   g.speed       = 1.2 + Math.random()*1.5;
   g.wiggle      = Math.random()*Math.PI*2;
@@ -6287,22 +6287,22 @@ const DUMPLING_DECO_DY_WEIGHT = 1.6;        // 間隔を測るときの縦の重
 const DUMPLING_DECO_HUE = [92, 116], DUMPLING_DECO_SAT = [38, 52], DUMPLING_DECO_LIT = [46, 58];
 const DUMPLING_DECO_ALPHA = 0.8;
 /* ここまでの置き場所はこれより後ろにできない。下の _dumplingVariantSprites は評価時に
-   _drawDumplingBody と _dumplingDecoSpec を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
+   _drawDumplingBody と _initDumplingDecoSpec を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
 
-const _DUMPLING_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeDumpling の size 上限）
+const _DUMPLING_SPRITE_REF  = 42; // 焼き込み基準サイズ（createDumpling の size 上限）
 const _DUMPLING_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
 const _dumplingVariantSprites = (() => {
   const arr = [];
   const s = _DUMPLING_SPRITE_REF;
-  const deco = _newDecoSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
+  const deco = _createDecoSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
   for (let v = 0; v < _DUMPLING_VARIANT_N; v++) {
-    const oc = _mkCache(_DUMPLING_SPRITE_HALF * 2 * _dpr, _DUMPLING_SPRITE_HALF * 2 * _dpr);
+    const oc = _createCache(_DUMPLING_SPRITE_HALF * 2 * _dpr, _DUMPLING_SPRITE_HALF * 2 * _dpr);
     const c  = oc.getContext('2d');
     c.scale(_dpr, _dpr);
     c.translate(_DUMPLING_SPRITE_HALF, _DUMPLING_SPRITE_HALF);
     _drawDumplingShadow(c, s); // 関数宣言はホイスティングされるため前方参照可
     const skin = _dumplingSkinPalette();
-    _dumplingDecoSpec(deco, Math.random, false);
+    _initDumplingDecoSpec(deco, Math.random, false);
     _drawDumplingBody(c, s, 0, 0, _dumplingBodyGradient(c, s, skin.skinL, skin.skinD), undefined, deco);
     arr.push(oc);
   }
@@ -6339,7 +6339,7 @@ const _DUMPLING_SPRITE_RECT = (() => {
 })();
 
 
-function makeDumpling(x, y, vx, vy) {
+function createDumpling(x, y, vx, vy) {
   const g    = _dumplingAlloc();
   g._dead    = false;
   const size = 34 + Math.random() * 8;
@@ -6374,7 +6374,7 @@ function initDumplings(burst = 70, addOnly = false, max = 200) {
     const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
     const vx   = (Math.random()-0.5) * 5;
     const vy   = 1.5 + Math.random() * 4;
-    dumplings.push(makeDumpling(cx, y, vx, vy));
+    dumplings.push(createDumpling(cx, y, vx, vy));
   }
 }
 
@@ -6383,11 +6383,11 @@ function spawnDumpling() {
   const x  = Math.random() * (W + 80) - 40;
   const vy = Math.random() * 1.5 + 0.5;
   const vx = (Math.random() - 0.5) * 4;
-  dumplings.push(makeDumpling(x, -50, vx, vy));
+  dumplings.push(createDumpling(x, -50, vx, vy));
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
-/* アイテム衝突半径の上限: makeDumpling の size 上限(34+8=42) × 0.52
+/* アイテム衝突半径の上限: createDumpling の size 上限(34+8=42) × 0.52
    yソート済みスイープの打ち切り判定（break）に使用 */
 const RMAX_DUMPLING_R  = 42 * 0.52;
 
@@ -6560,8 +6560,8 @@ function _dumplingBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
 /* [lo, hi] の範囲から rnd で1つ引く（分割代入は反復子を作るので使わない） */
 function _lerpRand(rnd, range) { return range[0] + (range[1] - range[0]) * rnd(); }
 
-/* ニラの配置の器（DUMPLING_DECO_N 本ぶん）。中身は _dumplingDecoSpec が書き込む */
-function _newDecoSpec() {
+/* ニラの配置の器（DUMPLING_DECO_N 本ぶん）。中身は _initDumplingDecoSpec が書き込む */
+function _createDecoSpec() {
   const out = [];
   for (let i = 0; i < DUMPLING_DECO_N; i++) out.push({ dx: 0, dy: 0, ca: 1, sa: 0, len: 0, wid: 0, color: '' });
   return out;
@@ -6572,7 +6572,7 @@ function _newDecoSpec() {
    avoidBrows はキング用: 顔が上に乗るので、眉の高さの帯を避ける（KING_NIRA_AVOID_* 参照）。
    乱数を引く順序（候補の位置→向き→長さ→幅→色）を変えると、同じ種から別の配置が出る。
    キングの見た目は種で決まっているので動かさないこと */
-function _dumplingDecoSpec(out, rnd, avoidBrows) {
+function _initDumplingDecoSpec(out, rnd, avoidBrows) {
   for (let i = 0; i < out.length; i++) {
     let bx = 0, by = 0, bestD = -1;
     for (let k = 0; k < DUMPLING_DECO_CANDIDATES; k++) {
@@ -6634,7 +6634,7 @@ function _drawDumplingShadow(c2, s) {
 
 /* ギヨウザ本体を描く。落下ギヨウザ（起動時のスプライト）・幽霊・ギョギョ魚・キングが
    すべてここを通るので、本体の見た目はここだけで決まる。影・オーラ・輪・尾・顔は呼び出し側が描く。
-   deco: ニラの配置（_dumplingDecoSpec の結果）。省略するとニラを描かない
+   deco: ニラの配置（_initDumplingDecoSpec の結果）。省略するとニラを描かない
    part を渡すと層を選んで描く。省略時は全部を元の順序で描く。
    キング戦の勝利で本体を球として回すために分けてある（_drawKingSpin参照）:
      'sphere'  球そのもの。輪郭と陰影を持つ＝回してはいけない層
@@ -6778,7 +6778,7 @@ function initGiugiu() {
     const spd = 32 + Math.random() * 10;
     const vx  = (W/2 - sx) / R * spd;
     const vy  = (H/2 - sy) / R * spd;
-    dumplings.push(makeDumpling(sx, sy, vx, vy));
+    dumplings.push(createDumpling(sx, sy, vx, vy));
   }
 }
 
@@ -6790,7 +6790,7 @@ function updateGiugiu() {
     const sx = W/2 + Math.cos(angle) * R;
     const sy = H/2 + Math.sin(angle) * R;
     const spd = 32 + Math.random() * 10;
-    dumplings.push(makeDumpling(sx, sy,
+    dumplings.push(createDumpling(sx, sy,
       (W/2 - sx) / R * spd, (H/2 - sy) / R * spd));
   }
 
@@ -6911,7 +6911,7 @@ function initYoyoyoyo() {
   const jitter = Math.min(18, (W / count) * 0.4);
   for (let i = 0; i < count; i++) {
     const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*jitter;
-    const g   = makeDumpling(x, 0, 0, 0);
+    const g   = createDumpling(x, 0, 0, 0);
     g.phase   = Math.random() * Math.PI * 2;
     g.freq    = 0.055 + Math.random()*0.04;
     g.amp     = H * 0.30 + Math.random() * H * 0.25;
@@ -6971,7 +6971,7 @@ function initUuuu() {
 /* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
    ギヨウザ本体を青白グラデーション+半透明で描き、天使の輪と幽霊の尾を追加する */
 let _ghostDeco = null; // 焼き込んだら読み捨てるので、幽霊どうしで使い回す
-function _makeGhostCanvas(r) {
+function _buildGhostCanvas(r) {
   /* キャンバスサイズ: ギヨウザ本体 + 上の天使の輪 + 下の幽霊の尾 を収める */
   const bodyH  = r * 1.2;  // ギヨウザ縦半径
   const haloH  = r * 0.9;  // 輪の上端までの余白
@@ -7019,7 +7019,7 @@ function _makeGhostCanvas(r) {
   bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
   bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
   _drawDumplingBody(c2, r, cx, cy, bodyGrd, undefined,
-                 _dumplingDecoSpec(_ghostDeco || (_ghostDeco = _newDecoSpec()), Math.random, false));
+                 _initDumplingDecoSpec(_ghostDeco || (_ghostDeco = _createDecoSpec()), Math.random, false));
 
   /* ── 天使の輪（ギヨウザ上方に浮かぶ金色の楕円リング） ── */
   const haloY  = cy - r * 0.72; // 頭上に浮かせる
@@ -7047,7 +7047,7 @@ function _makeGhostCanvas(r) {
 
 function spawnGhost() {
   const r = 28 + Math.random()*20;
-  const { oc, sz, cy: ocCy } = _makeGhostCanvas(r);
+  const { oc, sz, cy: ocCy } = _buildGhostCanvas(r);
   ghosts.push({
     x:        Math.random() * W,
     y:        H + r + 20,
@@ -7170,7 +7170,7 @@ function initGyogyo() {
   for (let i = 0; i < MEDIUM_EFFECT_SPRITE_N; i++) {
     const fromLeft = Math.random() < 0.5;
     const size = 28 + Math.random() * 28;
-    /* bodyGrd: makeDumpling()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
+    /* bodyGrd: createDumpling()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
        グラジェント座標はfillStyle適用時の座標系で評価されるため
        transform前に生成しても translate+rotate後の使用で正しく機能する */
     const bodyGrd = ctx.createRadialGradient(-size*0.15, -size*0.3, 0, 0, size*0.1, size*1.1);
@@ -7186,7 +7186,7 @@ function initGyogyo() {
       phase: Math.random() * Math.PI * 2,
       col:   ['#f0a030','#e06820','#ff8040','#ffcc44','#dd6644'][Math.floor(Math.random()*5)],
       bodyGrd,
-      deco: _dumplingDecoSpec(_newDecoSpec(), Math.random, false), // 泳いでいる間は同じ配置
+      deco: _initDumplingDecoSpec(_createDecoSpec(), Math.random, false), // 泳いでいる間は同じ配置
       exclamTimer: 0,
       exclamDur:   0,
     });
@@ -7476,7 +7476,7 @@ function _spawnOmenFx() {
   const size = _DUMPLING_SPRITE_REF * _kingOmenLerp(KING_OMEN_FX_SIZE, t);
   const sign = () => (Math.random() < 0.5 ? 1 : -1);
   for (let i = 0; i < n; i++) {
-    const g = makeDumpling(0, 0, 0, 0);
+    const g = createDumpling(0, 0, 0, 0);
     g.size = size;
     _omenFx.push({
       g, age: 0,
@@ -7684,14 +7684,14 @@ function _buildKingOC() {
   const s = _KING_S = IS_PORTRAIT ? 300 : 380;
   const half = Math.ceil(s * 0.75);
   const REF = _DUMPLING_SPRITE_REF, kk = s / REF;
-  const mkOC = () => _mkCache(half * 2 * _dpr, half * 2 * _dpr);
+  const createOC = () => _createCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
      目・眉・口はトーンの影響を受けさせない。生地が焦げ色へ寄っても目の濃さが
      そのまま残ることが、そのままコントラストになる（_renderKingBody 参照）。
      本体は通常サイズ(42)で組んで scale 変換で拡大する。_drawDumplingBody の線幅は
      小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
      見える（scale なら線幅も比例して太る） */
-  const bodyOC = mkOC();
+  const bodyOC = createOC();
   const bc = bodyOC.getContext('2d');
   bc.scale(_dpr, _dpr);
   bc.translate(half, half);
@@ -7704,20 +7704,20 @@ function _buildKingOC() {
   /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
      ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
      持ち続けても読む人が居ないまま 1140×1140＝約5MB を抱えることになる */
-  const faceOC = mkOC();
+  const faceOC = createOC();
   const fc = faceOC.getContext('2d');
   fc.scale(_dpr, _dpr);
   fc.translate(half, half);
   _drawKingFace(fc, s);
   /* 通常表示（予告演出など）用に body+face を1枚に合成したもの */
-  const oc = mkOC();
+  const oc = createOC();
   const c = oc.getContext('2d');
   c.drawImage(bodyOC, 0, 0);
   c.drawImage(faceOC, 0, 0);
   /* 合成用のliveOCもここで確保しておく。1140x1140＝約130万画素の確保を戦闘開始時に
      行うと、的が回り始めるフレームにぶつかって回転の速度ムラになる。予兆は演出だけの
      区間なので、ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
-  const liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
+  const liveOC = _createCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 中身がある矩形。スプライトは 0.75s 四方の安全枠で作ってあるので、そのまま
      転送すると面積の48%を透明なまま塗ることになる。これは画面内で最大の矩形で、
      実解像度2では画面の44%を占める。
@@ -7799,7 +7799,7 @@ function _updateKingOmen() {
         const R = Math.hypot(W, H) * 0.6;
         for (let i = 0; i < 44; i++) {
           const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2;
-          o.dumplings.push(makeDumpling(W/2 + Math.cos(ang)*R, H/2 + Math.sin(ang)*R, 0, 0));
+          o.dumplings.push(createDumpling(W/2 + Math.cos(ang)*R, H/2 + Math.sin(ang)*R, 0, 0));
         }
       }
     }
@@ -7886,7 +7886,7 @@ function _noBgmResumePhase() {
 function _cleanupKingBattleState() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
   _king = null;
-  _kingFx = _newKingFx();        // 演出の状態は丸ごと作り直す（_newKingFx参照）
+  _kingFx = _createKingFx();        // 演出の状態は丸ごと作り直す（_createKingFx参照）
   _kingBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initKingBattleでtier0から）
   _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない
   /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
@@ -7989,7 +7989,7 @@ function _outroMsgCharCount(lines) {
    保持は目標からフェード2つを引いた残りなので、合計は必ず目標秒数に一致する
    （唯一の例外はフェードだけで目標を超えてしまう極端に長い文言で、その場合は
    下限が効いて目標を超える＝読ませることを優先する） */
-function _makeOutroMsgTiming(msgLines, targetSec) {
+function _createOutroMsgTiming(msgLines, targetSec) {
   const chars   = _outroMsgCharCount(msgLines);
   const fadeIn  = _OUTRO_MSG_FADE_IN;
   const fadeOut = Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars);
@@ -8044,7 +8044,7 @@ function _drawOutroMsg(o, fillColor, shadowColor) {
 
 /* キングギヨウザ縮小ブリッジ（_startKingDefeatShrink）用の定数。
    KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
-   （makeDumpling の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
+   （createDumpling の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
    横画面380*0.75*2=570px）から逆算した約0.075。これより極端に小さくすると、続けて
    出るギヨウザの集合体より先に見えなくなり、クロスフェードしてもサイズ感の食い違いが
    違和感として残る。
@@ -8093,21 +8093,21 @@ function _drawScreenFade() {
    拡散アニメの両方が同じ_defeatOutro.dumplingsを参照するため、生成は一箇所に
    まとめる（クロスフェード用に別配列を作って後で捨てると_dumplingAllocの
    プール返却漏れ＝リークになるため、必ず単一の配列を使い回す） */
-function _makeDefeatOutroDumplings() {
+function _createDefeatOutroDumplings() {
   const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
   const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
   const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
   const dumplings = [];
   for (let i = 0; i < 44; i++) {
     const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
-    dumplings.push(makeDumpling(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
+    dumplings.push(createDumpling(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
      尺は目標秒数（_OUTRO_MSG_TARGET_SEC_DEFEAT）から逆算する。折り返し後の
-     文字数はフェードアウト長にだけ効く（_makeOutroMsgTiming参照） */
+     文字数はフェードアウト長にだけ効く（_createOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_DEFEAT_OUTRO_LINES);
   return { step: 0, timer: 0, dumplings, cx, cy, msgAlpha: 0,
-           msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
+           msgLines, msgTiming: _createOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
 }
 
 /* こんがりしっぱい画面（kingDefeat, CONTINUEタップ後）から、ギヨウザ群への弾け散り演出
@@ -8130,7 +8130,7 @@ function _startKingDefeatShrink() {
   }
   /* ギヨウザ群はこの時点で生成し、位置を確定させておく（クロスフェード中は
      静止したまま）。拡散運動は_updateKingDefeatOutroに入ってから始まる */
-  _defeatOutro = _makeDefeatOutroDumplings();
+  _defeatOutro = _createDefeatOutroDumplings();
 }
 
 function _updateKingDefeatShrink() {
@@ -8191,7 +8191,7 @@ function _updateKingDefeatOutro() {
     if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
   } else {
     /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
-       行ごとの出し分けはしない。尺は目標秒数から逆算済み（_makeOutroMsgTiming参照） */
+       行ごとの出し分けはしない。尺は目標秒数から逆算済み（_createOutroMsgTiming参照） */
     const done = _advanceOutroMsg(o);
     /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ戻る。
        _startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレームこの条件を
@@ -8311,7 +8311,7 @@ function _kingDecoSpec() {
   if (_kingDeco) return _kingDeco;
   let st = KING_DECO_SEED >>> 0;
   const rnd = () => (st = (st * 1664525 + 1013904223) >>> 0) / 4294967296; // 32bit線形合同法
-  return (_kingDeco = _dumplingDecoSpec(_newDecoSpec(), rnd, true));
+  return (_kingDeco = _initDumplingDecoSpec(_createDecoSpec(), rnd, true));
 }
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
@@ -8655,13 +8655,13 @@ const KING_HIT_KNOCK_MAX    = KING_ACCENT_RECOIL_PX * 0.5;
 const _predKingHitAlive = h => h.life > 0;
 let _kingFlashSprite  = null; // 焦げ跡の発光用スプライト（初回使用時に生成）
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
-/* キング戦の演出の状態。戦闘が終わったら _newKingFx() で丸ごと作り直す。
+/* キング戦の演出の状態。戦闘が終わったら _createKingFx() で丸ごと作り直す。
    **演出の状態を足すときは、モジュール変数にせずここへ足すこと。** 変数を散らすと、
    戦闘の終わりにリセットする一覧へ1つずつ手で並べることになり、足し忘れた状態が
    次の戦闘へ持ち越される。
    _king（本体）とは寿命が違う: 敗北では本体が弾けて先に消えたあとも、揺れや湯気は
    演出の終わりまで残る。そのため _king の中には入れず、null にならない別の器にする */
-function _newKingFx() {
+function _createKingFx() {
   return {
     siftShake: 0,      // 振り下ろしの画面揺れの残りフレーム（KING_SIFT_SHAKE_FRAMES）
     impactShake: 0,    // 着弾の画面揺れの残りフレーム（KING_IMPACT_SHAKE_*）
@@ -8682,7 +8682,7 @@ function _newKingFx() {
     noteFired: false,
   };
 }
-let _kingFx = _newKingFx();
+let _kingFx = _createKingFx();
 const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
 /* こんがり達成時の湯気（蒸したての湯気、_spawnVictorySteamWisp参照）専用の独立した配列。
    共有particles配列には登録しないこと。共有particlesにはupdate()冒頭で全phase共通の
@@ -8703,7 +8703,7 @@ let _scorchBlotSprite = null;
 function _buildScorchBlotSprite() {
   if (_scorchBlotSprite) return;
   const sz = 64, half = sz / 2;
-  const oc = _mkCache(sz, sz);
+  const oc = _createCache(sz, sz);
   const c = oc.getContext('2d');
   c.translate(half, half);
   /* 色・アルファは地の色に対して十分濃く取る。位置・サイズが正しくても、薄いと
@@ -8742,7 +8742,7 @@ function _buildScorchBlotSprite() {
 function _initKingBattle() {
   /* 蓄積メーターは戦闘開始時点でリセット（ボスは蓄積そのものが実体化したもの）。
      ここでリセットしないと勝敗に関わらず次のトライ終了直後に即再発動する。
-     OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットすること。
+     本体スプライトが無くて戦闘なしで復帰する経路も含め、常にリセットすること。
      リセット前の値は_kingMeterAtBattleStartへ退避する。こんがり達成時に「このキングに
      取り込まれていたギヨウザ」として所持数へ返すため（_startKingVictory参照）。
      ボスは閾値到達で出現するので必ずKING_METER_THRESHOLD以上＝1000+アルファになる */
@@ -8780,7 +8780,7 @@ function _initKingBattle() {
      1140x1140＝約130万画素の確保を戦闘開始のフレームで行うと、的が回り始める瞬間に
      ぶつかって回転の速度ムラになる。確保は必ず予兆側で済ませておくこと */
   const liveOC = _kingOC.liveOC ||
-    (_kingOC.liveOC = _mkCache(half * 2 * _dpr, half * 2 * _dpr));
+    (_kingOC.liveOC = _createCache(half * 2 * _dpr, half * 2 * _dpr));
   /* marks は当たりが確定した焦げ跡だけを積むので、事前生成せず空で始める
      （個々の焦げ跡は _createKingMark がタップの都度その場で生成する） */
   const marks = [];
@@ -10207,7 +10207,7 @@ function _buildKingSpinLayers() {
   if (!_king || !_kingOC) return;
   const s = _KING_S, half = _king.half, REF = _DUMPLING_SPRITE_REF, kk = s / REF, pct = _king.cookPct / 100;
   const prep = () => {
-    const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
+    const oc = _createCache(half * 2 * _dpr, half * 2 * _dpr);
     const c = oc.getContext('2d');
     c.scale(_dpr, _dpr); c.translate(half, half);
     return [oc, c];
@@ -10774,13 +10774,13 @@ function _startKingVictoryOutro() {
   phase = 'kingVictoryOutro';
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
      尺は目標秒数から逆算するので縦横で合計は変わらない（縦画面は折り返しで
-     4行になるが、合計6秒は同じ。_makeOutroMsgTiming参照） */
+     4行になるが、合計6秒は同じ。_createOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_VICTORY_OUTRO_LINES);
   _victoryOutro = {
     step: 0, timer: 0, dumplings: [], seedDumpling: null,
     msgAlpha: 0, gaugeAlpha: 1,
     baseBy: _king.by, baseScale: _king.scale,
-    msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
+    msgLines, msgTiming: _createOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
   };
   _king.gaze = 0; // 篩い落としの伏し目を演出へ持ち越さない
   playSE('kingVictoryInhale');
@@ -10801,13 +10801,13 @@ function _finishKingVictoryOutro() {
 /* 解放されたギヨウザが舞い上がる群れを生成する。個数は解放数に応じて増やし、
    プールを溜めてから勝ったときの見返りが視覚的にも効くようにする
    （上限は描画負荷のため失敗側と同じ44個で打ち止め） */
-function _makeVictoryOutroDumplings() {
+function _createVictoryOutroDumplings() {
   const n = Math.max(12, Math.min(44, 12 + Math.floor(_kingVictoryWonCoins / 100)));
   const dumplings = [];
   for (let i = 0; i < n; i++) {
     const x = W * (0.08 + Math.random() * 0.84);
     const y = H + 40 + Math.random() * H * 0.5;      // 画面下の外から湧き上がる
-    const g = makeDumpling(x, y, (Math.random() - 0.5) * 0.6, -(2.6 + Math.random() * 2.2));
+    const g = createDumpling(x, y, (Math.random() - 0.5) * 0.6, -(2.6 + Math.random() * 2.2));
     dumplings.push(g);
   }
   return dumplings;
@@ -10858,10 +10858,10 @@ function _updateKingVictoryOutro() {
     if (o.timer >= _VICTORY_OUTRO_FLY_FRAMES) {
       o.step = 2; o.timer = 0;
       o.gaugeAlpha = 0;
-      o.dumplings = _makeVictoryOutroDumplings();
+      o.dumplings = _createVictoryOutroDumplings();
       /* 周回の示唆: 1個だけ舞い上がらずに残り、画面下でゆっくり漂う。
          「また集まりはじめる」という締め文（_VICTORY_OUTRO_LINES）と対応させる */
-      o.seedDumpling = makeDumpling(W / 2, H * 0.82, 0, -0.18);
+      o.seedDumpling = createDumpling(W / 2, H * 0.82, 0, -0.18);
     }
   } else if (o.step === 2 || o.step === 3) {
     /* 解放されたギヨウザの舞い上がり。step3（メッセージ表示中）も動かし続けて
@@ -10880,7 +10880,7 @@ function _updateKingVictoryOutro() {
     if (o.step === 3) {
       /* 締めメッセージ。失敗側（_updateKingDefeatOutro）と同じ実装を共有する
          （_advanceOutroMsg）。尺は _startKingVictoryOutro で目標6秒から逆算済み
-         （失敗側は3秒。_makeOutroMsgTiming参照） */
+         （失敗側は3秒。_createOutroMsgTiming参照） */
       if (_advanceOutroMsg(o)) _startScreenFade(() => _finishKingVictoryOutro());
     }
   }
@@ -12090,7 +12090,7 @@ function _dpRoundPath(c, x, y, w, h, r) {
 /* パッド1枚を焼き込む。MPCのゴムパッドのように、上が明るく下が暗い縦グラデに
    内側の白ベベルと外側の影を重ねる */
 function _dpBuildPadSprite(pad, size) {
-  const oc = _mkCache(size * _dpr, size * _dpr);
+  const oc = _createCache(size * _dpr, size * _dpr);
   const c = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   /* 面の色と描き順は操作ボタンと共通（_dpDrawFace）。輪郭はパッド固有の寸法で引く */
@@ -13369,7 +13369,7 @@ function _drawShishiPair() {
    ぼかす、という同じ手順を持つ生成関数が複数あったのを一本化した。
    stopsは[位置, 色]の配列。半径はスプライトの論理半径（_dprは内部で掛ける） */
 function _buildRadialSprite(stops, r = 32) {
-  const oc = _mkCache(r * 2 * _dpr, r * 2 * _dpr);
+  const oc = _createCache(r * 2 * _dpr, r * 2 * _dpr);
   const c = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.translate(r, r);
@@ -14339,7 +14339,7 @@ function _getReachRingSprite() {
   if (_reachRingSprite) return _reachRingSprite;
   const r = WR + 8, blur = 20;
   const half = Math.ceil(r + blur * 1.6 + 4);
-  const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
+  const oc = _createCache(half * 2 * _dpr, half * 2 * _dpr);
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr); c.translate(half, half);
   c.strokeStyle = 'rgba(245,208,32,0.7)'; c.lineWidth = 4;
@@ -14489,14 +14489,14 @@ function _titleCachePrune() {
    中央揃え・_dpr スケール済みのコンテキストを返す。
    余白 glowB*1.6 は shadowBlur の実効的な広がりの目安で、切れると角が四角く落ちる。
    呼び出し側は返された c に色と影を設定して text を w/2, h/2 へ描く */
-function _mkTextOC(text, font, lw, glowB) {
+function _createTextOC(text, font, lw, glowB) {
   ctx.save(); ctx.font = font;
   const tw = Math.ceil(ctx.measureText(text).width);
   ctx.restore();
   const fs  = parseInt(font.match(/(\d+)px/)[1], 10);
   const pad = Math.ceil(glowB * 1.6 + lw + 8);
   const w = tw + pad * 2, h = fs + pad * 2;
-  const oc = _mkCache(w * _dpr, h * _dpr);
+  const oc = _createCache(w * _dpr, h * _dpr);
   const c  = oc.getContext('2d');
   c.scale(_dpr, _dpr);
   c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
@@ -14506,7 +14506,7 @@ function _mkTextOC(text, font, lw, glowB) {
 function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
   let e = _titleOCCache.get(key);
   if (!e) {
-    const { oc, c, w, h } = _mkTextOC(text, font, lw, glowB);
+    const { oc, c, w, h } = _createTextOC(text, font, lw, glowB);
     /* outText と同じ順序: 影付き stroke → 影付き fill（グローの重なりを再現） */
     c.shadowColor = glowC; c.shadowBlur = glowB;
     c.lineWidth = lw; c.strokeStyle = stroke;
@@ -14524,7 +14524,7 @@ function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
 /* 超大当たり専用: フィル色がアニメーションするため「グロー+縁取り」だけ焼く。
    shadowOffset トリックで stroke/fill 両方の影のみ抽出し、フィルは毎フレーム上描きする */
 function _bakeGlowStroke(key, text, font, stroke, lw, glowC, glowB) {
-  const { oc, c, w, h } = _mkTextOC(text, font, lw, glowB);
+  const { oc, c, w, h } = _createTextOC(text, font, lw, glowB);
   const OFF = 4096; // 本体を画面外へ追い出して影だけスプライト内に落とす
   c.shadowColor = glowC; c.shadowBlur = glowB; c.shadowOffsetX = OFF;
   c.lineWidth = lw; c.strokeStyle = stroke;
@@ -16028,7 +16028,7 @@ function fitCanvas() {
   canvas.style.height = Math.floor(H * scale) + 'px';
   /* 静的レイヤー（雲・獅子）を OffscreenCanvas に事前描画
      毎フレームの Canvas パス命令群 → drawImage() 1回に圧縮 */
-  _prebuildStaticLayers();
+  _buildStaticLayers();
   /* BET ラベル幅を計測してキャッシュ（フォント・テキスト不変なので1回だけ） */
   _initBetLabelWidth();
 
