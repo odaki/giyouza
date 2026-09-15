@@ -612,7 +612,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.24';
+const VERSION = 'v8.25';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4270,11 +4270,7 @@ function lsLoadStats() {
       if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
       if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
       if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
-      /* 端末に残っている保存データには、蓄積メーターを kingGyozaMeter というキーで持つものがある。
-         kingMeter が無ければそちらを読んで引き継ぐ（次の保存で kingMeter として書き直され、
-         古いキーは保存データから消える）。読み替えを外すと、その端末のメーターが0に戻る */
-      const km = typeof o.kingMeter === 'number' ? o.kingMeter : o.kingGyozaMeter;
-      if (typeof km === 'number') kingMeter = km;
+      if (typeof o.kingMeter      === 'number') kingMeter      = o.kingMeter;
       if (typeof o.kingLostPool   === 'number') kingLostPool   = o.kingLostPool;
       if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
       if (typeof o.bestSyncChain  === 'number') bestSyncChain  = o.bestSyncChain;
