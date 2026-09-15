@@ -406,14 +406,14 @@ function drawPerf() {
     `frame work ${n(workMax)} / gap ${n(gapMax)} ms (直近${_FRAME_BUF_SIZE}f・16.7超で取りこぼし)`,
     `tick 0回${_tickHistShown[0]} 1回${_tickHistShown[1]} 2回以上${_tickHistShown[2]} (直近${_TICK_HIST_FRAMES}f・0回=tick飛ばし)`,
     /* プールの生存数。返却漏れ（配列を捨てるときに _releaseAll を通し忘れる等）を実行中に
-       見つけるための行。返さなかったスロットは生きたまま残って再利用されず、_itemAlloc /
+       見つけるための行。返さなかったスロットは生きたまま残って再利用されず、_dumplingAlloc /
        _partAlloc が新規生成を続けてプールが際限なく伸びる。iOS Safari の canvas メモリを
        圧迫して処理落ち・音途切れになる欠陥クラスで、症状が出る頃には原因から遠い。
        item/part は「生存/総数」。総数が初期値（item 300 / part の _PART_POOL_SIZE）から
        伸び続けていたら返却漏れを疑う。
        oc は各OCプールの**空き数**。使い終わったOCが戻れば増える。0に張り付いたままなら
        返していない＝毎回新規生成している */
-    `pool item ${_itemPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_itemPool.length}` +
+    `pool item ${_dumplingPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_dumplingPool.length}` +
       ` part ${_partPool.reduce((a, o) => a + (o._dead ? 0 : 1), 0)}/${_partPool.length}` +
       `  oc w${_freeWheelOCs.length} r${_freeResultOCs.length} k${_freeKingReelOCs.length} g${_freeGhostCanvases.length}`,
     /* 音声まわりの状態。消音モードでの発音は sess=1（AVAudioSession昇格）が前提。
@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.19';
+const VERSION = 'v8.20';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -860,24 +860,24 @@ function _updateDisplayCaches() {
 }
 
 /* ── アイテムオブジェクトプール ──
-   makeItem() が毎回オブジェクトを生成するのを防ぐ。 */
-const _ITEM_POOL_SIZE = 300;
-function _makePoolItem() {
+   makeDumpling() が毎回オブジェクトを生成するのを防ぐ。 */
+const _DUMPLING_POOL_SIZE = 300;
+function _makePoolDumpling() {
   return {
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
     _spr:null, _dead:true, _rotPhase:0,
   };
 }
-const _itemPool = [];
-for (let _i = 0; _i < _ITEM_POOL_SIZE; _i++) _itemPool.push(_makePoolItem());
-function _itemAlloc() {
-  for (let i = 0; i < _itemPool.length; i++) {
-    if (_itemPool[i]._dead) return _itemPool[i];
+const _dumplingPool = [];
+for (let _i = 0; _i < _DUMPLING_POOL_SIZE; _i++) _dumplingPool.push(_makePoolDumpling());
+function _dumplingAlloc() {
+  for (let i = 0; i < _dumplingPool.length; i++) {
+    if (_dumplingPool[i]._dead) return _dumplingPool[i];
   }
-  /* 満杯: 生きているエントリを乗っ取ると items 等の配列に同一オブジェクトが
+  /* 満杯: 生きているエントリを乗っ取ると dumplings 等の配列に同一オブジェクトが
      二重登録され物理・描画が破綻する。新規生成してプールに加える（レアな1回のみGC） */
-  const g = _makePoolItem();
-  _itemPool.push(g);
+  const g = _makePoolDumpling();
+  _dumplingPool.push(g);
   return g;
 }
 /* _deadify: プールオブジェクトを返却するコールバック（swapRemove の onRemove に渡す）
@@ -885,7 +885,7 @@ function _itemAlloc() {
 const _deadify      = o => { o._dead = true; };
 /* プール由来のオブジェクトを持つ配列を空にする。**返却してから空にする**という
    不変条件をここに閉じ込める。
-   片方だけ書くと、返さなかったスロットが生きたまま残って再利用されず、_itemAlloc等が
+   片方だけ書くと、返さなかったスロットが生きたまま残って再利用されず、_dumplingAlloc等が
    新規生成を続けてプールが際限なく伸びる（iOS Safariのメモリを圧迫して処理落ち・音途切れに
    なる欠陥クラス）。配列を捨てる場所では必ずこれを通すこと。
    release は既定で _deadify。ghosts のようにキャンバスを別プールへ返す必要があるものは
@@ -895,7 +895,7 @@ function _releaseAll(arr, release = _deadify) {
   if (arr) for (const o of arr) release(o);
   return [];
 }
-/* items の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
+/* dumplings の y昇順ソート: 毎フレームほぼ整列済みのため挿入ソートが実質O(n)。
    Array.sort のコンパレータ呼び出しオーバーヘッドも排除できる */
 function _insertionSortY(a) {
   for (let i = 1; i < a.length; i++) {
@@ -913,7 +913,7 @@ const _predLife      = o => o.life > 0;
 const _predUzaText   = t => t.age < t.life;
 const _predRainDrop  = r => r.ripple ? r.life > 0 : r.y < H + 30;
 /* H・W は起動後不変なので定数クロージャとして安全に使える */
-const _predItem     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
+const _predDumpling     = g => { const r = g.size * 0.52; return g.y < H+120 && g.x+r > 0 && g.x-r < W; };
 /* done フェーズで毎フレーム呼ばれる allShown 判定用 pred */
 const _predWheelShown = w => !w.result || w.resultPop >= 1;
 
@@ -950,7 +950,7 @@ const BEAT_BONUS_MULT  = 4;   // BEAT BONUS発動時の配当倍率
 const FEVER_PROB        = 0.60; // 超大当たり後にフィーバーへ移行する確率
 const FEVER_PROB_NORMAL = 0.10; // 通常大当たり後にフィーバーへ移行する確率（超大当たりより低い）
 /* ── キングギヨウザ（ボス戦）: 蓄積・予兆・出現予告 ── */
-const KING_GYOZA_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
+const KING_METER_THRESHOLD = 1000; // 出現に必要な画面外退場ギヨウザ累計
 /* 予兆を出しはじめる蓄積の割合。
    当たり1回の加算は最大で閾値の20%（超大当たり+200）、大当たりでも10%（+100）ある。
    窓が狭いと段が当たり1回より細くなり、1回の当たりで段をまたいで飛ぶ。40%＝600点の窓なら
@@ -985,7 +985,7 @@ const KING_DEFEAT_RESTART_RATIO = 0.35;
    t が小さいと軌道がほとんど曲がらず流れ星に見え、大きいと中心まで来て弾ける。
    1本の径の変化で両端が出るので、見え方ごとの分岐を持たない。
 
-   使うギヨウザは本番の収束・退場と同じ makeItem。予兆だけ別のキャラクター（天使の輪と
+   使うギヨウザは本番の収束・退場と同じ makeDumpling。予兆だけ別のキャラクター（天使の輪と
    尾を持つウウウウの霊）にすると、直後に現れるキング戦の演出と繋がらない。
 
    中心への引きを加速度で書いてはいけない。強くすると中心を行き過ぎて周回し、最接近距離が
@@ -1004,7 +1004,7 @@ const KING_OMEN_FX_SPIN  = [0.04, 0.15];  // ギヨウザ自身の回転（上�
    画面に入っている時間が0.65秒しかなく（深い側は1.5秒）、そこを薄くすると存在ごと
    気づかれない。上限は手前に描くぶん抑える（描画位置のコメント参照） */
 const KING_OMEN_FX_ALPHA = [0.42, 0.60];
-/* 大きさ（_ITEM_SPRITE_REF に対する倍率）。濃さと同様、浅い側を小さくしすぎないこと。
+/* 大きさ（_DUMPLING_SPRITE_REF に対する倍率）。濃さと同様、浅い側を小さくしすぎないこと。
    段階感は個数・最接近距離・回転・頻度が担うので、いちばん気づいてほしい最初の1個を
    小さく薄くする理由が無い。縦画面はホイールが中央の列を占め、予兆が通るのは左右の細い
    余白なので、そこで一瞬見えることが下限の基準になる */
@@ -1019,10 +1019,10 @@ const KING_OMEN_FX_RATE  = [1/2400, 1/600];
 const KING_OMEN_FX_N_MAX = 3;
 const _kingOmenLerp = (a, t) => a[0] + (a[1] - a[0]) * t;
 /* リーチ大当たり（超大当たり）は当たり演出中ずっとアイテムを継続投下する
-   （updateItems参照）。当たり演出はユーザー入力待ちで自動終了しないため、
+   （updateDumplings参照）。当たり演出はユーザー入力待ちで自動終了しないため、
    上限が無いと画面を開いて放置するだけでアイテムが無限に増え続ける。
    投下時間そのものに上限を設けて打ち切る（演出の尺と描画負荷の上限） */
-const KING_ITEM_SPAWN_MAX_FRAMES = 400; // 約6.7秒でリーチ大当たりの継続投下を打ち切る
+const KING_DUMPLING_SPAWN_MAX_FRAMES = 400; // 約6.7秒でリーチ大当たりの継続投下を打ち切る
 /* ── king値（キングギヨウザ蓄積メーター）の加算量 ──
    当たり種別ごとの固定値。「落下ギヨウザが画面外へ退場した数」を数える方式は
    採らない: 加算のタイミングが演出の送り方に左右されて同じ当たりでも18〜92と
@@ -1043,7 +1043,7 @@ const KING_GAIN_SMALL          = 0;   // 小当たり（ギヨウザが出ない
    ウヨウヨだけは同時表示上限22匹（もともと20を超えている側なので下げない）。
    ※値の意味は演出ごとに少しずつ違う: ヨヨヨヨとギョギョは最初に出す総数、
      ウウウウは同時表示の上限（退場したぶんを補充し続ける） */
-const MEDIUM_EFFECT_GYOZA_N    = 20;
+const MEDIUM_EFFECT_SPRITE_N    = 20;
 /* デバッグ: ?king=N で蓄積メーターを上書き（ローカルテスト用） */
 const _KING_DEBUG = _dbgNum('king');
 /* ?seqdbg … 打ち込み→再生の変換を1トライごとにコンソールへ出す（実機で「打った通りに
@@ -1279,10 +1279,10 @@ const PAYOUT_RATE = {
 };
 /* ペイアウト倍率 → アイテム降下数（対数スケール）
    k=20, MAX=150: ×12→72, ×24→92, ×60→118 */
-const _ITEM_BURST_K   = 20;
-const _ITEM_BURST_MAX = 150;
-function _itemBurst(rate) {
-  return Math.min(_ITEM_BURST_MAX, Math.round(Math.log2(rate) * _ITEM_BURST_K));
+const _DUMPLING_BURST_K   = 20;
+const _DUMPLING_BURST_MAX = 150;
+function _dumplingBurst(rate) {
+  return Math.min(_DUMPLING_BURST_MAX, Math.round(Math.log2(rate) * _DUMPLING_BURST_K));
 }
 
 /* 当たり判定テーブル:
@@ -1299,9 +1299,9 @@ function _itemBurst(rate) {
    ※ 関数宣言はホイスティングされるため、この定数より後に定義された関数も参照可能 */
 const HIT_TABLE = [
   //          type        pat        payout      king                     medId         onHit               update           draw                drawDelay
-  { type:'jackpot',  pat:TARGET,   payout:'jackpot', king:KING_GAIN_JACKPOT, medId:null,       onHit:null,              update:null,          draw:drawItems,         drawDelay:0  },
+  { type:'jackpot',  pat:TARGET,   payout:'jackpot', king:KING_GAIN_JACKPOT, medId:null,       onHit:null,              update:null,          draw:drawDumplings,         drawDelay:0  },
   { type:'uyouyo',   pat:UYOUYO,   payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'uyouyo',   onHit:initWorms,         update:updateWorms,   draw:drawWorms,          drawDelay:40 },
-  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  king:KING_GAIN_GIUGIU,  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawItems,         drawDelay:0  },
+  { type:'giugiu',   pat:GIUGIU,   payout:'hitMed',  king:KING_GAIN_GIUGIU,  medId:'giugiu',   onHit:initGiugiu,        update:updateGiugiu,  draw:drawDumplings,         drawDelay:0  },
   { type:'yoyoyoyo', pat:YOYOYOYO, payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'yoyoyoyo', onHit:initYoyoyoyo,      update:updateYoyoyoyo,draw:drawYoyoyoyo,       drawDelay:50 },
   { type:'uuuu',     pat:UUUU,     payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'uuuu',     onHit:initUuuu,          update:updateUuuu,    draw:drawUuuu,           drawDelay:50 },
   { type:'gyogyo',   pat:GYOGYO,   payout:'hitMed',  king:KING_GAIN_MEDIUM,  medId:'gyogyo',   onHit:initGyogyo,        update:updateGyogyo,  draw:drawGyogyo,         drawDelay:45 },
@@ -1437,14 +1437,14 @@ let unlockedAch = {}, medAchieved = {};
 let playCount = 0;    // ゲームプレイ回数（第1矢ごと）
 let shotCount = 0;    // 矢を放った累計本数
 let jackpotCount = 0; // 大当たり累計回数
-let kingGyozaMeter = 0; // キングギヨウザ蓄積メーター（当たりごとに固定値を加算・game_stats永続化。KING_GAIN_*参照）
+let kingMeter = 0; // キングギヨウザ蓄積メーター（当たりごとに固定値を加算・game_stats永続化。KING_GAIN_*参照）
 /* こんがり失敗（_startBossDefeat）で没収された所持ギヨウザの累計プール。
    こんがり達成（_startBossVictory）時に、その戦闘の蓄積メーター分と合わせて
    まとめて所持ギヨウザへ返す。返却した時点で0に戻る。
    複数回の敗北をまたいで貯まるため game_stats へ永続化する */
 let kingLostPool = 0;
 /* 戦闘開始時点の蓄積メーター値（_initBossBattleがメーターを0にリセットする前に退避）。
-   こんがり達成時に、この値だけ所持ギヨウザへ返す。出現閾値KING_GYOZA_THRESHOLD
+   こんがり達成時に、この値だけ所持ギヨウザへ返す。出現閾値KING_METER_THRESHOLD
    以上＝1000+アルファになる。戦闘中しか意味を持たない一時値なので永続化しない */
 let _kingMeterAtBattleStart = 0;
 let wasPoor = false;  // 一度でも所持10以下になったか（不死鳥フラグ）
@@ -2145,7 +2145,7 @@ function _scheduleBossBgmRenders(immediate = false) {
     }).catch(e => { console.warn(`Boss BGM render failed (tier${tier}):`, e); done(); });
   };
   if (immediate) { start(); return; }
-  const near = kingGyozaMeter >= KING_GYOZA_THRESHOLD * KING_OMEN_RATIO;
+  const near = kingMeter >= KING_METER_THRESHOLD * KING_OMEN_RATIO;
   _bossBgmTimer = setTimeout(start,
     _bossBgmNextTier === 0 ? (near ? _BOSS_BGM_NEAR_DELAY_MS : _BOSS_BGM_FIRST_DELAY_MS)
                            : _BOSS_BGM_GAP_MS);
@@ -4270,19 +4270,19 @@ function lsLoadStats() {
       if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
       if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
       if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
-      if (typeof o.kingGyozaMeter === 'number') kingGyozaMeter = o.kingGyozaMeter;
+      if (typeof o.kingGyozaMeter === 'number') kingMeter = o.kingGyozaMeter; // 保存データのキー名は互換のため変えない
       if (typeof o.kingLostPool   === 'number') kingLostPool   = o.kingLostPool;
       if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
       if (typeof o.bestSyncChain  === 'number') bestSyncChain  = o.bestSyncChain;
     }
   } catch(e) {}
   /* デバッグ上書きは保存データ有無に関わらず最後に適用（早期リターン経路を作らない） */
-  if (_KING_DEBUG !== null) kingGyozaMeter = _KING_DEBUG;
+  if (_KING_DEBUG !== null) kingMeter = _KING_DEBUG;
 }
 function lsSaveStats() {
   /* 1射ごとに呼ばれる（1的目は2回）。_lsQueueが同一キーへの連続書き込みを
      1回に畳むので、ここでの呼び出し頻度がそのまま書き込み回数にはならない */
-  _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
+  _lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter: kingMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
 }
 /* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数（既定0=即時）。
    同じ'ach'音が完全に同時発生すると割れる（クリッピングする）ので、マスター出力の
@@ -4479,7 +4479,7 @@ const REACH_DECEL_FRAMES   = 180; // この間スピードを減衰させる
 const FEVER_BANNER_FRAMES  = 180; // フィーバーバナー表示総フレーム数（フェードイン20f＋本体＋フェードアウト30f）
 const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
 const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
-let worms = [], uzaTexts = [], items = [];
+let worms = [], uzaTexts = [], dumplings = [];
 let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
 
 /* ── 吉祥雲配置 ── */
@@ -4689,7 +4689,7 @@ function initGame() {
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   syncJustTimer = 0; syncJustLabel = '';    // シンクロ状態リセット
   _resetFeverState();
-  items = _releaseAll(items);
+  dumplings = _releaseAll(dumplings);
   init(true);
 }
 
@@ -4743,7 +4743,7 @@ function gameOverReset() {
   pendingShoot = false;
   _syncHistHead = 0; _syncHistCount = 0; syncRate = 0; syncRateDisp = 0; syncChain = 0; syncRateAboveCount = 0; syncRateBelowCount = 0;
   _resetFeverState();
-  items = _releaseAll(items);
+  dumplings = _releaseAll(dumplings);
   lsSave();
   _restartToTapestart();
 }
@@ -4760,7 +4760,7 @@ function gameOverReset() {
      ウウウウ = 上へ／ギョギョ = そのままの進行方向へ（壁で跳ね返らせない）
    次のトライで当たりが出たらrushを立てて加速させ、新しい演出と混ざり続ける
    時間を短くする。
-   ギウギウは対象外: 落下ギヨウザ（items）を使う演出で、もともとトライをまたいで
+   ギウギウは対象外: 落下ギヨウザ（dumplings）を使う演出で、もともとトライをまたいで
    物理で転がり画面外へ抜けていくため、この仕組みを通す必要がない */
 const _fxOutro = { worms: [], yoyos: [], ghosts: [], fish: [], rush: false, timer: 0 };
 const _FX_OUTRO_RUSH_MULT    = 3;     // 次トライで当たりが出たときの加速倍率
@@ -5654,19 +5654,19 @@ function _resolveJackpot() {
   if (_jackpotAutoReset) {
     const isComplete = feverEndedReason === 'complete';
     /* フル連チャン達成時: アイテム倍増（上限300）・配当は calcPayout で×2 */
-    initItems(_itemBurst(PAYOUT_RATE.jackpot) * (isComplete ? 2 : 1), true, isComplete ? 300 : 200);
+    initDumplings(_dumplingBurst(PAYOUT_RATE.jackpot) * (isComplete ? 2 : 1), true, isComplete ? 300 : 200);
     playSE('jackpot');
   } else if (isReach) {
     isReachJackpot = true;
     reachFlash = 1;
     launchReachFireworks();
-    initItems(_itemBurst(PAYOUT_RATE.reachJackpot), true);
+    initDumplings(_dumplingBurst(PAYOUT_RATE.reachJackpot), true);
     unlockAch('reach_jackpot');
     playSE('reachJackpot');
     if (!feverPending && Math.random() < FEVER_PROB) feverPending = true;
   } else {
     launchFireworks();
-    initItems(_itemBurst(PAYOUT_RATE.jackpot), true);
+    initDumplings(_dumplingBurst(PAYOUT_RATE.jackpot), true);
     playSE('jackpot');
     /* 通常大当たりからも低確率でフィーバー移行 */
     if (!feverPending && Math.random() < FEVER_PROB_NORMAL) feverPending = true;
@@ -5689,7 +5689,7 @@ function _applyKingGain(hitEntry, isJackpot) {
     else if (isReachJackpot)             gain = KING_GAIN_REACH_JACKPOT;
   }
   if (gain <= 0) return;
-  kingGyozaMeter += gain;
+  kingMeter += gain;
   lsSaveStats(); // 中当たりはこの経路でしか統計を保存しないため、加算のたびに保存する
 }
 
@@ -5728,7 +5728,7 @@ function _resolveTrialResult() {
   _resolveFeverEnd(_isJackpot);
   /* 残存アイテムがある場合: 当たりエフェクト発動前に地面スルーで退場させる
      フィーバー中の連続大当たりは積み重ねたいため除外 */
-  if (items.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushItems();
+  if (dumplings.length > 0 && hitType !== 'none' && !_jackpotAutoReset) flushDumplings();
   if (_isJackpot) _resolveJackpot();
   /* 当たり: 4本目飛行中の先打ちバッファを破棄（エフェクト後はユーザー操作で進む）
      フィーバー大当たりは自動リセット時に発射するため破棄しない */
@@ -5854,7 +5854,7 @@ function _updateAlways() {
   }
   _updateOmenFx();
   /* フィーバー堆積アイテム: doneフェーズ以外でも物理を継続（done内では既に呼ばれる） */
-  if (items.length > 0 && phase !== 'done') updateItems();
+  if (dumplings.length > 0 && phase !== 'done') updateDumplings();
   /* フィーバー開始バナータイマー（reason は常に null のためタイマーのみ管理） */
   if (feverStartBannerTimer > 0) {
     if (isGameOver) feverStartBannerTimer = 0;
@@ -6123,7 +6123,7 @@ function update() {
 
     if (isReachJackpot && endTimer % 70 === 35) launchReachFireworks();
     else if (_isJackpot && endTimer % 85 === 40) launchFireworks();
-    if (items.length > 0)                    updateItems();
+    if (dumplings.length > 0)                    updateDumplings();
     if (hitType === 'gizagiza' && endTimer % 120 === 60) launchGizaFireworks();
     if (_activeEffect?.update) _activeEffect.update();
   }
@@ -6207,7 +6207,7 @@ function spawnWorm() {
   else if (side===2){ x=Math.random()*W; y=H+40;  angle=-Math.PI/2; }
   else              { x=-40;   y=Math.random()*H; angle= 0;          }
   angle += (Math.random()-0.5)*0.8;
-  const g       = makeItem(x, y, 0, 0);
+  const g       = makeDumpling(x, y, 0, 0);
   g.angle       = angle;
   g.speed       = 1.2 + Math.random()*1.5;
   g.wiggle      = Math.random()*Math.PI*2;
@@ -6240,7 +6240,7 @@ function updateWorms() {
 function drawWorms(list) {
   ctx.save();
   for (const w of (list ?? worms)) {
-    drawOneItem(w);
+    drawOneDumpling(w);
   }
   ctx.globalAlpha = 1;
   ctx.restore();
@@ -6249,19 +6249,19 @@ function drawWorms(list) {
 /* ════════════════ 落下アイテム ════════════════ */
 
 /* ── ギヨウザ外観バリアントスプライト ──
-   drawOneItem は1個あたり約10パス+グラデーションのベクタ描画で、大当たり/フィーバー時
+   drawOneDumpling は1個あたり約10パス+グラデーションのベクタ描画で、大当たり/フィーバー時
    （最大240個）の描画が idle の約20倍のコストを占める。
    起動時に皮色×具配置のバリアントを OC へ焼き込み、毎フレームは回転付き drawImage 1回に
    置換する（実測 約2.5倍高速）。
-   個体差は _ITEM_VARIANT_N 種に量子化されるが落下群では知覚できない */
-const _ITEM_VARIANT_N   = 12;
+   個体差は _DUMPLING_VARIANT_N 種に量子化されるが落下群では知覚できない */
+const _DUMPLING_VARIANT_N   = 12;
 /* ギヨウザ本体の楕円（サイズ s に対する比）。中心は s*CY だけ下、半径は RX/RY。
    この形は輪郭だけでなく、影の広がり・湯気の湧き出す弧・スプライトの中身の矩形・
    勝利で回すときの球の半径まで共有している。数字のまま散らすと、形を変えたときに
-   どれかが取り残される（実際「_drawGyozaBodyと同じ比率」と書いたコメントが3箇所あった） */
-const GYOZA_BODY_CY = 0.08, GYOZA_BODY_RX = 0.58, GYOZA_BODY_RY = 0.48;
+   どれかが取り残される（実際「_drawDumplingBodyと同じ比率」と書いたコメントが3箇所あった） */
+const DUMPLING_BODY_CY = 0.08, DUMPLING_BODY_RX = 0.58, DUMPLING_BODY_RY = 0.48;
 /* 頂部の薄皮の楕円（中心Y・半径）。ひだはこの中に並び、ニラもこの円周上か内側に散らす */
-const GYOZA_SKIN_TOP_CY = -0.12, GYOZA_SKIN_TOP_RX = 0.40, GYOZA_SKIN_TOP_RY = 0.14;
+const DUMPLING_SKIN_TOP_CY = -0.12, DUMPLING_SKIN_TOP_RX = 0.40, DUMPLING_SKIN_TOP_RY = 0.14;
 /* ── ニラ（皮の内側に透ける具） ──
    形は刻み短冊（細い帯の両端を斜めに切る）。頂部の薄皮の円周上か内側に散らし、
    **ひだの線より下**に描く。線がニラを横切るので、皮の内側にあるように見える。
@@ -6275,51 +6275,51 @@ const GYOZA_SKIN_TOP_CY = -0.12, GYOZA_SKIN_TOP_RX = 0.40, GYOZA_SKIN_TOP_RY = 0
    大きさと色: これより小さく淡くすると、実寸ではニラが見えなくなる。
    本数はキングも同じ。キングは大きく描くので増やす案も並べたが、同じ本数で揃える
 
-   散らし方は best-candidate: 1本ごとに候補を GYOZA_NIRA_CANDIDATES 点引き、
+   散らし方は best-candidate: 1本ごとに候補を DUMPLING_DECO_CANDIDATES 点引き、
    既にあるニラから最も離れた点を採る。一様乱数に最小間隔を足すだけでは、
    縁に固まったり大きな隙間が空いたりする */
-const GYOZA_NIRA_N          = 5;
-const GYOZA_NIRA_CANDIDATES = 12;
-const GYOZA_NIRA_LEN   = [0.09, 0.13];   // 長さ（本体の大きさ s に対する比）
-const GYOZA_NIRA_WID   = [0.030, 0.040]; // 幅
-const GYOZA_NIRA_TILT  = 0.61;           // 薄皮の長軸からの傾き（±35°）
-const GYOZA_NIRA_DY_WEIGHT = 1.6;        // 間隔を測るときの縦の重み（薄皮は横に長いので縦の差を重く見る）
-const GYOZA_NIRA_HUE = [92, 116], GYOZA_NIRA_SAT = [38, 52], GYOZA_NIRA_LIT = [46, 58];
-const GYOZA_NIRA_ALPHA = 0.8;
-/* ここまでの置き場所はこれより後ろにできない。下の _itemVariantSprites は評価時に
-   _drawGyozaBody と _gyozaNiraSpec を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
+const DUMPLING_DECO_N          = 5;
+const DUMPLING_DECO_CANDIDATES = 12;
+const DUMPLING_DECO_LEN   = [0.09, 0.13];   // 長さ（本体の大きさ s に対する比）
+const DUMPLING_DECO_WID   = [0.030, 0.040]; // 幅
+const DUMPLING_DECO_TILT  = 0.61;           // 薄皮の長軸からの傾き（±35°）
+const DUMPLING_DECO_DY_WEIGHT = 1.6;        // 間隔を測るときの縦の重み（薄皮は横に長いので縦の差を重く見る）
+const DUMPLING_DECO_HUE = [92, 116], DUMPLING_DECO_SAT = [38, 52], DUMPLING_DECO_LIT = [46, 58];
+const DUMPLING_DECO_ALPHA = 0.8;
+/* ここまでの置き場所はこれより後ろにできない。下の _dumplingVariantSprites は評価時に
+   _drawDumplingBody と _dumplingDecoSpec を呼ぶので、定数が未初期化のまま参照されて起動に失敗する */
 
-const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
-const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
-const _itemVariantSprites = (() => {
+const _DUMPLING_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeDumpling の size 上限）
+const _DUMPLING_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
+const _dumplingVariantSprites = (() => {
   const arr = [];
-  const s = _ITEM_SPRITE_REF;
-  const nira = _newNiraSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
-  for (let v = 0; v < _ITEM_VARIANT_N; v++) {
-    const oc = _mkCache(_ITEM_SPRITE_HALF * 2 * _dpr, _ITEM_SPRITE_HALF * 2 * _dpr);
+  const s = _DUMPLING_SPRITE_REF;
+  const deco = _newDecoSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
+  for (let v = 0; v < _DUMPLING_VARIANT_N; v++) {
+    const oc = _mkCache(_DUMPLING_SPRITE_HALF * 2 * _dpr, _DUMPLING_SPRITE_HALF * 2 * _dpr);
     const c  = oc.getContext('2d');
     c.scale(_dpr, _dpr);
-    c.translate(_ITEM_SPRITE_HALF, _ITEM_SPRITE_HALF);
-    _drawGyozaShadow(c, s); // 関数宣言はホイスティングされるため前方参照可
-    const skin = _gyozaSkinPalette();
-    _gyozaNiraSpec(nira, Math.random, false);
-    _drawGyozaBody(c, s, 0, 0, _gyozaBodyGradient(c, s, skin.skinL, skin.skinD), undefined, nira);
+    c.translate(_DUMPLING_SPRITE_HALF, _DUMPLING_SPRITE_HALF);
+    _drawDumplingShadow(c, s); // 関数宣言はホイスティングされるため前方参照可
+    const skin = _dumplingSkinPalette();
+    _dumplingDecoSpec(deco, Math.random, false);
+    _drawDumplingBody(c, s, 0, 0, _dumplingBodyGradient(c, s, skin.skinL, skin.skinD), undefined, deco);
     arr.push(oc);
   }
   return arr;
 })();
 
-/* スプライトの中身がある矩形。枠（_ITEM_SPRITE_HALF）は影と具を含む安全半径で
+/* スプライトの中身がある矩形。枠（_DUMPLING_SPRITE_HALF）は影と具を含む安全半径で
    取ってあるため、そのまま転送すると面積の47%を透明なまま塗ることになる。
    落下ギヨウザは大当たり・フィーバー・ギウギウで数百個出るので、1個ぶんの無駄が
    そのまま積み上がる。
    形はバリアント間で同じ（変わるのは色と具の位置だけ）だが、取りこぼしを避けるため
    全バリアントの和を取る。測るのは起動時の1回だけ。
-   sx/sy/sw/sh はスプライトの画素、x/y/w/h は基準サイズ(_ITEM_SPRITE_REF)での
+   sx/sy/sw/sh はスプライトの画素、x/y/w/h は基準サイズ(_DUMPLING_SPRITE_REF)での
    中心からの位置。描くときは size/REF を掛ける */
-const _ITEM_SPRITE_RECT = (() => {
+const _DUMPLING_SPRITE_RECT = (() => {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const oc of _itemVariantSprites) {
+  for (const oc of _dumplingVariantSprites) {
     const d = oc.getContext('2d').getImageData(0, 0, oc.width, oc.height).data;
     for (let y = 0; y < oc.height; y++) {
       for (let x = 0; x < oc.width; x++) {
@@ -6331,16 +6331,16 @@ const _ITEM_SPRITE_RECT = (() => {
     }
   }
   if (!isFinite(x0)) return null;
-  const D = _dpr, H = _ITEM_SPRITE_HALF, pad = 1; // 端が欠けないよう1画素残す
+  const D = _dpr, H = _DUMPLING_SPRITE_HALF, pad = 1; // 端が欠けないよう1画素残す
   const sx = Math.max(0, x0 - pad), sy = Math.max(0, y0 - pad);
-  const sw = Math.min(_itemVariantSprites[0].width  - sx, x1 - x0 + 1 + pad * 2);
-  const sh = Math.min(_itemVariantSprites[0].height - sy, y1 - y0 + 1 + pad * 2);
+  const sw = Math.min(_dumplingVariantSprites[0].width  - sx, x1 - x0 + 1 + pad * 2);
+  const sh = Math.min(_dumplingVariantSprites[0].height - sy, y1 - y0 + 1 + pad * 2);
   return { sx, sy, sw, sh, x: sx / D - H, y: sy / D - H, w: sw / D, h: sh / D };
 })();
 
 
-function makeItem(x, y, vx, vy) {
-  const g    = _itemAlloc();
+function makeDumpling(x, y, vx, vy) {
+  const g    = _dumplingAlloc();
   g._dead    = false;
   const size = 34 + Math.random() * 8;
   g.x = x; g.y = y; g.vx = vx; g.vy = vy; g.age = 0; g._flush = false;
@@ -6348,14 +6348,14 @@ function makeItem(x, y, vx, vy) {
   g.rotSpd   = (Math.random() - 0.5) * 0.14;
   g._rotPhase = Math.random() * Math.PI * 2;
   g.size   = size;
-  /* 外観は焼き込み済みバリアントから選ぶ（_itemVariantSprites 参照） */
-  g._spr = _itemVariantSprites[(Math.random() * _ITEM_VARIANT_N) | 0];
+  /* 外観は焼き込み済みバリアントから選ぶ（_dumplingVariantSprites 参照） */
+  g._spr = _dumplingVariantSprites[(Math.random() * _DUMPLING_VARIANT_N) | 0];
   return g;
 }
 
 /* 残存アイテムを地面スルーで画面下へ落下させて退場させる */
-function flushItems() {
-  for (const g of items) {
+function flushDumplings() {
+  for (const g of dumplings) {
     g._flush = true;
     g.vy = 6 + Math.random() * 5;   // 強めの下向き初速
     g.vx += (Math.random() - 0.5) * 2; // 少し左右にばらす
@@ -6364,32 +6364,32 @@ function flushItems() {
 
 /* addOnly=true のとき既存アイテムを保持して追加（フィーバー連続大当たり用）。
    上限200を超えないようキャップする。 */
-function initItems(burst = 70, addOnly = false, max = 200) {
-  if (!addOnly) items = _releaseAll(items);
+function initDumplings(burst = 70, addOnly = false, max = 200) {
+  if (!addOnly) dumplings = _releaseAll(dumplings);
   /* 最初に中央からどさっとまとめて投下 */
   const FEVER_MAX = max;
-  const toAdd = addOnly ? Math.min(burst, FEVER_MAX - items.length) : burst;
+  const toAdd = addOnly ? Math.min(burst, FEVER_MAX - dumplings.length) : burst;
   for (let i = 0; i < toAdd; i++) {
     const cx   = W/2 + (Math.random()-0.5) * W*0.38;  // 中央寄り
     const y    = -40 - Math.random() * 180;            // 高さをずらして"固まり感"を出す
     const vx   = (Math.random()-0.5) * 5;
     const vy   = 1.5 + Math.random() * 4;
-    items.push(makeItem(cx, y, vx, vy));
+    dumplings.push(makeDumpling(cx, y, vx, vy));
   }
 }
 
-function spawnItem() {
+function spawnDumpling() {
   /* 通常スポーン: 画面全体からランダムに */
   const x  = Math.random() * (W + 80) - 40;
   const vy = Math.random() * 1.5 + 0.5;
   const vx = (Math.random() - 0.5) * 4;
-  items.push(makeItem(x, -50, vx, vy));
+  dumplings.push(makeDumpling(x, -50, vx, vy));
 }
 
 const GROUND_Y     = H - 14;   // キャンバス底面の地面ライン
-/* アイテム衝突半径の上限: makeItem の size 上限(34+8=42) × 0.52
+/* アイテム衝突半径の上限: makeDumpling の size 上限(34+8=42) × 0.52
    yソート済みスイープの打ち切り判定（break）に使用 */
-const RMAX_ITEM_R  = 42 * 0.52;
+const RMAX_DUMPLING_R  = 42 * 0.52;
 
 
 /* ────────────────────────────────────────────────────────────
@@ -6400,7 +6400,7 @@ const RMAX_ITEM_R  = 42 * 0.52;
    ・支えを失ったアイテムは再落下し横方向にも動く
    ──────────────────────────────────────────────────────────── */
 /* 円衝突の解決1パス（yソート済みスイープ → 位置補正 → 法線インパルス → 接線摩擦）。
-   落下アイテム（updateItems）とギウギウ（updateGiugiu）は同じソルバを使う。片方に写して
+   落下アイテム（updateDumplings）とギウギウ（updateGiugiu）は同じソルバを使う。片方に写して
    持たせてはいけない: 同じ物理が2箇所にあると片方だけ直して他方が取り残され、同じ役割の
    定数が別名・別値で並存して grep での水平展開も効かなくなる。
    差分はオプションで注入する:
@@ -6411,15 +6411,15 @@ const RMAX_ITEM_R  = 42 * 0.52;
    ソートは位置補正が入るたびに必要なのでこの関数の中で行う
    （ほぼ整列済みなので挿入ソートで実質O(n)）。
    n=240時は総当たりで約14万ペア/フレームになるため、yで打ち切るスイープは必須 */
-function _resolveItemCollisions(restitution, friction2, skipFlush, markContact) {
-  _insertionSortY(items);
-  for (let i = 0; i < items.length; i++) {
-    const a = items[i];
+function _resolveDumplingCollisions(restitution, friction2, skipFlush, markContact) {
+  _insertionSortY(dumplings);
+  for (let i = 0; i < dumplings.length; i++) {
+    const a = dumplings[i];
     if (skipFlush && a._flush) continue;
     const ra = a.size * 0.52;
-    const yLimit = ra + RMAX_ITEM_R; // これ以上yが離れたら以降のjは全て非衝突
-    for (let j = i + 1; j < items.length; j++) {
-      const b  = items[j];
+    const yLimit = ra + RMAX_DUMPLING_R; // これ以上yが離れたら以降のjは全て非衝突
+    for (let j = i + 1; j < dumplings.length; j++) {
+      const b  = dumplings[j];
       const dy = b.y - a.y; // ソート済みなので dy >= 0
       if (dy >= yLimit) break; // スイープ打ち切り
       if (skipFlush && b._flush) continue;
@@ -6464,14 +6464,14 @@ function _resolveItemCollisions(restitution, friction2, skipFlush, markContact) 
   }
 }
 
-function updateItems() {
+function updateDumplings() {
   /* 追加スポーン: リーチ大当たりのみ継続投下、通常大当たりは初期バーストのみ。
      当たり演出はユーザー入力待ちで自動終了しないため、投下自体に時間上限を
-     設けて放置し続けても際限なく湧かないようにする（KING_ITEM_SPAWN_MAX_FRAMES
+     設けて放置し続けても際限なく湧かないようにする（KING_DUMPLING_SPAWN_MAX_FRAMES
      宣言部のコメント参照） */
   if (isReachJackpot) {
     const spawnRate = endTimer < 60 ? 8 : endTimer < 200 ? 5 : 3;
-    if (endTimer < KING_ITEM_SPAWN_MAX_FRAMES && endTimer % spawnRate === 0 && items.length < 240) spawnItem();
+    if (endTimer < KING_DUMPLING_SPAWN_MAX_FRAMES && endTimer % spawnRate === 0 && dumplings.length < 240) spawnDumpling();
   }
 
   const GRAVITY     = 0.38;
@@ -6481,7 +6481,7 @@ function updateItems() {
   const ITERS       = 5;      // 衝突解決イテレーション数
 
   /* ① 積分: 重力適用・位置更新 */
-  for (const g of items) {
+  for (const g of dumplings) {
     g.age++;
     g.vy        += GRAVITY;
     g.vx        *= 0.997;        // 空気抵抗
@@ -6496,7 +6496,7 @@ function updateItems() {
   for (let iter = 0; iter < ITERS; iter++) {
 
     /* 地面 & 左右壁 */
-    for (const g of items) {
+    for (const g of dumplings) {
       const r = g.size * 0.52;
       if (!g._flush && g.y + r > GROUND_Y) {
         g.y = GROUND_Y - r;
@@ -6523,22 +6523,22 @@ function updateItems() {
       }
     }
 
-    _resolveItemCollisions(RESTITUTION, FRICTION2, true, true);
+    _resolveDumplingCollisions(RESTITUTION, FRICTION2, true, true);
   }
 
   /* 画面外に完全に出たものをプールに返却しつつ除去 */
-  swapRemove(items, _predItem, _deadify);
-  /* updateの末尾でソートしておくことでdrawItems側でのslice+sortを排除 */
-  _insertionSortY(items);
+  swapRemove(dumplings, _predDumpling, _deadify);
+  /* updateの末尾でソートしておくことでdrawDumplings側でのslice+sortを排除 */
+  _insertionSortY(dumplings);
 }
 
 /* ── ギヨウザの外観パラメータ ──────────────────────────
-   外観の定義はここと _drawGyozaBody に集める。Math.randomを消費する順序は 皮→ニラ。
+   外観の定義はここと _drawDumplingBody に集める。Math.randomを消費する順序は 皮→ニラ。
    これらは起動時のスプライト生成（即時実行）からも呼ばれるが、関数宣言は
    ホイスティングされるため定義位置より前から参照できる */
 
 /* 皮の焼き色（個体差用のランダムパレット） */
-function _gyozaSkinPalette() {
+function _dumplingSkinPalette() {
   return {
     skinL: `hsl(${42+Math.random()*12|0},${48+Math.random()*12|0}%,${78+Math.random()*8|0}%)`,
     skinD: `hsl(${38+Math.random()*10|0},${50+Math.random()*14|0}%,${62+Math.random()*8|0}%)`,
@@ -6546,10 +6546,10 @@ function _gyozaSkinPalette() {
 }
 
 /* 本体の陰影グラデーション。中心を左上へずらして光の当たりを作る比率は
-   _drawGyozaBodyの形（中心Y=+s*0.08、rx=s*0.58・ry=s*0.48）と対で決まっている
+   _drawDumplingBodyの形（中心Y=+s*0.08、rx=s*0.58・ry=s*0.48）と対で決まっている
    ため、アイテム・スプライト・キング本体で同じ式を使う。キングだけは焼き色を
    固定色で持つのでouterまで指定する */
-function _gyozaBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
+function _dumplingBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
   const grd = c2.createRadialGradient(-s*0.18, -s*0.12, 0, 0, s*0.08, s*0.62);
   grd.addColorStop(0, skinL);
   grd.addColorStop(0.6, skinD);
@@ -6560,10 +6560,10 @@ function _gyozaBodyGradient(c2, s, skinL, skinD, outer = 'hsl(35,45%,50%)') {
 /* [lo, hi] の範囲から rnd で1つ引く（分割代入は反復子を作るので使わない） */
 function _lerpRand(rnd, range) { return range[0] + (range[1] - range[0]) * rnd(); }
 
-/* ニラの配置の器（GYOZA_NIRA_N 本ぶん）。中身は _gyozaNiraSpec が書き込む */
-function _newNiraSpec() {
+/* ニラの配置の器（DUMPLING_DECO_N 本ぶん）。中身は _dumplingDecoSpec が書き込む */
+function _newDecoSpec() {
   const out = [];
-  for (let i = 0; i < GYOZA_NIRA_N; i++) out.push({ dx: 0, dy: 0, ca: 1, sa: 0, len: 0, wid: 0, color: '' });
+  for (let i = 0; i < DUMPLING_DECO_N; i++) out.push({ dx: 0, dy: 0, ca: 1, sa: 0, len: 0, wid: 0, color: '' });
   return out;
 }
 
@@ -6572,42 +6572,42 @@ function _newNiraSpec() {
    avoidBrows はキング用: 顔が上に乗るので、眉の高さの帯を避ける（KING_NIRA_AVOID_* 参照）。
    乱数を引く順序（候補の位置→向き→長さ→幅→色）を変えると、同じ種から別の配置が出る。
    キングの見た目は種で決まっているので動かさないこと */
-function _gyozaNiraSpec(out, rnd, avoidBrows) {
+function _dumplingDecoSpec(out, rnd, avoidBrows) {
   for (let i = 0; i < out.length; i++) {
     let bx = 0, by = 0, bestD = -1;
-    for (let k = 0; k < GYOZA_NIRA_CANDIDATES; k++) {
+    for (let k = 0; k < DUMPLING_DECO_CANDIDATES; k++) {
       let dx, dy;
       do {
         /* 楕円の中で一様（半径方向は平方根で引く）。u=1 が円周上 */
         const t = rnd() * Math.PI * 2, u = Math.sqrt(rnd());
-        dx = GYOZA_SKIN_TOP_RX * u * Math.cos(t);
-        dy = GYOZA_SKIN_TOP_CY + GYOZA_SKIN_TOP_RY * u * Math.sin(t);
-      } while (avoidBrows && Math.abs(dx) < KING_NIRA_AVOID_X && dy > KING_NIRA_AVOID_Y);
+        dx = DUMPLING_SKIN_TOP_RX * u * Math.cos(t);
+        dy = DUMPLING_SKIN_TOP_CY + DUMPLING_SKIN_TOP_RY * u * Math.sin(t);
+      } while (avoidBrows && Math.abs(dx) < KING_DECO_AVOID_X && dy > KING_DECO_AVOID_Y);
       let d = 1;
       for (let j = 0; j < i; j++) {
-        d = Math.min(d, Math.hypot(out[j].dx - dx, (out[j].dy - dy) * GYOZA_NIRA_DY_WEIGHT));
+        d = Math.min(d, Math.hypot(out[j].dx - dx, (out[j].dy - dy) * DUMPLING_DECO_DY_WEIGHT));
       }
       if (d > bestD) { bestD = d; bx = dx; by = dy; }
     }
     const p = out[i];
-    const a = (rnd() * 2 - 1) * GYOZA_NIRA_TILT;
+    const a = (rnd() * 2 - 1) * DUMPLING_DECO_TILT;
     p.dx = bx; p.dy = by; p.ca = Math.cos(a); p.sa = Math.sin(a);
-    p.len = _lerpRand(rnd, GYOZA_NIRA_LEN);
-    p.wid = _lerpRand(rnd, GYOZA_NIRA_WID);
-    const h   = _lerpRand(rnd, GYOZA_NIRA_HUE) | 0;
-    const sat = _lerpRand(rnd, GYOZA_NIRA_SAT) | 0;
-    const lit = _lerpRand(rnd, GYOZA_NIRA_LIT) | 0;
+    p.len = _lerpRand(rnd, DUMPLING_DECO_LEN);
+    p.wid = _lerpRand(rnd, DUMPLING_DECO_WID);
+    const h   = _lerpRand(rnd, DUMPLING_DECO_HUE) | 0;
+    const sat = _lerpRand(rnd, DUMPLING_DECO_SAT) | 0;
+    const lit = _lerpRand(rnd, DUMPLING_DECO_LIT) | 0;
     p.color = `hsl(${h},${sat}%,${lit}%)`;
   }
   return out;
 }
 
-/* ニラを描く（_drawGyozaBody がひだの直前に呼ぶ）。刻み短冊＝両端を斜めに切った細い帯。
+/* ニラを描く（_drawDumplingBody がひだの直前に呼ぶ）。刻み短冊＝両端を斜めに切った細い帯。
    ギョギョ魚は毎フレームここを通るので、save/restore と変換行列を使わず頂点を直接回す */
-function _drawGyozaNira(c2, s, ox, oy, nira) {
+function _drawDumplingDeco(c2, s, ox, oy, deco) {
   const alpha = c2.globalAlpha;
-  c2.globalAlpha = alpha * GYOZA_NIRA_ALPHA;
-  for (const p of nira) {
+  c2.globalAlpha = alpha * DUMPLING_DECO_ALPHA;
+  for (const p of deco) {
     const cx = ox + p.dx * s, cy = oy + p.dy * s, ca = p.ca, sa = p.sa;
     const L = p.len * s / 2, w = p.wid * s / 2, k = w * 1.1; // k: 切り口の斜めのずれ
     c2.beginPath();
@@ -6623,30 +6623,30 @@ function _drawGyozaNira(c2, s, ox, oy, nira) {
 }
 
 /* 接地影（真下に潰した楕円） */
-function _drawGyozaShadow(c2, s) {
+function _drawDumplingShadow(c2, s) {
   c2.save();
   c2.translate(s*0.06, s*0.12);
   c2.scale(1, 0.55);
-  c2.beginPath(); c2.arc(0, 0, s*GYOZA_BODY_RX, 0, Math.PI*2);
+  c2.beginPath(); c2.arc(0, 0, s*DUMPLING_BODY_RX, 0, Math.PI*2);
   c2.fillStyle = 'rgba(0,0,0,0.18)'; c2.fill();
   c2.restore();
 }
 
 /* ギヨウザ本体を描く。落下ギヨウザ（起動時のスプライト）・幽霊・ギョギョ魚・キングが
    すべてここを通るので、本体の見た目はここだけで決まる。影・オーラ・輪・尾・顔は呼び出し側が描く。
-   nira: ニラの配置（_gyozaNiraSpec の結果）。省略するとニラを描かない
+   deco: ニラの配置（_dumplingDecoSpec の結果）。省略するとニラを描かない
    part を渡すと層を選んで描く。省略時は全部を元の順序で描く。
    キング戦の勝利で本体を球として回すために分けてある（_drawKingSpin参照）:
      'sphere'  球そのもの。輪郭と陰影を持つ＝回してはいけない層
      'surface' 表面の模様（接地側の焦げ色・薄皮・ひだ）＝回す層
      'gloss'   ハイライト。光なので球の上に固定する
    分けても重ね順は元と同じなので、回していないときの見た目は変わらない */
-function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part, nira) {
+function _drawDumplingBody(c2, s, ox, oy, bodyGrd, part, deco) {
   const all = !part;
   if (all || part === 'sphere') {
   /* 本体楕円 */
   c2.beginPath();
-  c2.ellipse(ox, oy + s*GYOZA_BODY_CY, s*GYOZA_BODY_RX, s*GYOZA_BODY_RY, 0, 0, Math.PI*2);
+  c2.ellipse(ox, oy + s*DUMPLING_BODY_CY, s*DUMPLING_BODY_RX, s*DUMPLING_BODY_RY, 0, 0, Math.PI*2);
   c2.fillStyle = bodyGrd;
   c2.fill();
   c2.strokeStyle = 'rgba(120,90,50,0.55)';
@@ -6665,7 +6665,7 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part, nira) {
 
   /* 頂部の薄皮 */
   c2.beginPath();
-  c2.ellipse(ox, oy + s*GYOZA_SKIN_TOP_CY, s*GYOZA_SKIN_TOP_RX, s*GYOZA_SKIN_TOP_RY, 0, 0, Math.PI*2);
+  c2.ellipse(ox, oy + s*DUMPLING_SKIN_TOP_CY, s*DUMPLING_SKIN_TOP_RX, s*DUMPLING_SKIN_TOP_RY, 0, 0, Math.PI*2);
   c2.fillStyle = 'hsl(50,55%,88%)';
   c2.fill();
   c2.strokeStyle = 'rgba(120,90,50,0.4)';
@@ -6673,7 +6673,7 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part, nira) {
   c2.stroke();
 
   /* ニラ。ひだの線より下に置き、皮の内側に透けて見せる */
-  if (nira) _drawGyozaNira(c2, s, ox, oy, nira);
+  if (deco) _drawDumplingDeco(c2, s, ox, oy, deco);
 
   /* ひだ（9本を1回のstrokeでGPUフラッシュ削減） */
   c2.strokeStyle = 'rgba(140,105,55,0.55)';
@@ -6696,26 +6696,26 @@ function _drawGyozaBody(c2, s, ox, oy, bodyGrd, part, nira) {
   }
 }
 
-function drawOneItem(g) {
+function drawOneDumpling(g) {
   const s = g.size;
   ctx.save();
   ctx.translate(g.x, g.y);
   ctx.rotate(g.rot);
 
   /* 影・本体・ニラを焼き込み済みのOCを基準サイズ比で1回転写 */
-  const k = s / _ITEM_SPRITE_REF, r = _ITEM_SPRITE_RECT;
+  const k = s / _DUMPLING_SPRITE_REF, r = _DUMPLING_SPRITE_RECT;
   if (r) ctx.drawImage(g._spr, r.sx, r.sy, r.sw, r.sh, r.x * k, r.y * k, r.w * k, r.h * k);
   else {
-    const h = _ITEM_SPRITE_HALF * k;
+    const h = _DUMPLING_SPRITE_HALF * k;
     ctx.drawImage(g._spr, -h, -h, h * 2, h * 2);
   }
   ctx.restore();
 }
 
-function drawItems() {
-  if (!items.length) return;
-  /* updateItems末尾でソート済みのため slice+sort 不要 */
-  for (const g of items) drawOneItem(g);
+function drawDumplings() {
+  if (!dumplings.length) return;
+  /* updateDumplings末尾でソート済みのため slice+sort 不要 */
+  for (const g of dumplings) drawOneDumpling(g);
 }
 
 /* ════════════════ ウザウザ: ウザいテキスト大量発生 ════════════════ */
@@ -6767,9 +6767,9 @@ function drawUzaTexts() {
 
 /* ════════════════ ギウギウ: ぎゅうぎゅう詰め ════════════════ */
 function initGiugiu() {
-  items = _releaseAll(items);
+  dumplings = _releaseAll(dumplings);
   /* 外周リングから中央へ向かって一斉に投下 */
-  const N = _itemBurst(PAYOUT_RATE.hitMed);
+  const N = _dumplingBurst(PAYOUT_RATE.hitMed);
   const R = Math.hypot(W, H) * 0.55;
   for (let i = 0; i < N; i++) {
     const angle = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
@@ -6778,19 +6778,19 @@ function initGiugiu() {
     const spd = 32 + Math.random() * 10;
     const vx  = (W/2 - sx) / R * spd;
     const vy  = (H/2 - sy) / R * spd;
-    items.push(makeItem(sx, sy, vx, vy));
+    dumplings.push(makeDumpling(sx, sy, vx, vy));
   }
 }
 
 function updateGiugiu() {
   /* 外縁から追加投入（最大30個） */
-  if (endTimer % 15 === 0 && items.length < 30) {
+  if (endTimer % 15 === 0 && dumplings.length < 30) {
     const angle = Math.random() * Math.PI * 2;
     const R = Math.hypot(W, H) * 0.55;
     const sx = W/2 + Math.cos(angle) * R;
     const sy = H/2 + Math.sin(angle) * R;
     const spd = 32 + Math.random() * 10;
-    items.push(makeItem(sx, sy,
+    dumplings.push(makeDumpling(sx, sy,
       (W/2 - sx) / R * spd, (H/2 - sy) / R * spd));
   }
 
@@ -6819,7 +6819,7 @@ function updateGiugiu() {
   const ATTRACT_DYNA = ATTRACT * attractMul;
 
   /* ① 距離反比例引力 + 位置更新 */
-  for (const g of items) {
+  for (const g of dumplings) {
     const dx = CX - g.x, dy = CY - g.y;
     const d  = Math.sqrt(dx*dx + dy*dy) || 0.001;
     const forceMag = ATTRACT_DYNA * (1 + ATTRACT_REF / (d + ATTRACT_REF));
@@ -6836,11 +6836,11 @@ function updateGiugiu() {
     g.rot    += g.rotSpd;
   }
 
-  /* ② 衝突解決（updateItemsと同じソルバ。反発・摩擦の値と、落下退場・接触フラグの
-     扱いだけが違う。_resolveItemCollisions参照） */
-  for (let iter = 0; iter < ITERS; iter++) _resolveItemCollisions(RESTITUTION, FRICTION2, false, false);
+  /* ② 衝突解決（updateDumplingsと同じソルバ。反発・摩擦の値と、落下退場・接触フラグの
+     扱いだけが違う。_resolveDumplingCollisions参照） */
+  for (let iter = 0; iter < ITERS; iter++) _resolveDumplingCollisions(RESTITUTION, FRICTION2, false, false);
 
-  _insertionSortY(items);
+  _insertionSortY(dumplings);
 }
 
 /* ════════════════ ギギギギ: 機械の軋み・火花 ════════════════ */
@@ -6902,7 +6902,7 @@ function drawGigigigi() {
 /* ════════════════ ヨヨヨヨ: ヨーヨー ════════════════ */
 function initYoyoyoyo() {
   yoyos = _releaseAll(yoyos);
-  const count = MEDIUM_EFFECT_GYOZA_N;
+  const count = MEDIUM_EFFECT_SPRITE_N;
   /* 横に等間隔で並べるため、1レーンの幅は画面幅÷個数。縦画面（W=420）では
      20個だと1レーン21pxとギヨウザの見た目幅（約44px）より狭くなるが、
      各個体は振幅・周波数・位相がばらばらの上下運動をしていて同じ高さに
@@ -6911,7 +6911,7 @@ function initYoyoyoyo() {
   const jitter = Math.min(18, (W / count) * 0.4);
   for (let i = 0; i < count; i++) {
     const x = (i + 0.5) * (W / count) + (Math.random()-0.5)*jitter;
-    const g   = makeItem(x, 0, 0, 0);
+    const g   = makeDumpling(x, 0, 0, 0);
     g.phase   = Math.random() * Math.PI * 2;
     g.freq    = 0.055 + Math.random()*0.04;
     g.amp     = H * 0.30 + Math.random() * H * 0.25;
@@ -6954,7 +6954,7 @@ function drawYoyoyoyo(list, outroTimer) {
     /* ギヨウザ */
     ctx.save();
     ctx.globalAlpha = a;
-    drawOneItem(y);
+    drawOneDumpling(y);
     ctx.restore();
   }
 }
@@ -6970,7 +6970,7 @@ function initUuuu() {
 
 /* 幽霊ギヨウザをオフスクリーンに事前レンダリング（毎フレームのグラジェント生成を排除）
    ギヨウザ本体を青白グラデーション+半透明で描き、天使の輪と幽霊の尾を追加する */
-let _ghostNira = null; // 焼き込んだら読み捨てるので、幽霊どうしで使い回す
+let _ghostDeco = null; // 焼き込んだら読み捨てるので、幽霊どうしで使い回す
 function _makeGhostCanvas(r) {
   /* キャンバスサイズ: ギヨウザ本体 + 上の天使の輪 + 下の幽霊の尾 を収める */
   const bodyH  = r * 1.2;  // ギヨウザ縦半径
@@ -7008,7 +7008,7 @@ function _makeGhostCanvas(r) {
   c2.shadowColor = 'rgba(140,200,255,0.95)';
   c2.shadowBlur  = r * 0.7;
   c2.beginPath();
-  c2.ellipse(cx, cy + r*GYOZA_BODY_CY, r*GYOZA_BODY_RX, r*GYOZA_BODY_RY, 0, 0, Math.PI*2);
+  c2.ellipse(cx, cy + r*DUMPLING_BODY_CY, r*DUMPLING_BODY_RX, r*DUMPLING_BODY_RY, 0, 0, Math.PI*2);
   c2.fillStyle = 'rgba(180,220,255,0.35)';
   c2.fill();
   c2.restore();
@@ -7018,8 +7018,8 @@ function _makeGhostCanvas(r) {
   bodyGrd.addColorStop(0,   'hsl(42,70%,82%)');
   bodyGrd.addColorStop(0.6, 'hsl(38,62%,72%)');
   bodyGrd.addColorStop(1,   'hsl(34,55%,58%)');
-  _drawGyozaBody(c2, r, cx, cy, bodyGrd, undefined,
-                 _gyozaNiraSpec(_ghostNira || (_ghostNira = _newNiraSpec()), Math.random, false));
+  _drawDumplingBody(c2, r, cx, cy, bodyGrd, undefined,
+                 _dumplingDecoSpec(_ghostDeco || (_ghostDeco = _newDecoSpec()), Math.random, false));
 
   /* ── 天使の輪（ギヨウザ上方に浮かぶ金色の楕円リング） ── */
   const haloY  = cy - r * 0.72; // 頭上に浮かせる
@@ -7061,7 +7061,7 @@ function spawnGhost() {
 }
 
 function updateUuuu() {
-  if (endTimer % 18 === 0 && ghosts.length < MEDIUM_EFFECT_GYOZA_N) spawnGhost();
+  if (endTimer % 18 === 0 && ghosts.length < MEDIUM_EFFECT_SPRITE_N) spawnGhost();
   for (const g of ghosts) {
     g.y += g.vy;
     g.wobble += g.wobbleSpd;
@@ -7167,10 +7167,10 @@ function drawZazazaza() {
 /* ════════════════ ギョギョ: びっくり魚 ════════════════ */
 function initGyogyo() {
   gyogyoFish = [];
-  for (let i = 0; i < MEDIUM_EFFECT_GYOZA_N; i++) {
+  for (let i = 0; i < MEDIUM_EFFECT_SPRITE_N; i++) {
     const fromLeft = Math.random() < 0.5;
     const size = 28 + Math.random() * 28;
-    /* bodyGrd: makeItem()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
+    /* bodyGrd: makeDumpling()と同様に生成時1回だけ作成（drawFish内での毎フレーム生成を排除）
        グラジェント座標はfillStyle適用時の座標系で評価されるため
        transform前に生成しても translate+rotate後の使用で正しく機能する */
     const bodyGrd = ctx.createRadialGradient(-size*0.15, -size*0.3, 0, 0, size*0.1, size*1.1);
@@ -7186,7 +7186,7 @@ function initGyogyo() {
       phase: Math.random() * Math.PI * 2,
       col:   ['#f0a030','#e06820','#ff8040','#ffcc44','#dd6644'][Math.floor(Math.random()*5)],
       bodyGrd,
-      nira: _gyozaNiraSpec(_newNiraSpec(), Math.random, false), // 泳いでいる間は同じ配置
+      deco: _dumplingDecoSpec(_newDecoSpec(), Math.random, false), // 泳いでいる間は同じ配置
       exclamTimer: 0,
       exclamDur:   0,
     });
@@ -7222,10 +7222,10 @@ function drawFish(f, t) {
      本体楕円だけ不透明度0.97で塗り、後ろの尾ひれをわずかに透かす。
      模様とハイライトは不透明で描く（層を分けて呼ぶのはこのため） */
   ctx.globalAlpha = 0.97;
-  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'sphere'); // bodyGrd は initGyogyo() で事前生成済み
+  _drawDumplingBody(ctx, s, 0, 0, f.bodyGrd, 'sphere'); // bodyGrd は initGyogyo() で事前生成済み
   ctx.globalAlpha = 1;
-  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'surface', f.nira);
-  _drawGyozaBody(ctx, s, 0, 0, f.bodyGrd, 'gloss');
+  _drawDumplingBody(ctx, s, 0, 0, f.bodyGrd, 'surface', f.deco);
+  _drawDumplingBody(ctx, s, 0, 0, f.bodyGrd, 'gloss');
 
   /* びっくり目（ひだの右寄りに配置） */
   const ex = s * 0.30, ey = -s * 0.04;
@@ -7414,7 +7414,7 @@ function drawUzaFlash() {
 
 const _OMEN_LINES = ['……おや？', 'ギヨウザたちが……', 'ちからを あわせて……', '……くる。'];
 const _OMEN_LINE_FRAMES = 80; // 台詞1行あたりの表示フレーム数（タメ）
-let _omen = null;      // { step, timer, items, flash } 予告演出の状態（null=非表示）
+let _omen = null;      // { step, timer, dumplings, flash } 予告演出の状態（null=非表示）
 /* 予兆のギヨウザ [{ g(プール由来のアイテム), age, life, th, swirl, r0, rNear, rOut, spin, alpha, a }] */
 let _omenFx = [];
 const _predOmenFxAlive = o => o.age < o.life;
@@ -7441,11 +7441,11 @@ function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px ${FONT_MIN}`; }
 function _wrapOutroLines(lines) {
   return lines.flatMap(t => _wrapTrueEndingLine(t, _outroMsgFont(), W - 48)); // 左右24pxずつの余白
 }
-let _defeatOutro = null; // { step, timer, items } つなぎ演出の状態（null=非表示）
+let _defeatOutro = null; // { step, timer, dumplings } つなぎ演出の状態（null=非表示）
 /* こんがり達成側の退場演出の状態（null=非表示、drawBossVictoryOutro参照）。
    宣言をここに置くのは_cleanupKingBattleStateが両方を後片付けするため
    （letはホイストされないので、使用箇所より後で宣言するとTDZ risk になる） */
-let _victoryOutro = null; // { step, timer, items, seedItem, msgAlpha, gaugeAlpha, baseBy, baseScale }
+let _victoryOutro = null; // { step, timer, dumplings, seedDumpling, msgAlpha, gaugeAlpha, baseBy, baseScale }
 
 /* 予兆の進み具合（0=まだ出さない → 1=出現直前）。KING_OMEN_FX_* の補間に使う。
 
@@ -7456,8 +7456,8 @@ let _victoryOutro = null; // { step, timer, items, seedItem, msgAlpha, gaugeAlph
    式を分けないのは、同じ式で初回も周回も成立しているため。
    蓄積側にだけ指数を掛ける。実績は残り個数という粗い段なので、さらに歪めると段が飛ぶ */
 function _kingOmenProgress() {
-  const from = KING_GYOZA_THRESHOLD * KING_OMEN_RATIO;
-  const meterT = Math.max(0, Math.min(1, (kingGyozaMeter - from) / (KING_GYOZA_THRESHOLD - from)));
+  const from = KING_METER_THRESHOLD * KING_OMEN_RATIO;
+  const meterT = Math.max(0, Math.min(1, (kingMeter - from) / (KING_METER_THRESHOLD - from)));
   const left = ACHIEVEMENTS.reduce((a, x) => a + (x.id !== KONGARI_ACH_ID && !unlockedAch[x.id] ? 1 : 0), 0);
   const achU = Math.max(0, Math.min(1, 1 - left / KING_OMEN_ACH_SPAN));
   return Math.min(meterT ** KING_OMEN_EXP, achU);
@@ -7466,17 +7466,17 @@ function _kingOmenProgress() {
 /* 予兆のギヨウザを1組ぶん出す（KING_OMEN_FX_*の定義部参照）。
    外周半径と中心は本番の収束と同じ値を使う。同じ場所から同じように現れることが、
    これから起きることの予告になる。
-   g.size を書き換えてよいのは、drawOneItem がスプライトを基準サイズとの比で拡縮するだけだから */
+   g.size を書き換えてよいのは、drawOneDumpling がスプライトを基準サイズとの比で拡縮するだけだから */
 function _spawnOmenFx() {
   const t = _kingOmenProgress();
   const n = Math.min(KING_OMEN_FX_N_MAX, 1 + Math.floor(t * KING_OMEN_FX_N_MAX));
   const R = Math.hypot(W, H) * 0.6;   // 出入りする外周（本番の収束と同値）。画面外
   const rIn = Math.min(W, H) / 2;     // 最接近の基準（KING_OMEN_FX_NEARの定義部参照）。画面内
   const base = Math.random() * Math.PI * 2;
-  const size = _ITEM_SPRITE_REF * _kingOmenLerp(KING_OMEN_FX_SIZE, t);
+  const size = _DUMPLING_SPRITE_REF * _kingOmenLerp(KING_OMEN_FX_SIZE, t);
   const sign = () => (Math.random() < 0.5 ? 1 : -1);
   for (let i = 0; i < n; i++) {
-    const g = makeItem(0, 0, 0, 0);
+    const g = makeDumpling(0, 0, 0, 0);
     g.size = size;
     _omenFx.push({
       g, age: 0,
@@ -7647,7 +7647,7 @@ function _drawKingFace(c, s, pct = 0, gaze = 0) {
     c.beginPath(); c.ellipse(cx, cy, er, ryG, 0, 0, Math.PI*2);
     c.fillStyle = 'hsl(28,38%,15%)'; c.fill();
     /* ハイライト。左右で鏡像にせず、どちらも目の左上へ置く。本体のハイライトが
-       左上にあるので（_drawGyozaBody参照）、光源をそこへ揃える。
+       左上にあるので（_drawDumplingBody参照）、光源をそこへ揃える。
        右下の弱い光は目の下縁の照り返しなので、視線の振り(hiDy)には乗せない */
     c.beginPath(); c.arc(cx - er*0.36, cy - ryG*0.40 + hiDy, er*0.33, 0, Math.PI*2);
     c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill();
@@ -7683,12 +7683,12 @@ function _buildBossOC() {
   if (_bossOC) return;
   const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
   const half = Math.ceil(s * 0.75);
-  const REF = 42, kk = s / REF;
+  const REF = _DUMPLING_SPRITE_REF, kk = s / REF;
   const mkOC = () => _mkCache(half * 2 * _dpr, half * 2 * _dpr);
   /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
      目・眉・口はトーンの影響を受けさせない。生地が焦げ色へ寄っても目の濃さが
      そのまま残ることが、そのままコントラストになる（_renderKingBody 参照）。
-     本体は通常サイズ(42)で組んで scale 変換で拡大する。_drawGyozaBody の線幅は
+     本体は通常サイズ(42)で組んで scale 変換で拡大する。_drawDumplingBody の線幅は
      小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
      見える（scale なら線幅も比例して太る） */
   const bodyOC = mkOC();
@@ -7696,10 +7696,10 @@ function _buildBossOC() {
   bc.scale(_dpr, _dpr);
   bc.translate(half, half);
   /* 焼き色はアイテムのようなランダムではなく固定（キングは1体しかいない） */
-  const grd = _gyozaBodyGradient(bc, REF, ...KING_SKIN);
+  const grd = _dumplingBodyGradient(bc, REF, ...KING_SKIN);
   bc.save();
   bc.scale(kk, kk);
-  _drawGyozaBody(bc, REF, 0, 0, grd, undefined, _kingNiraSpec());
+  _drawDumplingBody(bc, REF, 0, 0, grd, undefined, _kingDecoSpec());
   bc.restore();
   /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
      ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
@@ -7725,9 +7725,9 @@ function _buildBossOC() {
      アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
      余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
   const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
-  const rx = s * GYOZA_BODY_RX + strokeOut + pad, ry = s * GYOZA_BODY_RY + strokeOut + pad;
+  const rx = s * DUMPLING_BODY_RX + strokeOut + pad, ry = s * DUMPLING_BODY_RY + strokeOut + pad;
   _bossOC = { oc, bodyOC, half, liveOC,
-              rect: { x: -rx, y: s * GYOZA_BODY_CY - ry, w: rx * 2, h: ry * 2 } };
+              rect: { x: -rx, y: s * DUMPLING_BODY_CY - ry, w: rx * 2, h: ry * 2 } };
 }
 
 /* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部）。
@@ -7739,7 +7739,7 @@ function _allAchExceptKongariDone() {
 
 /* トライの区切りで呼ぶ。発動したら true（呼び出し側はリセット処理を中断する） */
 function _maybeStartBossOmen() {
-  if (kingGyozaMeter < KING_GYOZA_THRESHOLD) return false;
+  if (kingMeter < KING_METER_THRESHOLD) return false;
   if (!_allAchExceptKongariDone()) return false;
   if (isFever || feverPending || isGameOver) return false;
   _startBossOmen();
@@ -7752,7 +7752,7 @@ function _startBossOmen() {
      （_pendingWheels の定義部参照）タイマーを持たないので、打ち切り処理は要らない */
   _releaseWheelOCs(_pendingWheels); _pendingWheels = null;
   _omenFx = _releaseAll(_omenFx, _releaseOmenFx);
-  items = _releaseAll(items);
+  dumplings = _releaseAll(dumplings);
   /* トライ横断で見せている表示物（ポップアップ・フィーバーバナー・JUST!ラベル）は
      phaseを見ずに描かれるため、暗転下に透けたりキング画面に重なったりする。
      寿命の分類は_clearCrossTrialOverlaysのコメント参照 */
@@ -7773,7 +7773,7 @@ function _startBossOmen() {
   _buildBossOC();
   /* 暗黒BGMが未完のまま突入しうるので、ここで待たずに焼く（_scheduleBossBgmRenders参照） */
   _scheduleBossBgmRenders(true);
-  _omen = { step: 0, timer: 0, items: [], flash: 0 };
+  _omen = { step: 0, timer: 0, dumplings: [], flash: 0 };
   phase = 'bossOmen';
   stopBGMTape(1600);      // 世界が止まる（テープストップ+グレースケール）
   grayRateTarget = 0.001; // 無音起動（bgmSourceなし）でもグレースケールは進める
@@ -7799,21 +7799,21 @@ function _updateBossOmen() {
         const R = Math.hypot(W, H) * 0.6;
         for (let i = 0; i < 44; i++) {
           const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2;
-          o.items.push(makeItem(W/2 + Math.cos(ang)*R, H/2 + Math.sin(ang)*R, 0, 0));
+          o.dumplings.push(makeDumpling(W/2 + Math.cos(ang)*R, H/2 + Math.sin(ang)*R, 0, 0));
         }
       }
     }
   } else if (o.step === 5) {
     /* 中央へ収束 */
     const cx = W/2, cy = H/2 - (IS_PORTRAIT ? 60 : 0);
-    for (const g of o.items) {
+    for (const g of o.dumplings) {
       g.x += (cx - g.x) * 0.06;
       g.y += (cy - g.y) * 0.06;
       g.rot += 0.15;
     }
     if (o.timer > 110) {
       o.step = 6; o.timer = 0; o.flash = 1;
-      o.items = _releaseAll(o.items);
+      o.dumplings = _releaseAll(o.dumplings);
       grayRateTarget = 1.0; // 誕生の瞬間、色が世界に戻る（ボスの金色を際立たせる）
       playSE('kingAppear'); // バーン+ドラの派手な一撃（_playDoraHit参照）
     }
@@ -7890,11 +7890,11 @@ function _cleanupKingBattleState() {
   _bossBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
   _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない
   /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
-  if (_omen)        _omen.items        = _releaseAll(_omen.items);
-  if (_defeatOutro) _defeatOutro.items = _releaseAll(_defeatOutro.items);
+  if (_omen)        _omen.dumplings        = _releaseAll(_omen.dumplings);
+  if (_defeatOutro) _defeatOutro.dumplings = _releaseAll(_defeatOutro.dumplings);
   if (_victoryOutro) {
-    _victoryOutro.items = _releaseAll(_victoryOutro.items);
-    if (_victoryOutro.seedItem) _deadify(_victoryOutro.seedItem); // 舞い上がらずに残る1個
+    _victoryOutro.dumplings = _releaseAll(_victoryOutro.dumplings);
+    if (_victoryOutro.seedDumpling) _deadify(_victoryOutro.seedDumpling); // 舞い上がらずに残る1個
   }
   _omen = null; _defeatOutro = null; _victoryOutro = null;
 }
@@ -8044,7 +8044,7 @@ function _drawOutroMsg(o, fillColor, shadowColor) {
 
 /* キングギヨウザ縮小ブリッジ（_startBossDefeatShrink）用の定数。
    KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
-   （makeItem の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
+   （makeDumpling の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
    横画面380*0.75*2=570px）から逆算した約0.075。これより極端に小さくすると、続けて
    出るギヨウザの集合体より先に見えなくなり、クロスフェードしてもサイズ感の食い違いが
    違和感として残る。
@@ -8090,23 +8090,23 @@ function _drawScreenFade() {
 
 /* ギヨウザ群の弾け散りアイテムを生成する（位置のみ確定、まだ動かさない）。
    _startBossDefeatShrinkでのクロスフェード表示・_updateBossDefeatOutroでの
-   拡散アニメの両方が同じ_defeatOutro.itemsを参照するため、生成は一箇所に
-   まとめる（クロスフェード用に別配列を作って後で捨てると_itemAllocの
+   拡散アニメの両方が同じ_defeatOutro.dumplingsを参照するため、生成は一箇所に
+   まとめる（クロスフェード用に別配列を作って後で捨てると_dumplingAllocの
    プール返却漏れ＝リークになるため、必ず単一の配列を使い回す） */
-function _makeDefeatOutroItems() {
+function _makeDefeatOutroDumplings() {
   const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
   const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
   const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
-  const items = [];
+  const dumplings = [];
   for (let i = 0; i < 44; i++) {
     const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
-    items.push(makeItem(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
+    dumplings.push(makeDumpling(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
   }
   /* 締め2行は画面幅に収まるよう折り返しておく（_wrapOutroLines参照）。
      尺は目標秒数（_OUTRO_MSG_TARGET_SEC_DEFEAT）から逆算する。折り返し後の
      文字数はフェードアウト長にだけ効く（_makeOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_DEFEAT_OUTRO_LINES);
-  return { step: 0, timer: 0, items, cx, cy, msgAlpha: 0,
+  return { step: 0, timer: 0, dumplings, cx, cy, msgAlpha: 0,
            msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
 }
 
@@ -8130,7 +8130,7 @@ function _startBossDefeatShrink() {
   }
   /* ギヨウザ群はこの時点で生成し、位置を確定させておく（クロスフェード中は
      静止したまま）。拡散運動は_updateBossDefeatOutroに入ってから始まる */
-  _defeatOutro = _makeDefeatOutroItems();
+  _defeatOutro = _makeDefeatOutroDumplings();
 }
 
 function _updateBossDefeatShrink() {
@@ -8165,7 +8165,7 @@ function drawBossDefeatShrink() {
   if (_defeatOutro && _bossDefeatXfade > 0) {
     ctx.save();
     ctx.globalAlpha = _bossDefeatXfade;
-    for (const g of _defeatOutro.items) drawOneItem(g);
+    for (const g of _defeatOutro.dumplings) drawOneDumpling(g);
     ctx.restore();
   }
   ctx.restore();
@@ -8181,7 +8181,7 @@ function _updateBossDefeatOutro() {
   o.timer++;
   /* step5の収束式 pos=c+(pos-c)*(1-K) を厳密に逆算した拡散式（重力は使わない） */
   const inv = 1 / (1 - _DEFEAT_OUTRO_K);
-  for (const g of o.items) {
+  for (const g of o.dumplings) {
     g.x = o.cx + (g.x - o.cx) * inv;
     g.y = o.cy + (g.y - o.cy) * inv;
     g.rot -= 0.15; // step5の回転(+0.15)を逆再生
@@ -8223,7 +8223,7 @@ function drawBossOmen() {
     ctx.globalAlpha = 1;
   }
   /* 収束する霊ギヨウザ */
-  if (o.step === 5) for (const g of o.items) drawOneItem(g);
+  if (o.step === 5) for (const g of o.dumplings) drawOneDumpling(g);
   /* 誕生〜鎮座 */
   if (o.step >= 6 && _bossOC) {
     const bx = W/2, by = H/2 - (IS_PORTRAIT ? 60 : 0);
@@ -8304,14 +8304,14 @@ const KING_SKIN = ['hsl(46,50%,80%)', 'hsl(40,52%,64%)', 'hsl(35,45%,48%)'];
    薄皮の下の方には眉が入り込んでいる（眉は目の上 x=±0.11〜0.23、y=-0.07〜0 を通る）ので、
    中心から |x| < AVOID_X かつ y > AVOID_Y の帯にはニラの中心を置かない。
    帯を眉の上だけにして眉と眉の間を空けると、そこへ入ったニラが両眉をつなぐ緑の線に見える */
-const KING_NIRA_SEED = 909;
-const KING_NIRA_AVOID_X = 0.29, KING_NIRA_AVOID_Y = -0.105;
-let _kingNira = null;
-function _kingNiraSpec() {
-  if (_kingNira) return _kingNira;
-  let st = KING_NIRA_SEED >>> 0;
+const KING_DECO_SEED = 909;
+const KING_DECO_AVOID_X = 0.29, KING_DECO_AVOID_Y = -0.105;
+let _kingDeco = null;
+function _kingDecoSpec() {
+  if (_kingDeco) return _kingDeco;
+  let st = KING_DECO_SEED >>> 0;
   const rnd = () => (st = (st * 1664525 + 1013904223) >>> 0) / 4294967296; // 32bit線形合同法
-  return (_kingNira = _gyozaNiraSpec(_newNiraSpec(), rnd, true));
+  return (_kingDeco = _dumplingDecoSpec(_newDecoSpec(), rnd, true));
 }
 const KING_TONE_COLOR = '#8a5225'; // こんがり100%到達時の全身色（トースト状の狐色。焦茶すぎない絶妙な焼き加減）
 const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度（下地の陰影を多めに残し、平板な塗り潰しに見せない）
@@ -8321,7 +8321,7 @@ const KING_TONE_MAX_ALPHA = 0.55;  // 全身トーンの最大重ね掛け強度
    BGM拍グリッド同期を重ねる（_updateBossBattle）ため、体感の待ち時間は
    通常モードの「ハズレ次弾」と揃う */
 const KING_RESULT_MIN_WAIT = { miss: 2, hit: 24 };
-/* ボス本体楕円（_drawGyozaBody: 中心=+0.08s、縦半径=0.48s）から見た目の頭頂・裾を
+/* ボス本体楕円（_drawDumplingBody: 中心=+0.08s、縦半径=0.48s）から見た目の頭頂・裾を
    割り出した比率（中心からの距離、s基準）。_initBossBattleのレイアウト計算と
    drawBossVictoryの勝利文言の位置決めの両方で使う共通値のためモジュール定数にする。 */
 const KING_VISUAL_TOP_RATIO = 0.40, KING_VISUAL_BOTTOM_RATIO = 0.56;
@@ -8745,9 +8745,9 @@ function _initBossBattle() {
      OffscreenCanvas 非対応で即復帰する経路も含め、常にリセットすること。
      リセット前の値は_kingMeterAtBattleStartへ退避する。こんがり達成時に「このキングに
      取り込まれていたギヨウザ」として所持数へ返すため（_startBossVictory参照）。
-     ボスは閾値到達で出現するので必ずKING_GYOZA_THRESHOLD以上＝1000+アルファになる */
-  _kingMeterAtBattleStart = kingGyozaMeter;
-  kingGyozaMeter = 0;
+     ボスは閾値到達で出現するので必ずKING_METER_THRESHOLD以上＝1000+アルファになる */
+  _kingMeterAtBattleStart = kingMeter;
+  kingMeter = 0;
   lsSaveStats();
   if (!_bossOC) { _kingBattleEnd(); return; } // 本体スプライトが無ければ戦闘なしで復帰
   _buildScorchBlotSprite();
@@ -8808,7 +8808,7 @@ function _initBossBattle() {
      すると空きに応じて隙間が伸び、対称性が崩れる */
   const GAP_REEL_PANEL = topGap;
   /* half(=0.75s)はスタンプ・呼吸アニメ余裕を含む安全バウンディング半径であり、
-     実際に見えるボスの輪郭はもっと内側。_drawGyozaBody の本体楕円
+     実際に見えるボスの輪郭はもっと内側。_drawDumplingBody の本体楕円
      （中心=+0.08s、縦半径=0.48s）から見た目の頭頂は中心から-0.40s、裾は+0.56sと算出できる。
      scale-fit と by の余白計算の両方をこの見た目比率（0.40+0.56=0.96s）基準にすること。
      half基準（1.5s相当）のまま fit させると見た目より遥かに大きい余白込みで縮小され、
@@ -10157,9 +10157,9 @@ function _fireKingNote() {
      体の中から湧いたように見える。t は中心からその向きの縁までの距離
      （楕円の式 (x/rx)^2+(y/ry)^2=1 を方向ベクトルで解いたもの） */
   const ca = Math.cos(KING_NOTE_ANGLE), sa = Math.sin(KING_NOTE_ANGLE);
-  const t = 1 / Math.hypot(ca / (s * GYOZA_BODY_RX), sa / (s * GYOZA_BODY_RY));
+  const t = 1 / Math.hypot(ca / (s * DUMPLING_BODY_RX), sa / (s * DUMPLING_BODY_RY));
   _kingFx.notes = [{
-    x: _king.dbx + ca * t, y: _king.dby + s * GYOZA_BODY_CY + sa * t,
+    x: _king.dbx + ca * t, y: _king.dby + s * DUMPLING_BODY_CY + sa * t,
     vx: Math.cos(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
     vy: Math.sin(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
     t: 0, rot: -0.20,
@@ -10205,7 +10205,7 @@ const _wrapPi = a => { a = (a + Math.PI) % (2 * Math.PI); return (a < 0 ? a + 2 
 function _buildKingSpinLayers() {
   _kingFx.spinSphere = _kingFx.spinSurface = null;
   if (!_king || !_bossOC) return;
-  const s = _BOSS_S, half = _king.half, REF = 42, kk = s / REF, pct = _king.cookPct / 100;
+  const s = _BOSS_S, half = _king.half, REF = _DUMPLING_SPRITE_REF, kk = s / REF, pct = _king.cookPct / 100;
   const prep = () => {
     const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
     const c = oc.getContext('2d');
@@ -10217,17 +10217,17 @@ function _buildKingSpinLayers() {
   const tone = c => { _applyKingTone(c, half, pct); c.globalCompositeOperation = 'source-over'; };
   const [spOC, sp] = prep();
   /* グラジェントは scale の前に作る（_buildBossOC と同じ手順。後で作ると寸法が変わる） */
-  const grd = _gyozaBodyGradient(sp, REF, ...KING_SKIN);
-  sp.save(); sp.scale(kk, kk); _drawGyozaBody(sp, REF, 0, 0, grd, 'sphere'); sp.restore();
+  const grd = _dumplingBodyGradient(sp, REF, ...KING_SKIN);
+  sp.save(); sp.scale(kk, kk); _drawDumplingBody(sp, REF, 0, 0, grd, 'sphere'); sp.restore();
   tone(sp);
   const [suOC, su] = prep();
   su.save(); su.scale(kk, kk);
-  _drawGyozaBody(su, REF, 0, 0, null, 'surface', _kingNiraSpec()); // 本体レイヤーと同じ配置（_kingNiraSpec参照）
+  _drawDumplingBody(su, REF, 0, 0, null, 'surface', _kingDecoSpec()); // 本体レイヤーと同じ配置（_kingDecoSpec参照）
   /* ハイライトも模様と一緒に回す。球の上に固定するほうが光としては正しいが、そうすると
      ハイライトだけトーンの外に出る（元は生地と一緒にトーンを浴びている）か、ひだの下へ
      潜って隠れるかのどちらかになり、回っていないときの見た目が変わってしまう。
      ギヨウザにそもそも光沢は無いので、表面の明るい模様として扱って構わない */
-  _drawGyozaBody(su, REF, 0, 0, null, 'gloss');
+  _drawDumplingBody(su, REF, 0, 0, null, 'gloss');
   su.restore();
   tone(su);
   /* 焦げ跡はトーンの後（_renderKingBodyと同じ順）。source-atopにはしない:
@@ -10266,12 +10266,12 @@ const _KING_SPEC = [[0, 'rgba(255,255,255,0.34)'], [0.40, 'rgba(255,255,255,0.13
                     [1, 'rgba(255,255,255,0)']];
 function _kingSpecular(gain) {
   if (gain <= 0.01) return;
-  const s = _BOSS_S, R = s * GYOZA_BODY_RX, half = _king.half;
+  const s = _BOSS_S, R = s * DUMPLING_BODY_RX, half = _king.half;
   const g = ctx.createRadialGradient(-s*0.20, -s*0.12, 0, -s*0.20, -s*0.10, s*0.30);
   for (const [p, col] of _KING_SPEC) g.addColorStop(p, col);
   ctx.save();
   ctx.globalAlpha = gain;
-  ctx.beginPath(); ctx.ellipse(0, s*GYOZA_BODY_CY, R, s*GYOZA_BODY_RY, 0, 0, Math.PI*2); ctx.clip();
+  ctx.beginPath(); ctx.ellipse(0, s*DUMPLING_BODY_CY, R, s*DUMPLING_BODY_RY, 0, 0, Math.PI*2); ctx.clip();
   /* 塗るのはグラジェントが届く範囲だけ。球全体を塗ると4倍の面積を無駄に触る
      （中心 -0.20s,-0.10s／半径 0.30s なので、この矩形の外は完全に透明） */
   ctx.fillStyle = g; ctx.fillRect(-s*0.50, -s*0.40, s*0.60, s*0.60);
@@ -10279,10 +10279,10 @@ function _kingSpecular(gain) {
 }
 
 function _drawKingSpin(th) {
-  const half = _king.half, s = _BOSS_S, R = s * GYOZA_BODY_RX, D = _dpr, N = KING_SPIN_STRIPS;
+  const half = _king.half, s = _BOSS_S, R = s * DUMPLING_BODY_RX, D = _dpr, N = KING_SPIN_STRIPS;
   _blitKingBody(_kingFx.spinSphere);
   ctx.save();
-  ctx.beginPath(); ctx.ellipse(0, s * GYOZA_BODY_CY, R, s * GYOZA_BODY_RY, 0, 0, Math.PI * 2); ctx.clip();
+  ctx.beginPath(); ctx.ellipse(0, s * DUMPLING_BODY_CY, R, s * DUMPLING_BODY_RY, 0, 0, Math.PI * 2); ctx.clip();
   for (let i = 0; i < N; i++) {
     const x0 = -R + (2 * R) * (i / N), x1 = -R + (2 * R) * ((i + 1) / N);
     const lam = x => Math.asin(Math.max(-1, Math.min(1, x / R)));
@@ -10585,7 +10585,7 @@ function _buildSteamSprite() {
 }
 
 /* 湯気を1本、キング本体の輪郭（上半分の弧）付近から立ち上らせる。
-   本体楕円のジオメトリは_buildBossOC/_drawGyozaBodyと同じ比率
+   本体楕円のジオメトリは_buildBossOC/_drawDumplingBodyと同じ比率
    （中心Y=+s*0.08、半径rx=s*0.58・ry=s*0.48、REF=42基準をkk=s/REFで
    拡大）を、キングの現在の表示位置・スケール（dbx/dby/dscale）で
    ワールド座標に変換して使う。輪郭よりわずかに内側（×0.85）から
@@ -10596,7 +10596,7 @@ function _spawnVictorySteamWisp() {
   if (!_king) return;
   const s = _BOSS_S * _king.dscale;
   const cx = _king.dbx, cy = _king.dby + s * 0.08;
-  const rx = s * GYOZA_BODY_RX, ry = s * GYOZA_BODY_RY;
+  const rx = s * DUMPLING_BODY_RX, ry = s * DUMPLING_BODY_RY;
   const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.75; // 真上を中心に上半分の弧
   _kingFx.steam.push({
     x: cx + Math.cos(ang) * rx * 0.85,
@@ -10678,8 +10678,8 @@ function _startBossVictory() {
      敗北側が明示的に閾値の50%へ戻しているのと対称に、達成側もここで明示する
      （暗黙の依存を残さない）。
      0ではなく1にするのは、退場演出で舞い上がらずに1個だけ残るギヨウザ
-     （_victoryOutro.seedItem）と数を合わせるため＝「また1個から集まりはじめる」 */
-  kingGyozaMeter = 1;
+     （_victoryOutro.seedDumpling）と数を合わせるため＝「また1個から集まりはじめる」 */
+  kingMeter = 1;
   _bossVictoryWonCoins = won;
   lsSave();
   lsSaveStats();
@@ -10760,7 +10760,7 @@ function drawBossVictory() {
    入る */
 const _VICTORY_OUTRO_CROUCH_FRAMES = 40; // step0: 跳ぶ前のタメ
 const _VICTORY_OUTRO_FLY_FRAMES    = 70; // step1: 飛び去り
-const _VICTORY_OUTRO_ITEMS_FRAMES  = 60; // step2: 解放されたギヨウザの舞い上がり
+const _VICTORY_OUTRO_DUMPLINGS_FRAMES  = 60; // step2: 解放されたギヨウザの舞い上がり
 /* 締め2行。周回（また集まりはじめる）を示唆して終える。文言を差し替えるときはここだけで
    済むよう配列で持つ */
 const _VICTORY_OUTRO_LINES = ['キングは みちたりて さった……', 'ギヨウザは また あつまりはじめる……'];
@@ -10777,7 +10777,7 @@ function _startBossVictoryOutro() {
      4行になるが、合計6秒は同じ。_makeOutroMsgTiming参照） */
   const msgLines = _wrapOutroLines(_VICTORY_OUTRO_LINES);
   _victoryOutro = {
-    step: 0, timer: 0, items: [], seedItem: null,
+    step: 0, timer: 0, dumplings: [], seedDumpling: null,
     msgAlpha: 0, gaugeAlpha: 1,
     baseBy: _king.by, baseScale: _king.scale,
     msgLines, msgTiming: _makeOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_VICTORY),
@@ -10790,8 +10790,8 @@ function _startBossVictoryOutro() {
    （_pendingTrueEnding参照） */
 function _finishBossVictoryOutro() {
   if (_victoryOutro) {
-    _victoryOutro.items = _releaseAll(_victoryOutro.items);
-    if (_victoryOutro.seedItem) _deadify(_victoryOutro.seedItem);
+    _victoryOutro.dumplings = _releaseAll(_victoryOutro.dumplings);
+    if (_victoryOutro.seedDumpling) _deadify(_victoryOutro.seedDumpling);
     _victoryOutro = null;
   }
   if (_pendingTrueEnding) { _pendingTrueEnding = false; _startTrueEnding(false); }
@@ -10801,16 +10801,16 @@ function _finishBossVictoryOutro() {
 /* 解放されたギヨウザが舞い上がる群れを生成する。個数は解放数に応じて増やし、
    プールを溜めてから勝ったときの見返りが視覚的にも効くようにする
    （上限は描画負荷のため失敗側と同じ44個で打ち止め） */
-function _makeVictoryOutroItems() {
+function _makeVictoryOutroDumplings() {
   const n = Math.max(12, Math.min(44, 12 + Math.floor(_bossVictoryWonCoins / 100)));
-  const items = [];
+  const dumplings = [];
   for (let i = 0; i < n; i++) {
     const x = W * (0.08 + Math.random() * 0.84);
     const y = H + 40 + Math.random() * H * 0.5;      // 画面下の外から湧き上がる
-    const g = makeItem(x, y, (Math.random() - 0.5) * 0.6, -(2.6 + Math.random() * 2.2));
-    items.push(g);
+    const g = makeDumpling(x, y, (Math.random() - 0.5) * 0.6, -(2.6 + Math.random() * 2.2));
+    dumplings.push(g);
   }
-  return items;
+  return dumplings;
 }
 
 function _updateBossVictoryOutro() {
@@ -10858,25 +10858,25 @@ function _updateBossVictoryOutro() {
     if (o.timer >= _VICTORY_OUTRO_FLY_FRAMES) {
       o.step = 2; o.timer = 0;
       o.gaugeAlpha = 0;
-      o.items = _makeVictoryOutroItems();
+      o.dumplings = _makeVictoryOutroDumplings();
       /* 周回の示唆: 1個だけ舞い上がらずに残り、画面下でゆっくり漂う。
          「また集まりはじめる」という締め文（_VICTORY_OUTRO_LINES）と対応させる */
-      o.seedItem = makeItem(W / 2, H * 0.82, 0, -0.18);
+      o.seedDumpling = makeDumpling(W / 2, H * 0.82, 0, -0.18);
     }
   } else if (o.step === 2 || o.step === 3) {
     /* 解放されたギヨウザの舞い上がり。step3（メッセージ表示中）も動かし続けて
        背景で舞っている状態を保つ */
-    for (const g of o.items) {
+    for (const g of o.dumplings) {
       g.x += g.vx; g.y += g.vy;
       g.vy -= 0.012;                 // ゆるやかに加速して昇っていく
       g.rot += g.rotSpd * 0.5;
     }
-    if (o.seedItem) {
-      const s = o.seedItem;
+    if (o.seedDumpling) {
+      const s = o.seedDumpling;
       s.y += s.vy;
       s.rot += 0.004;                // ほとんど止まって見えるゆるい回転
     }
-    if (o.step === 2 && o.timer >= _VICTORY_OUTRO_ITEMS_FRAMES) { o.step = 3; o.timer = 0; }
+    if (o.step === 2 && o.timer >= _VICTORY_OUTRO_DUMPLINGS_FRAMES) { o.step = 3; o.timer = 0; }
     if (o.step === 3) {
       /* 締めメッセージ。失敗側（_updateBossDefeatOutro）と同じ実装を共有する
          （_advanceOutroMsg）。尺は _startBossVictoryOutro で目標6秒から逆算済み
@@ -10892,8 +10892,8 @@ function drawBossVictoryOutro() {
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, W, H);
   /* 舞い上がるギヨウザはキングより先に描く（キングの手前に被らせない） */
-  for (const g of o.items) drawOneItem(g);
-  if (o.seedItem) drawOneItem(o.seedItem);
+  for (const g of o.dumplings) drawOneDumpling(g);
+  if (o.seedDumpling) drawOneDumpling(o.seedDumpling);
   if (_king) _drawKingBody();
   _drawKingNotes();
   _drawVictorySteam();
@@ -11385,7 +11385,7 @@ function _drawTrueEndingRows(o) {
    左右を黄地に緑文字で「餃　子」「横　濱」（各文字の間を少しあけて表示）。
    中央エリアだけ内側にわずかに小さい円でクリップして塗るため、
    中央の上下だけ外周の黄色いリングが弧状に残って見える */
-function _drawGyozaCircleLogo(cx, cy, R, alpha, rot = 0) {
+function _drawCircleLogo(cx, cy, R, alpha, rot = 0) {
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha *= alpha;
@@ -11450,7 +11450,7 @@ function drawTrueEnding() {
     /* ロゴは画面の上下中央に配置し、タイトルと同じくo.titleAlphaで
        じんわりフェードインさせる。暗幕より先に描くことで、他の
        ステージと同じ暗幕の下に沈んだ見え方になる */
-    _drawGyozaCircleLogo(W / 2, H / 2, (IS_PORTRAIT ? 62 : 82) * 3, o.titleAlpha);
+    _drawCircleLogo(W / 2, H / 2, (IS_PORTRAIT ? 62 : 82) * 3, o.titleAlpha);
   }
 
   /* 暗幕はエンドロールを通して常に同じ明るさ（元の仕様）にする。
@@ -11654,7 +11654,7 @@ function _startBossDefeat() {
   /* 敗北時のking値: 0（振り出しに戻す）ではなく、途中からやり直しにする。
      戦闘開始時点で_initBossBattleが0にリセット済みのため、ここで上書きする。
      戻す先は予兆の窓より下にする（KING_DEFEAT_RESTART_RATIOの定義部参照） */
-  kingGyozaMeter = KING_GYOZA_THRESHOLD * KING_DEFEAT_RESTART_RATIO;
+  kingMeter = KING_METER_THRESHOLD * KING_DEFEAT_RESTART_RATIO;
   lsSaveStats();
   if (_king) {
     _king.scale = 1;
@@ -11711,7 +11711,7 @@ function drawBossDefeatOutro() {
   ctx.save();
   ctx.fillStyle = 'rgba(2,4,8,0.7)';
   ctx.fillRect(0, 0, W, H);
-  for (const g of o.items) drawOneItem(g);
+  for (const g of o.dumplings) drawOneDumpling(g);
   if (o.step >= 1) {
     /* 透明度は_updateBossDefeatOutroが確定させたo.msgAlphaを読むだけ。
        描画本体は達成側と共通（_drawOutroMsg参照） */
@@ -13095,7 +13095,7 @@ function _dpDrawJog(o) {
     ctx.arc(J.x, J.y, J.r + DP_JOG_BEZEL, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pos / bp));
     ctx.stroke();
   }
-  _drawGyozaCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
+  _drawCircleLogo(J.x, J.y, J.r, 1, o.jogRot);
   _drawPressFlashCircle(J.x, J.y, J.r + DP_JOG_BEZEL);
   /* 叩けることを示す銀板の印字。ジョグ上の空きに置く */
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
@@ -13688,8 +13688,8 @@ function _drawForeground() {
   /* 前トライの中当たりエフェクトの退場（_fxOutro参照）。現トライの演出と同じ
      レイヤーに重ねる。両者が同時に出るのは意図どおり（並行して進む） */
   _drawFxOutro();
-  /* フィーバー堆積アイテム: _activeEffectがdrawItemsを担う場合を除いて常時描画 */
-  if (items.length > 0 && _activeEffect?.draw !== drawItems) drawItems();
+  /* フィーバー堆積アイテム: _activeEffectがdrawDumplingsを担う場合を除いて常時描画 */
+  if (dumplings.length > 0 && _activeEffect?.draw !== drawDumplings) drawDumplings();
   drawUzaFlash(); // ウザウザフラッシュ（内部で hitType チェック済み）
   if (PERF_ON) _perfMark('fx', _tFx);
 
@@ -13896,7 +13896,7 @@ function draw() {
      ゆっくりめの回転角を使う。w.speedを流用することでホイールごとに回転速度がバラバラになる */
   if (!_isBossBattlePhase()) {
     if (phase === 'startup') {
-      for (const w of wheels) _drawGyozaCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.0375);
+      for (const w of wheels) _drawCircleLogo(w.x, w.y, WR, 1, startupTimer * w.speed * 0.0375);
     } else {
       const _tW = PERF_ON ? performance.now() : 0;
       for (let i=0;i<4;i++) drawWheel(i);
@@ -13911,7 +13911,7 @@ function draw() {
      背景として読める範囲に抑える */
   if (_omenFx.length > 0) {
     ctx.save();
-    for (const o of _omenFx) { ctx.globalAlpha = o.a; drawOneItem(o.g); }
+    for (const o of _omenFx) { ctx.globalAlpha = o.a; drawOneDumpling(o.g); }
     ctx.restore();
   }
 
