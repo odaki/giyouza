@@ -145,7 +145,7 @@ canvas:focus-visible { outline: none; }
 
    有無フラグ: portrait（縦レイアウトを強制）/ cheatpanel（チートパネル）/ perf（性能オーバーレイ）
                soundtest（サウンドテストを常時解禁）/ mark（焦げ跡の当たり判定を可視化）
-               nooc（OffscreenCanvas非対応の経路）/ noelev（無音<audio>の昇格を止める）
+               noelev（無音<audio>の昇格を止める）
                noresblur（結果文字のグローを外す）/ nopausesuspend（PAUSE中にContextを止めない）
    数値:       dpr（実解像度倍率）/ king（キング蓄積の初期値）/ lat・jlat・sepad（音の遅延較正）
                perfms（性能オーバーレイのスパイク閾値ms） */
@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.15';
+const VERSION = 'v8.16';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -687,20 +687,9 @@ let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（play
 /* ── キャッシュ用の描画面 ──
    このゲームの高速化は全て「一度描いて焼いておき、あとは drawImage で貼る」に
    依存している（背景・ホイール・グロー・文字・ボス・各種スプライト）。
-   焼き先をOffscreenCanvasだけに頼ると、未対応環境（iOS 16.4未満）では最適化が
-   まるごと無効になり、毎フレーム直描き＋shadowBlurという最も遅い経路へ落ちる
-   （キング戦は起動すらできない）。
-   通常の<canvas>要素は古くからdrawImageのソースとして使えるので、未対応環境では
-   それを焼き先にする。DOMには挿さない（描画面としてのみ使う）。 */
-/* ?nooc: OffscreenCanvas が無い環境（iOS 16.4未満）の経路を実機で試すためのフラグ。
-   コピーしたHTMLでOffscreenCanvasを消して確かめる、といった手間を無くす */
-const _HAS_OC = !_dbgFlag('nooc') && (typeof OffscreenCanvas !== 'undefined');
+   焼き先は OffscreenCanvas。対応していない環境（iOS 16.4 未満）は動作対象にしない */
 function _mkCache(w, h) {
-  const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
-  if (_HAS_OC) return new OffscreenCanvas(cw, ch);
-  const c = document.createElement('canvas');
-  c.width = cw; c.height = ch;
-  return c;
+  return new OffscreenCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
 }
 
 /* ── 静的レイヤーキャッシュ ──
@@ -2170,7 +2159,7 @@ function _scheduleBossBgmRenders(immediate = false) {
 
 function getAudioCtx() {
   if (!audioCtx) {
-    audioCtx   = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    audioCtx   = new AudioContext({ latencyHint: 'interactive' });
     masterGain = audioCtx.createGain();
     /* ここで audioMuted を直接反映する。タイトル画面の真エンディング再生ボタンは
        initGame() を経由せず直接 getAudioCtx() を呼ぶため、ここを無条件で1にして
@@ -2260,7 +2249,7 @@ function _recreateAudioGraph() {
      早期リターンし、interrupted 復帰後に BGM が二度と戻らなくなる */
   _destroyBGMSource();
   try { audioCtx.close(); } catch(_e) {}
-  audioCtx  = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  audioCtx  = new AudioContext({ latencyHint: 'interactive' });
   audioCtx.resume().catch(() => {}); // ジェスチャー外から呼ばれた場合の保険
   masterGain = audioCtx.createGain();
   masterGain.gain.value = audioMuted ? 0 : 1;
