@@ -612,7 +612,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.23';
+const VERSION = 'v8.24';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -4270,7 +4270,11 @@ function lsLoadStats() {
       if (typeof o.shotCount    === 'number') shotCount    = o.shotCount;
       if (typeof o.jackpotCount === 'number') jackpotCount = o.jackpotCount;
       if (typeof o.wasPoor      === 'boolean') wasPoor     = o.wasPoor;
-      if (typeof o.kingGyozaMeter === 'number') kingMeter = o.kingGyozaMeter; // 保存データのキー名は互換のため変えない
+      /* 端末に残っている保存データには、蓄積メーターを kingGyozaMeter というキーで持つものがある。
+         kingMeter が無ければそちらを読んで引き継ぐ（次の保存で kingMeter として書き直され、
+         古いキーは保存データから消える）。読み替えを外すと、その端末のメーターが0に戻る */
+      const km = typeof o.kingMeter === 'number' ? o.kingMeter : o.kingGyozaMeter;
+      if (typeof km === 'number') kingMeter = km;
       if (typeof o.kingLostPool   === 'number') kingLostPool   = o.kingLostPool;
       if (typeof o.trueEndingSeen === 'boolean') trueEndingSeen = o.trueEndingSeen;
       if (typeof o.bestSyncChain  === 'number') bestSyncChain  = o.bestSyncChain;
@@ -4282,7 +4286,7 @@ function lsLoadStats() {
 function lsSaveStats() {
   /* 1射ごとに呼ばれる（1的目は2回）。lsQueueが同一キーへの連続書き込みを
      1回に畳むので、ここでの呼び出し頻度がそのまま書き込み回数にはならない */
-  lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingGyozaMeter: kingMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
+  lsQueue(LS_STATS, JSON.stringify({ playCount, shotCount, jackpotCount, wasPoor, kingMeter, kingLostPool, trueEndingSeen, bestSyncChain }));
 }
 /* seDelay: 実績解除音の再生時刻を通常の開始時刻からさらに遅らせる秒数（既定0=即時）。
    同じ'ach'音が完全に同時発生すると割れる（クリッピングする）ので、マスター出力の
