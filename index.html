@@ -612,7 +612,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.25';
+const VERSION = 'v8.26';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -1373,6 +1373,14 @@ let bestCoins; // ハイスコア
    こちらは永続（game_stats）で一度も下がらない */
 let bestSyncChain = 0;
 
+/* ── リーチ・フィーバーの尺と、中当たり演出が持つ配列 ── */
+const REACH_DECEL_FRAMES   = 180; // この間スピードを減衰させる
+const FEVER_BANNER_FRAMES  = 180; // フィーバーバナー表示総フレーム数（フェードイン20f＋本体＋フェードアウト30f）
+const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
+const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
+let worms = [], uzaTexts = [], dumplings = [];
+let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
+
 /* ════════════════ 実績システム ════════════════ */
 /* 注意: id は _SCHEMA_HASH に含まれるため、リネームすると全セーブデータが消去される。
    play_10/shot_100/coins_500 等の数値は実際の閾値（100回/1000本/1000枚）と一致して
@@ -1608,6 +1616,122 @@ const BET_INC_BTN = { x:BAR_X+BAR_W-BAR_H+1, y:BAR_Y+1, w:BAR_H-2, h:BAR_H-2 }; 
 /* 縦画面専用 BET ボタン (中央揃えy=747) */
 const P_BET_DEC_BTN = IS_PORTRAIT ? { x:P_BAR_X+1,              y:P_BAR_Y+1, w:P_BAR_H-2, h:P_BAR_H-2 } : null; // ◀ 1pt隙間
 const P_BET_INC_BTN = IS_PORTRAIT ? { x:P_BAR_X+P_BAR_W-P_BAR_H+1, y:P_BAR_Y+1, w:P_BAR_H-2, h:P_BAR_H-2 } : null; // ▶ 1pt隙間
+
+/* ════════════════ ボタンの当たり判定と押下の光 ════════════════ */
+function hitTest(rect, x, y) {
+  return x >= rect.x && x <= rect.x+rect.w && y >= rect.y && y <= rect.y+rect.h;
+}
+
+/* ── ボタンを押した瞬間の光（全ボタン共通） ──
+   状態（ON/OFF・有効/無効）とは別物で、「押せた」ことを画面で返すためのもの。
+   これが無いと、押しても画面がほとんど変わらないボタン（TEMPO±・UNDO・REDO・
+   効果音の試聴など）は操作した手応えが無い。
+
+   **押した点を1箇所で控え、各ボタンは自分の矩形に入っているかを見るだけ**にしてある。
+   ボタンごとに「押された」フラグを持たせると、ボタンを足したときに付け忘れて
+   そこだけ無反応になる。入口で控えるようにしておけば、共通の描画ヘルパーを通す限り
+   自動的に光る。
+   多点タッチのぶんを配列で持つのは、ドラムパッドで複数の指を同時に見るため。
+
+   押下はフレームループの外（入力ハンドラ）で起きるので、フレーム数ではなく実時間で持つ。
+   見せ方は16パッドの発音フラッシュ（_dpDrawPads）と同じ「金色の被せ＋温白の縁」に揃える。 */
+const BTN_PRESS_FLASH_SEC = 0.16;
+const _PRESS_TRACK_MAX = 8; // 同時に見る指の数の上限（ドラムパッドの多点打ちで足りる数）
+const _presses = [];
+function markPress(x, y) {
+  _presses.push({ x, y, t: performance.now() });
+  if (_presses.length > _PRESS_TRACK_MAX) _presses.shift();
+}
+/* そのイベントで**新たに触れた**点だけを控える。触れ続けている指を含めると、
+   別の指を置くたびに押しっぱなしのボタン（TEMPOの長押しなど）が光り直す */
+function markPressTouches(e) {
+  for (const tc of e.changedTouches) {
+    const q = touchToCanvas(tc);
+    markPress(q.x, q.y);
+  }
+}
+/* 長押しのリピートなど、座標を持たない経路から光らせるとき用（矩形の中心を押したことにする） */
+function markPressRect(r) { markPress(r.x + r.w / 2, r.y + r.h / 2); }
+/* 期限切れを捨てる。draw()の冒頭で1回だけ呼ぶ。
+   掃除を_pressLevelに同居させると、どのボタンが先に描かれるかで捨てる時点が変わる
+   （読み取りの関数は読むだけに保つ） */
+function expirePresses() {
+  const dead = performance.now() - BTN_PRESS_FLASH_SEC * 1000;
+  let n = 0;
+  while (n < _presses.length && _presses[n].t <= dead) n++; // 時刻順に積まれている
+  if (n) _presses.splice(0, n);
+}
+/* 0（消えている）〜1（押した瞬間）。同じ矩形に複数の指が入っていれば一番新しいものを使う */
+function _pressLevel(rect) {
+  if (_presses.length === 0) return 0; // 押されていないのが常態。ボタンの数だけ回さない
+  const now = performance.now();
+  let best = 0;
+  for (let i = _presses.length - 1; i >= 0; i--) {
+    const p = _presses[i];
+    const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
+    if (k > best && hitTest(rect, p.x, p.y)) best = k;
+  }
+  return best;
+}
+/* 光そのもの。k は 0（消えている）〜1（点いた瞬間）、path は面の輪郭を引く関数。
+   16パッドの発音フラッシュもボタンの押下フラッシュもここを通す（見せ方を1か所に持つ） */
+function _drawFlashPath(k, path) {
+  ctx.save();
+  ctx.globalAlpha = k * 0.7;
+  ctx.fillStyle = Y;
+  path(); ctx.fill();
+  ctx.globalAlpha = k;
+  ctx.strokeStyle = '#fff8d0'; ctx.lineWidth = 2;
+  path(); ctx.stroke();
+  ctx.restore();
+}
+/* 直角のときに roundRect(...,0) を使わないのは、角に長さ0の曲線が挟まって
+   縁の継ぎ目の画素が ctx.rect と食い違うため（線の継ぎ方は呼び出し元の
+   ctx.lineJoin をそのまま継ぐので、どちらで引いたかが見た目に出る） */
+function drawFlashRect(k, x, y, w, h, r) {
+  _drawFlashPath(k, r > 0 ? () => roundRect(x, y, w, h, r)
+                          : () => { ctx.beginPath(); ctx.rect(x, y, w, h); });
+}
+/* 押下の光。r は光の角丸半径で、**そのボタンの面と同じ値**を渡す（違うと縁がずれる）。
+   ボタンの絵の**上**に重ねる（面の下に敷くと、金色のアイコンや文字が光に溶けて消える）。
+   輪郭を関数ではなく矩形＋半径で受けるのは、光っていない間に無名関数を作らないため
+   （サウンドテストの項目のように、1画面で数十個が毎フレーム通る）。
+   **押しても何も起きない状態のボタンでは呼ばないこと。** 光ると「効いた」と誤解させる */
+function drawPressFlash(rect, r = 6) {
+  const k = _pressLevel(rect);
+  if (k > 0) drawFlashRect(k, rect.x, rect.y, rect.w, rect.h, r);
+}
+/* 矩形でないボタン（ドラムパッドの平行四辺形）用。path は面の輪郭を引く関数 */
+function drawPressFlashPath(rect, path) {
+  const k = _pressLevel(rect);
+  if (k > 0) _drawFlashPath(k, path);
+}
+/* 円いボタン（ドラムパッドのジョグ）用。矩形の当たり判定を流用すると、
+   円の外側にある四隅を押しても光ってしまう。
+   走査を_pressLevelと共有しないのは、当たり判定を関数で渡す形にすると
+   押されていない間もフレームごとに無名関数を作ることになるため */
+function _pressLevelCircle(cx, cy, r) {
+  if (_presses.length === 0) return 0;
+  const now = performance.now();
+  let best = 0;
+  for (let i = _presses.length - 1; i >= 0; i--) {
+    const p = _presses[i];
+    const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
+    if (k > best && Math.hypot(p.x - cx, p.y - cy) <= r) best = k;
+  }
+  return best;
+}
+function drawPressFlashCircle(cx, cy, r) {
+  const k = _pressLevelCircle(cx, cy, r);
+  if (k > 0) _drawFlashPath(k, () => { ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); });
+}
+/* ポーズ中はrAFが止まっていて光が減衰しないため、押下が残っている間だけ
+   draw()の末尾から次のフレームを取りに行く */
+let _pressFlashRaf = 0;
+function pumpPressFlash() {
+  if (!isPaused || _pressFlashRaf || _presses.length === 0) return;
+  _pressFlashRaf = requestAnimationFrame(() => { _pressFlashRaf = 0; draw(); });
+}
 
 /* ════════════════ Audio System ════════════════ */
 let audioCtx = null;
@@ -4332,121 +4456,6 @@ function checkMediumAch(type) {
   _lsSaveAch();
   if (_MED_IDS.every(t => medAchieved[t])) unlockAch('all_medium');
 }
-function hitTest(rect, x, y) {
-  return x >= rect.x && x <= rect.x+rect.w && y >= rect.y && y <= rect.y+rect.h;
-}
-
-/* ── ボタンを押した瞬間の光（全ボタン共通） ──
-   状態（ON/OFF・有効/無効）とは別物で、「押せた」ことを画面で返すためのもの。
-   これが無いと、押しても画面がほとんど変わらないボタン（TEMPO±・UNDO・REDO・
-   効果音の試聴など）は操作した手応えが無い。
-
-   **押した点を1箇所で控え、各ボタンは自分の矩形に入っているかを見るだけ**にしてある。
-   ボタンごとに「押された」フラグを持たせると、ボタンを足したときに付け忘れて
-   そこだけ無反応になる。入口で控えるようにしておけば、共通の描画ヘルパーを通す限り
-   自動的に光る。
-   多点タッチのぶんを配列で持つのは、ドラムパッドで複数の指を同時に見るため。
-
-   押下はフレームループの外（入力ハンドラ）で起きるので、フレーム数ではなく実時間で持つ。
-   見せ方は16パッドの発音フラッシュ（_dpDrawPads）と同じ「金色の被せ＋温白の縁」に揃える。 */
-const BTN_PRESS_FLASH_SEC = 0.16;
-const _PRESS_TRACK_MAX = 8; // 同時に見る指の数の上限（ドラムパッドの多点打ちで足りる数）
-const _presses = [];
-function markPress(x, y) {
-  _presses.push({ x, y, t: performance.now() });
-  if (_presses.length > _PRESS_TRACK_MAX) _presses.shift();
-}
-/* そのイベントで**新たに触れた**点だけを控える。触れ続けている指を含めると、
-   別の指を置くたびに押しっぱなしのボタン（TEMPOの長押しなど）が光り直す */
-function markPressTouches(e) {
-  for (const tc of e.changedTouches) {
-    const q = touchToCanvas(tc);
-    markPress(q.x, q.y);
-  }
-}
-/* 長押しのリピートなど、座標を持たない経路から光らせるとき用（矩形の中心を押したことにする） */
-function markPressRect(r) { markPress(r.x + r.w / 2, r.y + r.h / 2); }
-/* 期限切れを捨てる。draw()の冒頭で1回だけ呼ぶ。
-   掃除を_pressLevelに同居させると、どのボタンが先に描かれるかで捨てる時点が変わる
-   （読み取りの関数は読むだけに保つ） */
-function expirePresses() {
-  const dead = performance.now() - BTN_PRESS_FLASH_SEC * 1000;
-  let n = 0;
-  while (n < _presses.length && _presses[n].t <= dead) n++; // 時刻順に積まれている
-  if (n) _presses.splice(0, n);
-}
-/* 0（消えている）〜1（押した瞬間）。同じ矩形に複数の指が入っていれば一番新しいものを使う */
-function _pressLevel(rect) {
-  if (_presses.length === 0) return 0; // 押されていないのが常態。ボタンの数だけ回さない
-  const now = performance.now();
-  let best = 0;
-  for (let i = _presses.length - 1; i >= 0; i--) {
-    const p = _presses[i];
-    const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
-    if (k > best && hitTest(rect, p.x, p.y)) best = k;
-  }
-  return best;
-}
-/* 光そのもの。k は 0（消えている）〜1（点いた瞬間）、path は面の輪郭を引く関数。
-   16パッドの発音フラッシュもボタンの押下フラッシュもここを通す（見せ方を1か所に持つ） */
-function _drawFlashPath(k, path) {
-  ctx.save();
-  ctx.globalAlpha = k * 0.7;
-  ctx.fillStyle = Y;
-  path(); ctx.fill();
-  ctx.globalAlpha = k;
-  ctx.strokeStyle = '#fff8d0'; ctx.lineWidth = 2;
-  path(); ctx.stroke();
-  ctx.restore();
-}
-/* 直角のときに roundRect(...,0) を使わないのは、角に長さ0の曲線が挟まって
-   縁の継ぎ目の画素が ctx.rect と食い違うため（線の継ぎ方は呼び出し元の
-   ctx.lineJoin をそのまま継ぐので、どちらで引いたかが見た目に出る） */
-function drawFlashRect(k, x, y, w, h, r) {
-  _drawFlashPath(k, r > 0 ? () => roundRect(x, y, w, h, r)
-                          : () => { ctx.beginPath(); ctx.rect(x, y, w, h); });
-}
-/* 押下の光。r は光の角丸半径で、**そのボタンの面と同じ値**を渡す（違うと縁がずれる）。
-   ボタンの絵の**上**に重ねる（面の下に敷くと、金色のアイコンや文字が光に溶けて消える）。
-   輪郭を関数ではなく矩形＋半径で受けるのは、光っていない間に無名関数を作らないため
-   （サウンドテストの項目のように、1画面で数十個が毎フレーム通る）。
-   **押しても何も起きない状態のボタンでは呼ばないこと。** 光ると「効いた」と誤解させる */
-function drawPressFlash(rect, r = 6) {
-  const k = _pressLevel(rect);
-  if (k > 0) drawFlashRect(k, rect.x, rect.y, rect.w, rect.h, r);
-}
-/* 矩形でないボタン（ドラムパッドの平行四辺形）用。path は面の輪郭を引く関数 */
-function drawPressFlashPath(rect, path) {
-  const k = _pressLevel(rect);
-  if (k > 0) _drawFlashPath(k, path);
-}
-/* 円いボタン（ドラムパッドのジョグ）用。矩形の当たり判定を流用すると、
-   円の外側にある四隅を押しても光ってしまう。
-   走査を_pressLevelと共有しないのは、当たり判定を関数で渡す形にすると
-   押されていない間もフレームごとに無名関数を作ることになるため */
-function _pressLevelCircle(cx, cy, r) {
-  if (_presses.length === 0) return 0;
-  const now = performance.now();
-  let best = 0;
-  for (let i = _presses.length - 1; i >= 0; i--) {
-    const p = _presses[i];
-    const k = 1 - (now - p.t) / (BTN_PRESS_FLASH_SEC * 1000);
-    if (k > best && Math.hypot(p.x - cx, p.y - cy) <= r) best = k;
-  }
-  return best;
-}
-function drawPressFlashCircle(cx, cy, r) {
-  const k = _pressLevelCircle(cx, cy, r);
-  if (k > 0) _drawFlashPath(k, () => { ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); });
-}
-/* ポーズ中はrAFが止まっていて光が減衰しないため、押下が残っている間だけ
-   draw()の末尾から次のフレームを取りに行く */
-let _pressFlashRaf = 0;
-function pumpPressFlash() {
-  if (!isPaused || _pressFlashRaf || _presses.length === 0) return;
-  _pressFlashRaf = requestAnimationFrame(() => { _pressFlashRaf = 0; draw(); });
-}
-
 /* ── localStorage ── */
 const _LS_COINS = 'game_coins';
 const _LS_BEST  = 'game_best';
@@ -4475,54 +4484,7 @@ function lsLoad() {
     coins = 60; bestCoins = 60;
   }
 }
-const REACH_DECEL_FRAMES   = 180; // この間スピードを減衰させる
-const FEVER_BANNER_FRAMES  = 180; // フィーバーバナー表示総フレーム数（フェードイン20f＋本体＋フェードアウト30f）
-const REACH_MIN_SPEED_RATIO = 0.75; // 最低回転速度 = 初期速度のこの割合（通常速度寄り）
-const REACH_LOCK_FRAMES  = 90;   // リーチ演出初期表示中の入力ロック期間（約1.5秒）
-let worms = [], uzaTexts = [], dumplings = [];
-let gigiSparks = [], yoyos = [], ghosts = [], rainDrops = [], gyogyoFish = [];
 
-/* ── 吉祥雲配置 ── */
-/* 吉祥雲。r（傾き）は持たない: 速度も傾きも大きさから導く（cloudV / cloudRot）。
-   手で持たせると「進む向きと傾きが食い違った雲」を後から簡単に作れてしまう */
-const CLOUDS = IS_PORTRAIT ? [
-  { x:  55, y:  60, s:0.70, a:0.65 },
-  { x: 355, y:  55, s:0.60, a:0.60 },
-  { x:  28, y: 290, s:0.55, a:0.52 },
-  { x: 390, y: 280, s:0.58, a:0.52 },
-  { x:  40, y: 700, s:0.55, a:0.50 },
-  { x: 370, y: 700, s:0.52, a:0.50 },
-] : [
-  { x: 140, y:  78, s:0.9,  a:0.75 },
-  { x: 260, y:  48, s:0.6,  a:0.65 },
-  { x: 870, y:  40, s:0.75, a:0.70 },
-  { x: 940, y:  78, s:0.8,  a:0.70 },
-  { x:  30, y: 480, s:0.65, a:0.60 },
-  { x: 140, y: 520, s:0.55, a:0.55 },
-  { x: 950, y: 490, s:0.70, a:0.60 },
-  { x:1040, y: 460, s:0.58, a:0.55 },
-  { x: 490, y:  20, s:0.50, a:0.45 },
-  { x: 580, y: 530, s:0.48, a:0.45 },
-];
-
-/* 雲は風に流される。向きは全雲で共通にする（混ざると風ではなく混乱に見える）。
-   大きい＝近い雲ほど速く動き、速い雲ほど進む側へ深く傾く。
-   傾きを速度から導いておけば「進む方向が下がっている」が構造として守られる。
-   意匠としての雲なので、流れが目に付く手前で止める（5秒で30〜40px） */
-const _CLOUD_DIR         = -1;    // -1=左へ
-const _CLOUD_SPEED_BASE  = 3;     // px/秒
-const _CLOUD_SPEED_SCALE = 6;     // px/秒（大きさ比例分）
-const _CLOUD_TILT_PER_V  = 0.02;  // rad/(px/秒)
-const CLOUD_BOB_PX      = 2.5;   // 上下のたゆたい
-const _CLOUD_BOB_SEC     = 9;     // その周期の基準
-/* スプライトの寸法は s=1 の実測bbox x[-61,60] y[-20,12] に余白を足したもの。
-   回転は貼るときに掛けるので、ここに回転ぶんの余白は要らない */
-const CLOUD_SPR_W = 132, CLOUD_SPR_H = 48;
-const cloudV     = CLOUDS.map(c => _CLOUD_DIR * (_CLOUD_SPEED_BASE + _CLOUD_SPEED_SCALE * c.s));
-const cloudRot   = cloudV.map(v => v * _CLOUD_TILT_PER_V);
-const cloudBobW  = CLOUDS.map(c => Math.PI * 2 / (_CLOUD_BOB_SEC * (0.8 + c.s * 0.5)));
-const cloudBobPh = CLOUDS.map(c => c.x * 0.017);
-const cloudX     = CLOUDS.map(c => c.x);
 /* ════════════════ Startup Jingle ════════════════ */
 /*
   オリエンタルリフ (Oriental Riff / Asian Riff)
@@ -13129,6 +13091,48 @@ function drawDrumPad() {
 }
 
 /* ════════════════ 吉祥雲 ════════════════ */
+/* ── 吉祥雲配置 ── */
+/* 吉祥雲。r（傾き）は持たない: 速度も傾きも大きさから導く（cloudV / cloudRot）。
+   手で持たせると「進む向きと傾きが食い違った雲」を後から簡単に作れてしまう */
+const CLOUDS = IS_PORTRAIT ? [
+  { x:  55, y:  60, s:0.70, a:0.65 },
+  { x: 355, y:  55, s:0.60, a:0.60 },
+  { x:  28, y: 290, s:0.55, a:0.52 },
+  { x: 390, y: 280, s:0.58, a:0.52 },
+  { x:  40, y: 700, s:0.55, a:0.50 },
+  { x: 370, y: 700, s:0.52, a:0.50 },
+] : [
+  { x: 140, y:  78, s:0.9,  a:0.75 },
+  { x: 260, y:  48, s:0.6,  a:0.65 },
+  { x: 870, y:  40, s:0.75, a:0.70 },
+  { x: 940, y:  78, s:0.8,  a:0.70 },
+  { x:  30, y: 480, s:0.65, a:0.60 },
+  { x: 140, y: 520, s:0.55, a:0.55 },
+  { x: 950, y: 490, s:0.70, a:0.60 },
+  { x:1040, y: 460, s:0.58, a:0.55 },
+  { x: 490, y:  20, s:0.50, a:0.45 },
+  { x: 580, y: 530, s:0.48, a:0.45 },
+];
+
+/* 雲は風に流される。向きは全雲で共通にする（混ざると風ではなく混乱に見える）。
+   大きい＝近い雲ほど速く動き、速い雲ほど進む側へ深く傾く。
+   傾きを速度から導いておけば「進む方向が下がっている」が構造として守られる。
+   意匠としての雲なので、流れが目に付く手前で止める（5秒で30〜40px） */
+const _CLOUD_DIR         = -1;    // -1=左へ
+const _CLOUD_SPEED_BASE  = 3;     // px/秒
+const _CLOUD_SPEED_SCALE = 6;     // px/秒（大きさ比例分）
+const _CLOUD_TILT_PER_V  = 0.02;  // rad/(px/秒)
+const CLOUD_BOB_PX      = 2.5;   // 上下のたゆたい
+const _CLOUD_BOB_SEC     = 9;     // その周期の基準
+/* スプライトの寸法は s=1 の実測bbox x[-61,60] y[-20,12] に余白を足したもの。
+   回転は貼るときに掛けるので、ここに回転ぶんの余白は要らない */
+const CLOUD_SPR_W = 132, CLOUD_SPR_H = 48;
+const cloudV     = CLOUDS.map(c => _CLOUD_DIR * (_CLOUD_SPEED_BASE + _CLOUD_SPEED_SCALE * c.s));
+const cloudRot   = cloudV.map(v => v * _CLOUD_TILT_PER_V);
+const cloudBobW  = CLOUDS.map(c => Math.PI * 2 / (_CLOUD_BOB_SEC * (0.8 + c.s * 0.5)));
+const cloudBobPh = CLOUDS.map(c => c.x * 0.017);
+const cloudX     = CLOUDS.map(c => c.x);
+
 /* drawCloudTo: 任意のコンテキストに雲を描く（OffscreenCanvas 事前描画用）
    drawCloud: メインcanvasへの呼び出し（staticLayerCanvas が利用可能なら使わない） */
 function drawCloudTo(c2, cx, cy, sc, alpha, rot) {
