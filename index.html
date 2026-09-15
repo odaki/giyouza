@@ -618,7 +618,7 @@ function rsApplyPending() {
 }
 
 
-const VERSION = 'v8.27';
+const VERSION = 'v8.28';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -5099,424 +5099,6 @@ function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面�
   return w.segs[w.segs.length - 1].char;
 }
 
-/* こんがりミニリール: キングギヨウザ戦の砲台代わり。createWheel/_buildWheelOC/hitResult と
-   同じ位置判定（wheelの回転角に対する固定ポインタ）をそのまま再利用し、通常ゲームと
-   同じ「1本ずつ順番にタップして止める」操作感にする */
-function createKingReel(x, y, weights) {
-  /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。シャッフルすると
-     的ごと・再スピンごとに並びが変わって「こんがり」と読めない。角度は0から昇順に
-     積むので、canvasの座標系（y下向き＝正の角度が時計回り）では時計回りに
-     こ→ん→が→りと並ぶ。
-     並びを固定してもゲーム性は落ちない: どの文字がポインタに来るかは的の初期回転(rot)と
-     回転速度で決まるため、ランダム性は並び順ではなく回転が担う。文字ごとの当たりやすさの
-     偏り（_adjustKingCharWeight）もspanで表現するので並び順とは独立に機能する */
-  const chars = KING_CHARS;
-  /* weights（%、KING_CHARS各文字→数値）が渡されればその配分で角度を割る
-     （的ごとの命中履歴で偏らせる。kingState.charWeights・_adjustKingCharWeight参照）。
-     合計は理論上100だが、加減算の丸め誤差を吸収するため実際の合計で正規化する
-     （createWheelの重み→角度変換と同じ考え方）。省略時は均等4等分 */
-  const sum = weights ? KING_CHARS.reduce((a, c) => a + weights[c], 0) : 0;
-  let angle = 0;
-  const segs = chars.map(c => {
-    const span = weights ? (weights[c] / sum) * Math.PI * 2 : Math.PI / 2;
-    const seg = { char: c, start: angle, span };
-    angle += span;
-    return seg;
-  });
-  const w = {
-    x, y, segs,
-    rot:    Math.random() * Math.PI * 2,
-    speed:  (Math.random() * 0.08 + 0.18) * 0.5, // 通常ホイールの半分の回転速度
-    locked: false,
-    result: null,
-    _oc:    null,
-  };
-  _buildKingReelOC(w);
-  return w;
-}
-
-/* ひびの位置を的の絵柄に固定するための基準となる文字。
-   的の segs は再スピンのたびにシャッフルされ、開始角も w.rot も作り直されるため、
-   ひびを「ワールド角 − そのときのw.rot」で保存すると次のトライで別の場所へ移動する。
-   セグメント配置そのものを基準にすれば絵柄に対する相対位置が保たれるので、
-   この文字のエリアの開始角を原点としてひびの角度を保存・復元する。
-   どこにひびが入るかは「文字が当たったところ」 */
-const _KING_CRACK_ANCHOR_CHAR = 'こ';
-
-/* 的ローカル座標系（w.rotを含まない、segs.startと同じ系）における
-   基準文字エリアの開始角。segsは必ず4文字すべてを含むが、防御的に0で代替する。
-   文字の並びを固定した現在（createKingReel参照）「こ」は常に先頭＝この関数は
-   常に0を返すが、「ひびは基準文字エリアを原点とする」という不変条件を明示する
-   ために残している（並び順を変えたくなった時にひびの位置が壊れない） */
-function kingReelAnchorAngle(w) {
-  const seg = w && w.segs && w.segs.find(s => s.char === _KING_CRACK_ANCHOR_CHAR);
-  return seg ? seg.start : 0;
-}
-
-/* 的のひび割れ（破壊演出）用の先細りウェッジ（扇形の破片）ポリゴンを1個生成する。
-   ひびは「飛んできた文字が的に当たった場所」を起点に、的の縁から中心方向へ割れる。
-   中心までは割らず、半径の1/2程度までに留める。幅は縁で広く、中心へ向かうほど狭い。
-   割れる向きは当たった向きを勘案する。
-
-   ポリゴンは**的の回転(w.rot)に追従するローカル座標系**（drawKingReelの
-   ctx.rotate(w.rot)の内側）で組む。ワールド座標で固定すると、回転する的の上を
-   ひびだけが滑って見える。
-   引数baseAngleは呼び出し側（kingReelShoot）で「文字が実際に当たったワールド座標上の
-   角度」からその時点のw.rotを差し引いて渡された、的自身から見たローカル角度。
-   的が生きている（ロック中〜再スピン後の回転中）間はこの値を使い続けるため、着弾直後は
-   実際の衝突位置と一致し、以後は的の回転にそのまま追従する */
-function createKingCrackWedge(baseAngle) {
-  const outerR = KING_WR;                                    // 起点＝的の縁
-  const innerR = KING_WR * (0.15 + Math.random() * 0.35);    // 終点＝中心からの距離（最大でも半径の約半分）
-  const segCount = 3 + Math.floor(Math.random() * 2);        // 3〜4節の折れ線（先細りの芯線）
-  const spine = [];
-  for (let j = 0; j <= segCount; j++) {
-    const t = j / segCount;
-    const r = outerR + (innerR - outerR) * t;
-    const a = baseAngle + (Math.random() - 0.5) * 0.5 * t; // 中心へ向かうにつれ左右にわずかに蛇行
-    spine.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
-  }
-  /* 芯線の左右にオフセットして先細りの帯を作る（端が広く、先端でほぼ0幅） */
-  const outerW = KING_WR * 0.11;
-  const left = [], right = [];
-  for (let j = 0; j < spine.length; j++) {
-    const t = j / (spine.length - 1);
-    const hw = outerW * (1 - t) / 2; // 半幅（先端に向けて先細り）
-    const prev = spine[Math.max(0, j - 1)], next = spine[Math.min(spine.length - 1, j + 1)];
-    const dx = next.x - prev.x, dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len, ny = dx / len; // 進行方向に対する法線
-    left.push({ x: spine[j].x + nx * hw, y: spine[j].y + ny * hw });
-    right.push({ x: spine[j].x - nx * hw, y: spine[j].y - ny * hw });
-  }
-  return [...left, ...right.reverse()]; // 閉じたポリゴン（先端は左右がほぼ同点で自然に尖る）
-}
-
-/* キング的のOCをプールへ返却する。通常ホイールのreleaseWheelOCsと対になる。
-   respinのたびに新規生成して解放しない作りにしてはいけない: 長い戦闘では数十枚の
-   OffscreenCanvasがGC待ちで滞留し、iOS Safariのcanvasメモリを圧迫して戦闘後の処理落ち・
-   音途切れの原因になる。OffscreenCanvasを作る場所は必ずプール運用にすること */
-function releaseKingReelOCs(reels) {
-  if (!reels) return;
-  for (const w of reels) {
-    if (w?._oc) { freeKingReelOCs.push(w._oc); w._oc = null; }
-  }
-}
-
-/* キング的用フォント計算（spanに応じて9〜18px。通常ホイールと違い事前計算
-   フィールドを持たないため都度計算する） */
-function _kingReelFontOf(s) {
-  const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
-  return `bold ${fontSize}px ${FONT_MIN}`;
-}
-
-function _buildKingReelOC(w) {
-  const ocR = KING_WR + 4;
-  /* optを都度組むのはKING_WRが縦画面のinitKingBattleで確定するため
-     （静的constにすると初期値のKING_WRで固まってしまう）。4個/respinの
-     小オブジェクト生成でcanvas描画コストに比べ無視できる */
-  _buildSegWheelOC(w, {
-    r: KING_WR, ocR, pool: freeKingReelOCs,
-    segLW: 1, charOff: 0.6, charLW: 2.5, hubR: KING_WR*0.16,
-    fontOf: _kingReelFontOf,
-  });
-  w._ocR = ocR;
-}
-
-/* 的の三角ポインタ先端のワールド座標。ポインタは画面の向きによらず常に的の
-   真上固定（当たり位置は hitResult 呼び出し側で常に -PI/2 を渡して揃える）。
-   drawKingReelの描画と_kingFireBeamのビーム発射元の両方から参照する共通式 */
-function kingReelPointerPos(w) {
-  const pointer = -Math.PI / 2;
-  return { x: w.x + Math.cos(pointer) * (KING_WR + 12), y: w.y + Math.sin(pointer) * (KING_WR + 12) };
-}
-
-/* マーク済みの的の三角ポインタに帯電演出を描く。4つマークした状態で次のアクションが
-   必要だと分かるようにするための表示。
-   時間ベースのバケツ値を擬似乱数シードにして数十msごとにジグザグの向きを切り替え、
-   静電気のような点滅を表現する（的4本ぶんの極小描画なので、パーティクル化・
-   プール化の対象外） */
-function _drawKingReelCharge(px, py, idx) {
-  /* 帯電の勢いを打ち込みの残り拍に連動させる（副表示）。プレイヤーの視線は的に
-     釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
-     分かるようにする。残りが多いほど強く、尽きかけると弱々しくなる */
-  const pw = KING_STEP_BEATS > 0 ? kingStepsLeft() / KING_STEP_BEATS : 1;
-  const vigor = 0.35 + 0.65 * pw;
-  let seed = Math.floor(performance.now() / 45) + idx * 7;
-  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-  /* 大きさは的の半径基準にする（縦横でKING_WRが変わるので比で持つ）。固定pxだと
-     画面サイズによって見え方が変わり、小さすぎて気付かれない。
-     広がりは0.39〜0.81倍。本数・線幅・グローはそのままなので、密度と輝きを保ったまま
-     長さだけを抑えている */
-  const R = KING_WR;
-  const flick = 0.55 + rnd() * 0.45; // 明滅
-  ctx.save();
-  ctx.translate(px, py);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  /* 稲妻は本数を増やし（3→6）、折れも1回から3回にして荒れた放電に見せる。
-     全部を1本のパスへ積んでから「太く暗いグロー → 細く明るい芯」の順で2回ストローク
-     する。shadowBlurを使わずに光らせる既存のビーム描画（drawKingBattle）と同じ手法で、
-     的あたりのストロークも2回に収まる */
-  ctx.beginPath();
-  const N = 7;
-  for (let b = 0; b < N; b++) {
-    const baseAng = (b / N) * Math.PI * 2 + rnd() * 0.9;
-    const len = R * (0.39 + rnd() * 0.42) * vigor;
-    ctx.moveTo(0, 0);
-    for (let s = 1; s <= 3; s++) {
-      const t = s / 3;
-      /* 根元ほど大きく振れ、先端へ向かって収束させると稲妻らしくなる */
-      const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - t * 0.5);
-      ctx.lineTo(Math.cos(a) * len * t, Math.sin(a) * len * t);
-    }
-  }
-  /* 線幅はグロー 0.15R・芯 0.045R。細めに締めることで、長さ・本数（density）は
-     そのままに、密度感を保ったまま線を締めて見せる */
-  ctx.globalAlpha = 0.40 * flick * vigor;
-  ctx.strokeStyle = '#ffd34d';
-  ctx.lineWidth = Math.max(3.5, R * 0.15);
-  ctx.stroke();
-  ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
-  ctx.strokeStyle = '#fffde7';
-  ctx.lineWidth = Math.max(1.2, R * 0.045);
-  ctx.stroke();
-  /* 根元の輝き。稲妻だけだと中心が空くので、帯びている芯を1枚置く */
-  ctx.globalAlpha = 0.30 * flick * vigor;
-  ctx.fillStyle = Y;
-  ctx.beginPath(); ctx.arc(0, 0, R * 0.18 * (0.85 + 0.3 * flick), 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
-}
-
-/* 発射の瞬間の放電（KING_FIRE_FLASH_FRAMES 参照）。帯電のジグザグを外向きへ
-   飛ばして消す＝溜めていた電気を撃ち出した、という見え方にする。
-   帯電（_drawKingReelCharge）と同じ疑似乱数の作りで、こちらは経過フレームで
-   長さを伸ばしながら薄くしていく */
-function _drawKingReelDischarge(px, py, idx) {
-  const k = kingFx.fireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
-  let seed = idx * 13 + 7;
-  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-  /* 帯電（_drawKingReelCharge）を的の半径基準へ拡大したので、こちらも同じ基準に
-     揃える。片方だけ小さいと放電が弱く見える */
-  const R = KING_WR;
-  ctx.save();
-  ctx.translate(px, py);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  const spread = (1 - k) * R * 0.85; // 外へ広がっていく
-  for (let b = 0; b < 8; b++) {
-    const ang = (b / 8) * Math.PI * 2 + rnd() * 0.5;
-    const r0 = R * 0.10 + spread, r1 = r0 + R * (0.18 + rnd() * 0.28);
-    const mid = ang + (rnd() - 0.5) * 0.5;
-    ctx.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0);
-    ctx.lineTo(Math.cos(mid) * (r0 + r1) / 2, Math.sin(mid) * (r0 + r1) / 2);
-    ctx.lineTo(Math.cos(ang) * r1, Math.sin(ang) * r1);
-  }
-  /* 帯電と同じ「太く暗いグロー → 細く明るい芯」の2回ストローク */
-  ctx.globalAlpha = k * 0.34;
-  ctx.strokeStyle = '#ffd34d';
-  ctx.lineWidth = Math.max(4, R * 0.17) * (0.6 + k * 0.4);
-  ctx.stroke();
-  ctx.globalAlpha = k * 0.95;
-  ctx.strokeStyle = '#fffde7';
-  ctx.lineWidth = Math.max(1.6, R * 0.06) * (0.5 + k * 0.5);
-  ctx.stroke();
-  ctx.restore();
-}
-
-/* 発射直後、まだ撃ち込まれていない的の三角マークと、その結果文字を稲妻で繋ぐ
-   （KING_TETHER_* の定義部参照）。両端は必ずマーク／文字にピタリと付け、振れ幅を
-   中央で最大にすることで「張られた線」に見せる。
-   _drawKingReelCharge と同じく、時間バケツを疑似乱数シードにして数十msごとに
-   形を切り替え、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
-   ストロークで光らせる（描画規約） */
-function drawKingChargeTether(x0, y0, x1, y1, idx) {
-  const dx = x1 - x0, dy = y1 - y0;
-  const len = Math.hypot(dx, dy);
-  if (len < 2) return;
-  const nx = -dy / len, ny = dx / len; // 法線＝横揺れの方向
-  let seed = Math.floor(performance.now() / 45) * 31 + idx * 7 + 1;
-  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-  const flick = 0.55 + rnd() * 0.45;
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  for (let s = 1; s < KING_TETHER_SEG; s++) {
-    const t = s / KING_TETHER_SEG;
-    const amp = Math.sin(t * Math.PI) * len * KING_TETHER_AMP;
-    const o = (rnd() - 0.5) * 2 * amp;
-    ctx.lineTo(x0 + dx * t + nx * o, y0 + dy * t + ny * o);
-  }
-  ctx.lineTo(x1, y1);
-  ctx.globalAlpha = 0.26 * flick;
-  ctx.strokeStyle = '#ffd34d';
-  ctx.lineWidth = 6;
-  ctx.stroke();
-  ctx.globalAlpha = 0.5 + 0.4 * flick;
-  ctx.strokeStyle = '#fffde7';
-  ctx.lineWidth = 1.8;
-  ctx.stroke();
-  ctx.restore();
-}
-
-/* 撃ち込み済み・焼き込み待ちの焦げ跡の位置で、文字の「外」に走る帯電
-   （KING_TETHER_* の定義部参照）。三角との接続が切れた分のエネルギーがそこに
-   溜まっている、という見え方にする。座標変換は _kingFlightTargetPos および
-   アクセントの発光と同じ（ボスの表示位置・呼吸・のけぞりに追従）。
-
-   描き方は的の三角の帯電（_drawKingReelCharge）と揃える: 時間バケツを疑似乱数
-   シードにして数十msごとに形を切り替え、根元ほど大きく振れて先端へ収束する
-   3折れの稲妻を、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
-   ストロークで光らせる。うねる曲線（プラズマボール風）にはしない: 同じ画面にある
-   的側の帯電と別物に見えて統一感が崩れる。違いは発生点だけ（的は中心から、
-   こちらは文字の縁から外へ）。
-
-   充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
-   的の帯電が打ち込みの残り拍で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
-   いちばん長く明るい */
-function drawKingMarkCharges(breath, ofsX, ofsY) {
-  if (kingFx.chargedMarks.length === 0) return;
-  const ct = audioCtx ? audioCtx.currentTime : null;
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (const m of kingFx.chargedMarks) {
-    let p = 1; // 時計が引けない場合は満充電で描く
-    if (ct !== null && m.chargedAt !== null && kingState.seqAccentAt !== null) {
-      const span = kingState.seqAccentAt - m.chargedAt;
-      p = span > 0.05 ? Math.max(0, Math.min(1, (ct - m.chargedAt) / span)) : 1;
-    }
-    kingLocalToWorld(m.lx, m.ly, breath, ofsX, ofsY, kingWorldTmp);
-    const mx = kingWorldTmp.x, my = kingWorldTmp.y;
-    /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
-       面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
-    const R = m.chargeR;
-    /* シードの作りも的側と同じ（45msバケツ）。位相だけマークごとにずらして、
-       4箇所が同じ形で明滅しないようにする */
-    let seed = Math.floor(performance.now() / 45) + Math.floor(m.rot * 97);
-    const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-    const flick = 0.55 + rnd() * 0.45;
-    const vigor = 0.55 + 0.45 * p;
-    const rIn = R * 0.5; // 発生点＝グリフの縁。ここから外へ伸ばす＝「文字の外」
-    ctx.beginPath();
-    for (let b = 0; b < KING_CHARGE_BOLTS; b++) {
-      const baseAng = (b / KING_CHARGE_BOLTS) * Math.PI * 2 + rnd() * 0.9;
-      const len = R * (0.45 + rnd() * 0.5) * vigor;
-      ctx.moveTo(mx + Math.cos(baseAng) * rIn, my + Math.sin(baseAng) * rIn);
-      for (let s = 1; s <= 3; s++) {
-        const u = s / 3;
-        const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - u * 0.5);
-        const r = rIn + len * u;
-        ctx.lineTo(mx + Math.cos(a) * r, my + Math.sin(a) * r);
-      }
-    }
-    /* 線幅の比も的側と同じ（グロー 0.15R・芯 0.045R） */
-    ctx.globalAlpha = 0.40 * flick * vigor;
-    ctx.strokeStyle = '#ffd34d';
-    ctx.lineWidth = Math.max(3, R * 0.15);
-    ctx.stroke();
-    ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
-    ctx.strokeStyle = '#fffde7';
-    ctx.lineWidth = Math.max(1.2, R * 0.045);
-    ctx.stroke();
-    /* 的側にある「根元の輝き」に相当するものはここでは置かない（中心はグリフが
-       占めていて空かないため。文字の上に光を乗せると読めなくなる） */
-  }
-  ctx.restore();
-}
-
-function drawKingReel(w, active, idx) {
-  /* 被弾揺れは的まるごと（絵柄・リング・三角ポインタ・結果文字）に効かせたいので、
-     関数全体を包む外側のsave/translateで掛ける（kingReelShakeOffset参照） */
-  const _shk = kingReelShakeOffset(idx);
-  ctx.save();
-  if (_shk) ctx.translate(_shk.x, _shk.y);
-  ctx.save();
-  ctx.translate(w.x, w.y);
-  ctx.rotate(w.rot);
-  ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
-  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ向けて先細りに
-     割れる（createKingCrackWedge参照）。この ctx.rotate(w.rot) の内側で描くことで、的が
-     回転する（再スピン後の回転中も含む）とひびも一緒に回転する＝ひびごと的が回る。
-     さらにここで基準文字エリアの開始角ぶんを回す。ポリゴンはその開始角を原点とした相対角で
-     保存されているため（_addKingReelCrackAtCollision参照）、現在の的の開始角を足し戻すことで
-     絵柄に対する位置が一定になる。
-     的は再スピンのたびに新しいrot・新しいセグメント配置で作り直されるが、ひびは
-     kingState.reelCracks[idx]にスロット単位で蓄積して残るため、この足し戻しが無いとトライごとに
-     ひびが絵柄の上を回転移動してしまう */
-  if (kingState && kingState.reelCracks && idx != null) {
-    const cracks = kingState.reelCracks[idx];
-    if (cracks && cracks.length) {
-      ctx.save();
-      ctx.rotate(kingReelAnchorAngle(w));
-      ctx.fillStyle = 'rgba(12,9,7,0.82)';
-      for (const c of cracks) {
-        const poly = c.poly;
-        ctx.beginPath();
-        ctx.moveTo(poly[0].x, poly[0].y);
-        for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j].x, poly[j].y);
-        ctx.closePath();
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-  }
-  ctx.restore();
-  /* ビートリング: これから射つ的の外側に、拍ごとに広がって消える輪を出す。
-     ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、これが
-     無いと拍の手掛かりが一つも無くなる（全タップが calcSyncScore で採点されるのに、
-     打ち込みメーターの進み方しか手掛かりが無い状態になる）。
-     通常モードはプリレンダのグロースプライト（WR基準）を使うが、KING_WRは縦画面で
-     動的に変わるので流用できない。shadowBlurも規約で使えないため、広がる輪＋減衰する
-     線幅で表現する（ミュート時の画面枠と同じ考え方）。 */
-  if (active && !w.locked) {
-    const bp = getBeatPulse(); // 0-1、ビート直後=1
-    if (bp > 0.01) {
-      ctx.save();
-      ctx.globalAlpha = bp * 0.8;
-      ctx.strokeStyle = Y;
-      ctx.lineWidth = 1 + bp * 3.5;
-      ctx.beginPath();
-      ctx.arc(w.x, w.y, KING_WR + 5 + (1 - bp) * KING_WR * 0.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
-  ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
-  ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
-  ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
-  ctx.stroke();
-  /* ポインタ三角形は画面の向きによらず常に的の真上（当たり位置は hitResult 呼び出し側で
-     常に -PI/2 を渡して揃える）。台座半径は「リング外縁（最大 KING_WR+4.5）に接するが
-     重ならない」よう、先端が KING_WR+5 に来る値にしてある */
-  const pointer = -Math.PI/2;
-  const { x: px, y: py } = kingReelPointerPos(w);
-  ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
-  ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
-  ctx.fillStyle = Y; ctx.fill();
-  ctx.restore();
-  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）が必要なことを
-     視覚的に伝える。消えるのは「その的のビームが実際にマークへ飛んだ瞬間」で、発射タイミングで
-     一斉に消すのではない。再生では的ごとに撃つ時刻がずれるので、順に消えていく */
-  if (w.locked && kingState && !kingState.reelBeamed[idx]) _drawKingReelCharge(px, py, idx);
-  /* 発射タップの瞬間の放電はそのまま重ねて出す（帯電の有無とは独立） */
-  if (w.locked && kingFx.fireFlash > 0) _drawKingReelDischarge(px, py, idx);
-  /* 当たった文字は的の下に表示（ロック前は何も出さない） */
-  if (w.result) {
-    ctx.save();
-    ctx.translate(w.x, w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2);
-    ctx.font = `bold ${KING_RESULT_FONT}px ${FONT_MIN}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)'; ctx.strokeText(w.result, 0, 0);
-    ctx.fillStyle = '#fffde7'; ctx.fillText(w.result, 0, 0);
-    ctx.restore();
-  }
-  ctx.restore(); // 被弾揺れの外側save
-}
-
 /* ════════════════ Update ════════════════ */
 /* 4本目が着弾した瞬間の確定処理（当たり型の判定・フィーバー・king値・配当・実績・ハズレ）。
    ここを読むだけで「1トライの結果がどう決まるか」が追える形にまとめてある。
@@ -7301,6 +6883,149 @@ function drawUzaFlash() {
   }
 }
 
+/* 画面全体フェード（汎用）: phase切り替えの継ぎ目を暗転でつなぐ演出。
+   暗転が最大になった瞬間にonMidを呼んで実際のphase切り替え（kingBattleEnd等の重い処理）
+   を行い、その後フェードインすることで、切り替えの瞬間を暗闇の中に隠す。
+   どのphaseから呼んでも使える汎用実装 */
+const _SCREEN_FADE_FRAMES = 35;
+let screenFade = null; // { stage:'out'|'in', timer, alpha, onMid }
+function startScreenFade(onMid, frames = _SCREEN_FADE_FRAMES) {
+  if (screenFade) return; // 多重起動防止（連打でフェードが再スタートしないように）
+  screenFade = { stage: 'out', timer: 0, frames, alpha: 0, onMid };
+}
+function updateScreenFade() {
+  const f = screenFade;
+  f.timer++;
+  if (f.stage === 'out') {
+    f.alpha = Math.min(1, f.timer / f.frames);
+    if (f.timer >= f.frames) {
+      f.onMid?.();
+      f.stage = 'in'; f.timer = 0;
+    }
+  } else {
+    f.alpha = Math.max(0, 1 - f.timer / f.frames);
+    if (f.timer >= f.frames) screenFade = null;
+  }
+}
+function drawScreenFade() {
+  if (!screenFade || screenFade.alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = screenFade.alpha;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
+/* ════════════════ キングギヨウザ フェーズの区分と後片付け ════════════════ */
+/* ボス戦闘系フェーズ（kingOmenは含まない: 予兆中はホイール等の通常UIをまだ表示する）。
+   通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは必ずこの述語を使うこと。
+   phase比較のチェーンを各ガードにコピーすると、フェーズを追加したとき（kingShatter等）に
+   広げ忘れが実バグになる。一元化により全ガードへ同時反映される */
+const _KING_BATTLE_PHASES = new Set(
+  ['kingBattle', 'kingShatter', 'kingVictory', 'kingVictoryOutro', 'trueEnding',
+   'kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
+function isKingBattlePhase() { return _KING_BATTLE_PHASES.has(phase); }
+/* 敗北が確定してテープが止まっている（stopBGMTapeでレートが0.001まで落ちている）
+   フェーズ。コイン表示の追従に下限レートを与えるために使う（update内のcoinsDisp参照）。
+   kingShatterは含めない: 没収（_startKingDefeat）はその後なので表示は動いていない */
+const KING_DEFEAT_PHASES = new Set(['kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
+
+/* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
+   kingBattle/kingShatter/kingDefeat系はstopBGMTapeでソースを極低速のまま生かして
+   いるため一時停止からの復帰でそのまま再開できるが、kingVictory（勝利
+   ファンファーレ用にstopKingBGMForVictoryで破棄）とtrueEnding（専用の
+   オシレーターテーマのみでbgmSourceを使わない）はソースが存在しない前提の
+   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない。
+   kingVictoryOutro（飛び去り演出）も同様。ここは意図的に無音を保ち、復帰時の
+   テープ加速（tapestart）で世界が動き出す対比を作っている区間なので、
+   ポーズ→再開でBGMが鳴り出すと演出が壊れる */
+const _NO_BGM_SOURCE_PHASES = new Set(['kingVictory', 'kingVictoryOutro', 'trueEnding']);
+
+/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の補償経路
+   （bgmSourceが無ければ起動する、という善意の処理）から通常BGMが割り込むのを止めるための述語。
+   内訳:
+     startup            まだ始まっていない
+     kingOmen           予告中（startBGMがグレースケールを即時解除してしまう）
+     soundTest/drumPad  鳴らす音をモード側が完全に握っている
+     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ
+     キング戦系         テンポ・段階差し替え・テープ停止を戦闘側が一括で持つ
+   判定は必ずこの述語に集約すること。除外条件を各ガードにコピーすると、新しいモードを足す
+   たびに片方だけ直す事故が起き、そのモードでミュート解除すると通常BGMが鳴り出す */
+function noAutoBgmPhase() {
+  return noBgmResumePhase() || isKingBattlePhase();
+}
+
+/* 「止まる前の続きから鳴らし直してはいけない」フェーズ。noAutoBgmPhase より狭い。
+   **キング戦系は含めない。** 位置とレートを保って作り直す復帰（_resumeBgmFromPause）は
+   ボス用バッファ・ボスのテンポをそのまま引き継ぐので、キング戦でも正しい復帰になる。
+   ここにキング戦を入れると、戦闘中にソースを失う経路（PAUSE解除・AudioContext再作成）の
+   すべてで二度とBGMが戻らなくなる。
+   除外するのは「そもそも鳴らすものが無い」フェーズだけ:
+     startup            まだ始まっていない
+     kingOmen           テープストップでBGMを畳んでいる最中。次はinitKingBattleが起こす
+     soundTest/drumPad  鳴らす音をモード側が完全に握っている
+     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ */
+function noBgmResumePhase() {
+  return phase === 'startup' || phase === 'kingOmen' ||
+         phase === 'soundTest' || phase === 'drumPad' ||
+         _NO_BGM_SOURCE_PHASES.has(phase);
+}
+
+let defeatOutro = null; // { step, timer, dumplings } つなぎ演出の状態（null=非表示）
+/* こんがり達成側の退場演出の状態（null=非表示、drawKingVictoryOutro参照）。
+   敗北側（defeatOutro）と並べて、両方を片付ける cleanupKingBattleState の隣に置く */
+let victoryOutro = null; // { step, timer, dumplings, seedDumpling, msgAlpha, gaugeAlpha, baseBy, baseScale }
+
+/* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
+   通常モード復帰（kingBattleEnd、勝敗問わず・2回目以降の無演出勝利含む）と、
+   真エンディング終了後の復帰（finishTrueEnding、常にstartupへ戻る）の
+   両方から呼ぶ共通処理 */
+function cleanupKingBattleState() {
+  if (kingState) releaseKingReelOCs(kingState.reels); // 最後の4的のOCをプールへ返却（リーク防止）
+  kingState = null;
+  kingFx = createKingFx();        // 演出の状態は丸ごと作り直す（createKingFx参照）
+  kingBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦はinitKingBattleでtier0から）
+  shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない
+  /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
+  if (omen)        omen.dumplings        = releaseAll(omen.dumplings);
+  if (defeatOutro) defeatOutro.dumplings = releaseAll(defeatOutro.dumplings);
+  if (victoryOutro) {
+    victoryOutro.dumplings = releaseAll(victoryOutro.dumplings);
+    if (victoryOutro.seedDumpling) deadify(victoryOutro.seedDumpling); // 舞い上がらずに残る1個
+  }
+  omen = null; defeatOutro = null; victoryOutro = null;
+}
+
+/* キング戦を終えて通常モードへ戻す（勝敗問わず）。ゲームオーバー復帰と同じテープ加速演出を再利用 */
+function kingBattleEnd() {
+  cleanupKingBattleState();
+  /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と同じ
+     ゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップでgameOverReset）を
+     経由させる。所持ギヨウザが0になる場合でも、まずキングが戻って飛んでいく演出を
+     見せてから、そのゲームオーバー演出へ進む。
+     ここで即座にgameOverReset()を呼ぶと画面を見せないまま再スタートしてしまうため、
+     通常モードのisGameOver検出と同じ状態（phase='done'、endTimerからcanRestartが
+     45フレーム後に立ち上がる、drawEndScreen参照）を作って引き継ぐ。実際のリセットは
+     そのCONTINUEタップ時に_handleGameClickのphase==='done'分岐から呼ばれる（通常モードと共通）。
+     勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
+  if (coins <= 0) {
+    isGameOver = true;
+    endTimer = 0; canRestart = false; continueShowDelay = 0;
+    grayRateTarget = 0.001; // 通常モードのコイン枯渇と同じグレーアウト
+    stopBGMTape(); // 同じくテープストップでBGMをフェードアウト
+    phase = 'done';
+    return;
+  }
+  restartToTapestart();
+  /* restartToTapestart→init(fromGameOver=true)は通常のゲームオーバー復帰と同じ経路を
+     共有しており、そちらの仕様（ゲームオーバー復帰後もBET対応速度へ）に従って無条件で
+     スローハンドの抽選を行う。キング戦という特別な文脈からの復帰直後に無関係な確率
+     イベントで割り込まれるのは不適切なので、キング戦復帰（勝敗問わず）では常に通常速度で
+     始まるよう明示的に抑制する。通常のgameOverResetにはこの抑制を入れない */
+  isSlowSpin = false;
+  slowSpinPending = null;
+}
+
 /* ════════════════ キングギヨウザ 出現予告 ════════════════
    蓄積メーター（当たりごとの加算の累計。KING_GAIN_*参照）が閾値に達すると、トライの区切りで
    出現予告演出（phase='kingOmen'）が発動する。
@@ -7385,33 +7110,6 @@ let omen = null;      // { step, timer, dumplings, flash } 予告演出の状態
 let omenFx = [];
 const _predOmenFxAlive = o => o.age < o.life;
 const _releaseOmenFx   = o => { o.g._dead = true; }; // アイテムプールへ返す（deadifyと同じ扱い）
-let kingOC = null, KING_S = 0; // キングギヨウザ本体スプライト（初回出現時に生成）
-
-/* こんがりしっぱい（ルーレット破壊・全損には至らない敗北）後、通常モードへ
-   戻る前のつなぎ演出。誕生演出（バラバラのギヨウザが収束してキングギヨウザになる）を
-   逆再生するイメージで、キングの姿がふつうのギヨウザ群へ弾け散り、そのあと誕生演出と
-   同じ台詞スタイルでメッセージを出してから復帰する */
-const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
-/* 締めメッセージ（達成側・失敗側で共通の書式）のフォント。
-   折り返しの計測（wrapOutroLines）と実描画（drawOutroMsg）で必ず同じ書式を
-   使わないと、計測結果と実際の幅がずれてそのまま横はみ出しになる（実機で一度
-   発生済み）。サイズだけでなくフォント文字列そのものを一本化しておく */
-function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
-function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px ${FONT_MIN}`; }
-/* 締めメッセージを画面幅に収まるよう折り返す。
-   縦画面（W=420）は横画面よりずっと狭いので、固定の行配列をそのまま描くと文字が
-   はみ出す。文言は後から調整する前提なので、必ずここを通してどんな文言でも収まる
-   ようにする。区切りはエンドロールと同じく空白（半角・全角）位置。
-   ctx.measureTextを使うので演出の開始時に1度だけ実行し、結果を状態に持たせる
-   （毎フレーム計測しない） */
-function wrapOutroLines(lines) {
-  return lines.flatMap(t => wrapTrueEndingLine(t, _outroMsgFont(), W - 48)); // 左右24pxずつの余白
-}
-let defeatOutro = null; // { step, timer, dumplings } つなぎ演出の状態（null=非表示）
-/* こんがり達成側の退場演出の状態（null=非表示、drawKingVictoryOutro参照）。
-   宣言をここに置くのはcleanupKingBattleStateが両方を後片付けするため
-   （letはホイストされないので、使用箇所より後で宣言するとTDZ risk になる） */
-let victoryOutro = null; // { step, timer, dumplings, seedDumpling, msgAlpha, gaugeAlpha, baseBy, baseScale }
 
 /* 予兆の進み具合（0=まだ出さない → 1=出現直前）。KING_OMEN_FX_* の補間に使う。
 
@@ -7477,223 +7175,6 @@ function updateOmenFx() {
     o.a = o.alpha * Math.min(1, p / 0.12) * Math.min(1, (1 - p) / 0.25); // 入りで現れ、出で消える
   }
   swapRemove(omenFx, _predOmenFxAlive, _releaseOmenFx);
-}
-
-/* 口の形を決める比率（本体サイズsに対する比）。表情の知覚的な要はこの口の
-   反転で、制御点Yが端点Yを下回れば「への字（怒り）」・上回れば「U字（笑顔）」。
-   地鳴りのマイルド化もこの同じ値から導くため（kingGentleness参照）、
-   マジックナンバーで散らさず定数として一箇所に置く */
-/* 呼吸の拡縮。本体の描画・文字の着地先・帯電の描画が同じ値を使わないと、
-   焦げ跡や文字が本体から外れる。式を複製せずこの関数だけを見ること。
-   BGMとは無関係な一定周期でよい（曲に乗る動きはkingGrooveが別に受け持つ） */
-const _KING_BREATH_AMP = 0.02;
-const _KING_BREATH_MS  = 300;
-function kingBreath() { return 1 + _KING_BREATH_AMP * Math.sin(performance.now() / _KING_BREATH_MS); }
-
-/* ── キングの「ノリ」 ──
-   こんがりが進むほど、BGMに合わせて体が勝手に動きはじめる。呼吸（kingBreath）とは
-   別の層で、こちらだけが曲に同期する。
-   強度は_KING_GROOVE_FROMから立ち上がり_KING_GROOVE_FULLで満ちる。指数を掛けて
-   立ち上がりを鈍らせ「いつの間にか揺れていた」に見せる（線形だと閾値の直後から
-   動きが見えてしまい、演出の意図が割れる）。
-   時計は必ず音声基準（bgmBeatPos）にする。フレーム基準にすると処理落ちのたびに
-   ノリが曲から外れる。タイミングの正確さが報酬になっているこのゲームで、
-   キング本人が走ったり遅れたりするのは最も避けたい破綻。
-   音が引けないときは揺れない。フレーム基準で代用してはいけない（同上）。
-   決着後（kingShatter以降）は止める。砕けながら踊らせない */
-const _KING_GROOVE_FROM     = 0.50;  // ここから揺れ始める（こんがり比）
-const _KING_GROOVE_FULL     = 0.90;  // ここで振り切る
-const _KING_GROOVE_EXP      = 1.6;   // 立ち上がりの鈍らせ方
-const _KING_GROOVE_SWAY_PX  = 9;     // 左右の振れ（2拍で1往復）
-const _KING_GROOVE_LEAN_RAD = 0.055; // 振れた側へ倒れる角
-const _KING_GROOVE_BOB_PX   = 5;     // 拍頭で沈む量
-/* 毎フレーム複数箇所から呼ばれるので器を使い回す（GCを出さない）。
-   cos/sin を持たせてあるのは、ローカル座標の変換側（kingLocalToWorld）が
-   本体の回転とまったく同じ値を使う必要があるため */
-const _kingGrooveOfs = { dx: 0, dy: 0, rot: 0, cos: 1, sin: 0 };
-const kingWorldTmp  = { x: 0, y: 0 }; // kingLocalToWorld の受け皿（呼び出し直後に読み切る）
-function kingGroove() {
-  const o = _kingGrooveOfs;
-  o.dx = 0; o.dy = 0; o.rot = 0; o.cos = 1; o.sin = 0;
-  if (!kingState || phase !== 'kingBattle') return o;
-  const t = (kingState.cookPct / 100 - _KING_GROOVE_FROM) / (_KING_GROOVE_FULL - _KING_GROOVE_FROM);
-  if (t <= 0) return o;
-  const pos = bgmBeatPos();
-  if (pos === null) return o;
-  const g = Math.pow(Math.min(1, t), _KING_GROOVE_EXP);
-  const sw = Math.sin(Math.PI * pos); // 2拍で1往復
-  o.rot = _KING_GROOVE_LEAN_RAD * g * sw;
-  o.dx  = _KING_GROOVE_SWAY_PX  * g * sw;
-  o.dy  = _KING_GROOVE_BOB_PX   * g * getBeatPulse();
-  o.cos = Math.cos(o.rot); o.sin = Math.sin(o.rot);
-  return o;
-}
-
-/* 焦げ跡・文字のローカル座標を画面座標へ移す。本体の描画（translate→rotate→scale）と
-   まったく同じ変換であることが要件で、ずれると文字が本体から外れた所へ着弾し、
-   焦げ跡の発光も本体から浮く。組み立てを呼び出し側に置くと3箇所が静かに食い違うので、
-   ここに1本化する。
-   ofsX/ofsY はのけぞり等の一過性の変位で、呼び出し側によって渡したり渡さなかったりする
-   （文字の着地先には反映しない。座標計算へ一過性の揺れを持ち込まないため） */
-function kingLocalToWorld(lx, ly, breath, ofsX, ofsY, out) {
-  const g = kingGroove();
-  const x = lx * breath, y = ly * breath;
-  out.x = kingState.dbx + g.dx + ofsX + (x * g.cos - y * g.sin);
-  out.y = kingState.dby + g.dy + ofsY + (x * g.sin + y * g.cos);
-  return out;
-}
-
-const _KING_MOUTH_END_Y   = 0.26; // 口の両端のY
-const _KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
-const _KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
-
-/* 眉の折れ（drawKingFace参照）。眉頭から眉尻へ一直線ではなく途中で上へ折り、
-   角のある形で意志の強さを出す。
-   量は眉の長さに対する比で持つ: 眉の座標は目の大きさ(er)に従属して伸縮するので、
-   sの絶対値で持つと目のサイズを触るたびに折れの見え方が変わる */
-const _KING_BROW_KINK   = 0.11; // pct=0での折れ量（眉の長さ比）
-const _KING_BROW_KINK_T = 0.55; // 折れ点の位置（眉頭0〜眉尻1）
-
-/* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
-   上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
-   地鳴りのマイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
-   動かす。口の定数から導いているので、口の形を変えれば地鳴りも自動で追従する
-   （別々のしきい値を持たせると表情と音が食い違う） */
-function kingGentleness(pct01) {
-  const ctrl = _KING_MOUTH_CTRL_Y0 + (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_CTRL_Y0) * pct01;
-  return Math.max(0, Math.min(1, (ctrl - _KING_MOUTH_END_Y) / (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_END_Y)));
-}
-
-/* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
-/* 表情（目+眉+口）。呼び出し側で scale(dpr)+translate(half,half)
-   適用済みの論理座標系であること前提（_buildKingOC から分離。理由は _buildKingOC
-   のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
-   pct（こんがり進行度 0〜1）で吊り眉+への字口（怒り）から、寝た眉+U字口
-   （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。
-   gaze は視線（正=上／負=下）。篩い落としで下を睨む場面（_KING_SIFT_GAZE）で使う。
-   ※ この値を変えたら _renderKingBody のキャッシュ判定にも反映が必要
-   （_gazeRendered参照。忘れると顔が更新されない） */
-function drawKingFace(c, s, pct = 0, gaze = 0) {
-  const ex = s*0.172, ey = s*0.064, er = s*0.050;
-  const ry = er * 1.28; // 目の縦半径（わずかな縦長。真円だと幼く、これ以上伸ばすと険しくなる）
-  /* 視線。白目を持たない目なので、白目の中で瞳を動かすという手が使えない。
-     目の「形」で見せる: 上を向くほど縦に伸びて見開き、下を向くほど潰れて伏し目になる。
-     ハイライトは目の中で上下に振る（白目が無い目では光の位置が視線の主役）。
-     目を上下に平行移動させるだけの形にしてはいけない: 動きが小さすぎて、
-     遠目でも縮小表示でも視線が変わったと読めない */
-  const g = Math.max(-1, Math.min(1, gaze));
-  const ryG   = ry * (1 + (g > 0 ? 0.22 * g : 0.40 * g));
-  const eyeDy = -ry  * 0.30 * g;
-  const hiDy  = -ryG * 0.38 * g;
-  /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.5er 〜 眉尻=ex+1.2er,ey-2.7er）を、
-     ピボットを中心に回転させる。ピボットは元の眉ライン上に置く（Xは目の中心より
-     わずかに眉頭寄り）ため、pct=0では回転量0＝素の見た目と完全に一致する。
-     pct→1でangle1（ほぼ水平・少し眉尻が下がる程度）まで回転し、眉頭・眉尻の
-     両方が滑らかに動く。
-     眉頭を固定して眉尻だけ動かす形にはしない: 上下移動に見えて回転に見えない */
-  const innerX0 = ex - er*1.2, innerY0 = ey - er*1.5;
-  const outerX0 = ex + er*1.2, outerY0 = ey - er*2.7;
-  const pivotX = ex - er*0.25;
-  const pivotT = (pivotX - innerX0) / (outerX0 - innerX0);
-  const pivotY = innerY0 + pivotT * (outerY0 - innerY0);
-  const angle0 = Math.atan2(outerY0 - innerY0, outerX0 - innerX0);
-  const angle1 = 3 * Math.PI/180;
-  const dTheta = (angle1 - angle0) * pct;
-  const cosT = Math.cos(dTheta), sinT = Math.sin(dTheta);
-  const rot = (px, py) => {
-    const vx = px - pivotX, vy = py - pivotY;
-    return [pivotX + vx*cosT - vy*sinT, pivotY + vx*sinT + vy*cosT];
-  };
-  const [innerX, innerY] = rot(innerX0, innerY0);
-  const [outerX, outerY] = rot(outerX0, outerY0);
-  for (const sx of [-1, 1]) {
-    /* 目。白目と黒枠は持たない。焦げ色とのコントラストは目の濃さが担う
-       （_buildKingOC参照）。純黒(#000系)にはしない: 生地の暖色と喧嘩する */
-    const cx = sx*ex, cy = ey + eyeDy;
-    c.beginPath(); c.ellipse(cx, cy, er, ryG, 0, 0, Math.PI*2);
-    c.fillStyle = 'hsl(28,38%,15%)'; c.fill();
-    /* ハイライト。左右で鏡像にせず、どちらも目の左上へ置く。本体のハイライトが
-       左上にあるので（drawDumplingBody参照）、光源をそこへ揃える。
-       右下の弱い光は目の下縁の照り返しなので、視線の振り(hiDy)には乗せない */
-    c.beginPath(); c.arc(cx - er*0.36, cy - ryG*0.40 + hiDy, er*0.33, 0, Math.PI*2);
-    c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill();
-    c.beginPath(); c.arc(cx + er*0.30, cy + ryG*0.42, er*0.15, 0, Math.PI*2);
-    c.fillStyle = 'rgba(255,255,255,0.45)'; c.fill();
-    /* 眉。折れ点は眉の法線ではなく画面の真上へ持ち上げる（眉の傾きに関係なく
-       「眉が上へ山を作る」見え方に揃うため。傾き約27度なので差は1割ほど）。
-       折れ量はpctで0へ落とす: 据え置くと笑顔でも眉に角が残って小さな屋根に見える。
-       笑顔で直線へ戻す前提だから、怒っている側の折れを強く取れる。
-       端は丸めない（butt）。丸めると筆圧が消えて柔らかくなる */
-    const bx0 = sx*innerX, by0 = innerY, bx1 = sx*outerX, by1 = outerY;
-    const bdx = bx1 - bx0, bdy = by1 - by0;
-    const kink = Math.hypot(bdx, bdy) * _KING_BROW_KINK * (1 - pct);
-    c.beginPath();
-    c.moveTo(bx0, by0);
-    c.lineTo(bx0 + bdx*_KING_BROW_KINK_T, by0 + bdy*_KING_BROW_KINK_T - kink);
-    c.lineTo(bx1, by1);
-    c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02;
-    c.lineCap = 'butt'; c.lineJoin = 'miter'; c.stroke();
-  }
-  /* 口: 制御点Yが端点Y(_KING_MOUTH_END_Y)を下回れば「への字」(不満げ)、
-     上回れば「U字」(笑顔)。pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s
-     上回るU字＝への字と対称の笑顔)。ちょうどpct=0.5で平ら＝怒りと笑顔の反転点 */
-  const mouthCtrlY = s * (_KING_MOUTH_CTRL_Y0
-    + (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_CTRL_Y0) * pct);
-  c.beginPath();
-  c.moveTo(-s*0.09, s*_KING_MOUTH_END_Y);
-  c.quadraticCurveTo(0, mouthCtrlY, s*0.09, s*_KING_MOUTH_END_Y);
-  c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
-}
-
-function _buildKingOC() {
-  if (kingOC) return;
-  const s = KING_S = IS_PORTRAIT ? 300 : 380;
-  const half = Math.ceil(s * 0.75);
-  const REF = DUMPLING_SPRITE_REF, kk = s / REF;
-  const createOC = () => createCache(half * 2 * dpr, half * 2 * dpr);
-  /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
-     目・眉・口はトーンの影響を受けさせない。生地が焦げ色へ寄っても目の濃さが
-     そのまま残ることが、そのままコントラストになる（_renderKingBody 参照）。
-     本体は通常サイズ(42)で組んで scale 変換で拡大する。drawDumplingBody の線幅は
-     小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
-     見える（scale なら線幅も比例して太る） */
-  const bodyOC = createOC();
-  const bc = bodyOC.getContext('2d');
-  bc.scale(dpr, dpr);
-  bc.translate(half, half);
-  /* 焼き色はアイテムのようなランダムではなく固定（キングは1体しかいない） */
-  const grd = dumplingBodyGradient(bc, REF, ...KING_SKIN);
-  bc.save();
-  bc.scale(kk, kk);
-  drawDumplingBody(bc, REF, 0, 0, grd, undefined, kingDecoSpec());
-  bc.restore();
-  /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
-     ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
-     持ち続けても読む人が居ないまま 1140×1140＝約5MB を抱えることになる */
-  const faceOC = createOC();
-  const fc = faceOC.getContext('2d');
-  fc.scale(dpr, dpr);
-  fc.translate(half, half);
-  drawKingFace(fc, s);
-  /* 通常表示（予告演出など）用に body+face を1枚に合成したもの */
-  const oc = createOC();
-  const c = oc.getContext('2d');
-  c.drawImage(bodyOC, 0, 0);
-  c.drawImage(faceOC, 0, 0);
-  /* 合成用のliveOCもここで確保しておく。1140x1140＝約130万画素の確保を戦闘開始時に
-     行うと、的が回り始めるフレームにぶつかって回転の速度ムラになる。予兆は演出だけの
-     区間なので、ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
-  const liveOC = createCache(half * 2 * dpr, half * 2 * dpr);
-  /* 中身がある矩形。スプライトは 0.75s 四方の安全枠で作ってあるので、そのまま
-     転送すると面積の48%を透明なまま塗ることになる。これは画面内で最大の矩形で、
-     実解像度2では画面の44%を占める。
-     範囲は本体楕円＋輪郭線の外側半分で決まる。焦げ跡は source-atop で本体の
-     アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
-     余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
-  const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
-  const rx = s * DUMPLING_BODY_RX + strokeOut + pad, ry = s * DUMPLING_BODY_RY + strokeOut + pad;
-  kingOC = { oc, bodyOC, half, liveOC,
-              rect: { x: -rx, y: s * DUMPLING_BODY_CY - ry, w: rx * 2, h: ry * 2 } };
 }
 
 /* 「こんがり」実績以外の全実績を達成済みか（キングギヨウザモード出現条件の一部）。
@@ -7790,382 +7271,6 @@ function updateKingOmen() {
   /* step7: ボス鎮座（_handleGameClick がタップで initKingBattle を呼び戦闘開始） */
 }
 
-/* ボス戦闘系フェーズ（kingOmenは含まない: 予兆中はホイール等の通常UIをまだ表示する）。
-   通常UI（ホイール・BETバー・シンクメーター等）の表示ガードは必ずこの述語を使うこと。
-   phase比較のチェーンを各ガードにコピーすると、フェーズを追加したとき（kingShatter等）に
-   広げ忘れが実バグになる。一元化により全ガードへ同時反映される */
-const _KING_BATTLE_PHASES = new Set(
-  ['kingBattle', 'kingShatter', 'kingVictory', 'kingVictoryOutro', 'trueEnding',
-   'kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
-function isKingBattlePhase() { return _KING_BATTLE_PHASES.has(phase); }
-/* 敗北が確定してテープが止まっている（stopBGMTapeでレートが0.001まで落ちている）
-   フェーズ。コイン表示の追従に下限レートを与えるために使う（update内のcoinsDisp参照）。
-   kingShatterは含めない: 没収（_startKingDefeat）はその後なので表示は動いていない */
-const KING_DEFEAT_PHASES = new Set(['kingDefeat', 'kingDefeatShrink', 'kingDefeatOutro']);
-
-/* bgmSourceを完全に破棄したまま維持するフェーズ（togglePause参照）。
-   kingBattle/kingShatter/kingDefeat系はstopBGMTapeでソースを極低速のまま生かして
-   いるため一時停止からの復帰でそのまま再開できるが、kingVictory（勝利
-   ファンファーレ用にstopKingBGMForVictoryで破棄）とtrueEnding（専用の
-   オシレーターテーマのみでbgmSourceを使わない）はソースが存在しない前提の
-   フェーズなので、ポーズ解除時に通常/ボスBGMを新規作成してはいけない。
-   kingVictoryOutro（飛び去り演出）も同様。ここは意図的に無音を保ち、復帰時の
-   テープ加速（tapestart）で世界が動き出す対比を作っている区間なので、
-   ポーズ→再開でBGMが鳴り出すと演出が壊れる */
-const _NO_BGM_SOURCE_PHASES = new Set(['kingVictory', 'kingVictoryOutro', 'trueEnding']);
-
-/* 「ゲームのBGMを自動で鳴らしてはいけない」フェーズ。ミュート解除やPAUSE解除の補償経路
-   （bgmSourceが無ければ起動する、という善意の処理）から通常BGMが割り込むのを止めるための述語。
-   内訳:
-     startup            まだ始まっていない
-     kingOmen           予告中（startBGMがグレースケールを即時解除してしまう）
-     soundTest/drumPad  鳴らす音をモード側が完全に握っている
-     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ
-     キング戦系         テンポ・段階差し替え・テープ停止を戦闘側が一括で持つ
-   判定は必ずこの述語に集約すること。除外条件を各ガードにコピーすると、新しいモードを足す
-   たびに片方だけ直す事故が起き、そのモードでミュート解除すると通常BGMが鳴り出す */
-function noAutoBgmPhase() {
-  return noBgmResumePhase() || isKingBattlePhase();
-}
-
-/* 「止まる前の続きから鳴らし直してはいけない」フェーズ。noAutoBgmPhase より狭い。
-   **キング戦系は含めない。** 位置とレートを保って作り直す復帰（_resumeBgmFromPause）は
-   ボス用バッファ・ボスのテンポをそのまま引き継ぐので、キング戦でも正しい復帰になる。
-   ここにキング戦を入れると、戦闘中にソースを失う経路（PAUSE解除・AudioContext再作成）の
-   すべてで二度とBGMが戻らなくなる。
-   除外するのは「そもそも鳴らすものが無い」フェーズだけ:
-     startup            まだ始まっていない
-     kingOmen           テープストップでBGMを畳んでいる最中。次はinitKingBattleが起こす
-     soundTest/drumPad  鳴らす音をモード側が完全に握っている
-     _NO_BGM_SOURCE_PHASES  bgmSourceを持たない前提の演出フェーズ */
-function noBgmResumePhase() {
-  return phase === 'startup' || phase === 'kingOmen' ||
-         phase === 'soundTest' || phase === 'drumPad' ||
-         _NO_BGM_SOURCE_PHASES.has(phase);
-}
-
-/* 戦闘終了（勝利後）→ 通常モードへ復帰。ゲームオーバー復帰と同じテープ加速演出を再利用 */
-/* キング戦終了時に必ず必要な後片付け（的OC解放・king関連stateの初期化）。
-   通常モード復帰（kingBattleEnd、勝敗問わず・2回目以降の無演出勝利含む）と、
-   真エンディング終了後の復帰（finishTrueEnding、常にstartupへ戻る）の
-   両方から呼ぶ共通処理 */
-function cleanupKingBattleState() {
-  if (kingState) releaseKingReelOCs(kingState.reels); // 最後の4的のOCをプールへ返却（リーク防止）
-  kingState = null;
-  kingFx = createKingFx();        // 演出の状態は丸ごと作り直す（createKingFx参照）
-  kingBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦はinitKingBattleでtier0から）
-  shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない
-  /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
-  if (omen)        omen.dumplings        = releaseAll(omen.dumplings);
-  if (defeatOutro) defeatOutro.dumplings = releaseAll(defeatOutro.dumplings);
-  if (victoryOutro) {
-    victoryOutro.dumplings = releaseAll(victoryOutro.dumplings);
-    if (victoryOutro.seedDumpling) deadify(victoryOutro.seedDumpling); // 舞い上がらずに残る1個
-  }
-  omen = null; defeatOutro = null; victoryOutro = null;
-}
-
-function kingBattleEnd() {
-  cleanupKingBattleState();
-  /* 敗北の没収で所持ギヨウザが尽きた場合は、通常モードでコインが尽きた時と同じ
-     ゲームオーバー画面（「ギヨウザがなくなりました」＋CONTINUEタップでgameOverReset）を
-     経由させる。所持ギヨウザが0になる場合でも、まずキングが戻って飛んでいく演出を
-     見せてから、そのゲームオーバー演出へ進む。
-     ここで即座にgameOverReset()を呼ぶと画面を見せないまま再スタートしてしまうため、
-     通常モードのisGameOver検出と同じ状態（phase='done'、endTimerからcanRestartが
-     45フレーム後に立ち上がる、drawEndScreen参照）を作って引き継ぐ。実際のリセットは
-     そのCONTINUEタップ時に_handleGameClickのphase==='done'分岐から呼ばれる（通常モードと共通）。
-     勝利側から呼ばれた場合はcoinsが減ることがないため常にfalseで無関係 */
-  if (coins <= 0) {
-    isGameOver = true;
-    endTimer = 0; canRestart = false; continueShowDelay = 0;
-    grayRateTarget = 0.001; // 通常モードのコイン枯渇と同じグレーアウト
-    stopBGMTape(); // 同じくテープストップでBGMをフェードアウト
-    phase = 'done';
-    return;
-  }
-  restartToTapestart();
-  /* restartToTapestart→init(fromGameOver=true)は通常のゲームオーバー復帰と同じ経路を
-     共有しており、そちらの仕様（ゲームオーバー復帰後もBET対応速度へ）に従って無条件で
-     スローハンドの抽選を行う。キング戦という特別な文脈からの復帰直後に無関係な確率
-     イベントで割り込まれるのは不適切なので、キング戦復帰（勝敗問わず）では常に通常速度で
-     始まるよう明示的に抑制する。通常のgameOverResetにはこの抑制を入れない */
-  isSlowSpin = false;
-  slowSpinPending = null;
-}
-
-/* こんがりしっぱい（全損には至らない敗北）から通常モードへ戻る前のつなぎ演出。
-   誕生演出（ギヨウザが収束してキングになる）の逆再生イメージで、キングの姿が
-   ふつうのギヨウザ群へ弾け散り、そのあと誕生演出と同じ台詞スタイルで
-   メッセージを出してから復帰する */
-/* 誕生演出（updateKingOmen step5: バラバラのギヨウザが中心へ収束してキングになる）の
-   純粋な逆回し。重力落下ではなく、渦を巻きながら中心から外へ拡散する＝収束演出そのものの
-   巻き戻しとして見せる。
-   同じ中心・同じ半径・同じ収束係数・同じフレーム数を使い、1フレームごとの更新式を
-   厳密に逆算する:
-     収束(forward): pos = c + (pos-c)*(1-K)  ⇔  拡散(reverse): pos = c + (pos-c)/(1-K)
-   これを110フレーム続けると、収束後に残るごく小さな半径(startR)から出現時の半径
-   R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する */
-const _DEFEAT_OUTRO_K = 0.06;      // updateKingOmen step5 の収束係数と同値
-const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
-/* 締めメッセージ（_DEFEAT_OUTRO_LINES）の見せ方。全行を1つのメッセージとして
-   同時に出し、フェードイン・フェードアウトも全体で1回ずつ行う（誕生予告drawKingOmenの
-   「過去行を薄く残して積んでいく」見せ方とは意図的に別物）。
-   HOLDは全文を表示したまま保持する長さ。
-   フェードアウトはイン側と分離して3倍の長さを取る（同じ長さでは消えるのが速すぎて
-   余韻が残らない）。さらに easeOut カーブ（easeF参照）を掛け、消え際の薄い状態が
-   長く尾を引くようにする。線形だと最後まで一定速度で消えて余韻が出ない */
-/* ── 締めメッセージの尺は「目標の表示秒数」を直接持つ ──
-   失敗側はおよそ3秒、達成側はおよそ6秒を目標とする。文章量が違う（失敗18文字・
-   縦画面2行／達成31文字・縦画面4行）ので、両者で同じ固定フレーム数を共有させると
-   達成側が読み終わらない。
-   一方で「1文字あたり◯ms」のような係数モデルにもしない: 文字数比1.72倍に対して
-   目標時間比が2倍なので、2つの目標を1本の直線で通そうとすると意味を持たない
-   係数と下駄になり、モデルとして破綻する。
-   よって目標の表示秒数そのものを定数として持ち、保持時間は
-     保持 = 目標フレーム数 - フェードイン - フェードアウト
-   の引き算で求める。利点:
-   - 定数がそのまま仕様（達成は6秒）を表すので、尺を変えたいときはこの秒数だけ触ればよい。
-   - 文言を差し替えても目標秒数は変わらない＝尺が勝手にずれない。
-     文字数に応じて動くのはフェードアウトの長さだけで、その分だけ保持が自動的に詰まり
-     合計は目標どおりに保たれる */
-const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
-/* 目標の表示秒数（フェードイン開始からフェードアウト終了まで）。ユーザー指定。
-   ここが仕様の本体なので、尺を変えたいときはこの2つだけを触る */
-const _OUTRO_MSG_TARGET_SEC_DEFEAT  = 3.0; // こんがり失敗の締め
-const OUTRO_MSG_TARGET_SEC_VICTORY = 6.0; // こんがり達成（キングクリア）の締め
-/* 保持時間の下限。フェードだけで目標秒数を食い潰すほど長い文言になった場合の保険
-   （引き算の結果が0以下になりうる）。その場合だけは合計が目標秒数を超える＝読ませることを
-   優先する */
-const _OUTRO_MSG_HOLD_MIN      = 40;
-/* フェードアウト（余韻）の長さは文章量で伸ばす。長い文なら締めもゆったりする
-   のが自然なため。合計は目標秒数に固定されるので、ここが伸びたぶんは保持から
-   引かれる（＝余韻と静止表示の配分が文章量で変わる） */
-const _OUTRO_MSG_FADE_OUT_BASE     = 40;
-const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
-
-/* 表示行の総文字数（空白は読解負荷に数えないので除く。「……」は意図した
-   一拍の間なので1文字ぶんずつ数える） */
-function _outroMsgCharCount(lines) {
-  return lines.reduce((n, t) => n + t.replace(/[\s　]/g, '').length, 0);
-}
-/* 折り返し済みの表示行と目標秒数から尺を確定させる。演出開始時に1度だけ呼んで
-   状態に持たせる（毎フレーム計算しない。折り返し自体も同じ方針。wrapOutroLines参照）。
-   targetSec は _OUTRO_MSG_TARGET_SEC_DEFEAT / _VICTORY のどちらかを呼び出し側が渡す。
-   保持は目標からフェード2つを引いた残りなので、合計は必ず目標秒数に一致する
-   （唯一の例外はフェードだけで目標を超えてしまう極端に長い文言で、その場合は
-   下限が効いて目標を超える＝読ませることを優先する） */
-function createOutroMsgTiming(msgLines, targetSec) {
-  const chars   = _outroMsgCharCount(msgLines);
-  const fadeIn  = _OUTRO_MSG_FADE_IN;
-  const fadeOut = Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars);
-  const total   = Math.round(targetSec * 60); // 60fps基準のフレーム数へ
-  return {
-    fadeIn, fadeOut,
-    hold: Math.max(_OUTRO_MSG_HOLD_MIN, total - fadeIn - fadeOut),
-  };
-}
-/* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、o.msgAlpha を
-   確定させる（update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針）。
-   戻り値=消えきったか。
-   達成側・失敗側で式は同一なので必ずここに集約する。同じ式を2箇所へコピーすると、
-   片側だけ尺を変えたときにもう片側が古い尺のまま取り残される。
-   消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で消えて
-   余韻が出ない） */
-function advanceOutroMsg(o) {
-  const T = o.msgTiming;
-  const fadeOutStart = T.fadeIn + T.hold;
-  if (o.timer < T.fadeIn) {
-    o.msgAlpha = o.timer / T.fadeIn;
-  } else if (o.timer < fadeOutStart) {
-    o.msgAlpha = 1;
-  } else {
-    const p = Math.min(1, (o.timer - fadeOutStart) / T.fadeOut);
-    o.msgAlpha = Math.max(0, 1 - easeF(p, 'easeOut'));
-  }
-  return o.timer > fadeOutStart + T.fadeOut;
-}
-
-/* 締めメッセージを描く（達成側・失敗側で共通）。色だけが呼び出し側の指定で、
-   フォント・行間・中央揃えの基準・透明度の扱いはすべて共通。
-   描画側もupdate側（advanceOutroMsg）と同様に必ず一本化する: 色以外が同一のブロックを
-   複製すると、折り返しや配置を変えたときに片側だけ直す事故が起きる。
-   誕生予告（drawKingOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、こちらは
-   全行を1つのメッセージとして同時に出す。
-   位置も誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から始めるが、こちらは
-   行数が少なく同じ開始位置だと画面上寄りに偏って見える。画面に固定のボスが居ないぶん
-   余裕があるため、全行の中心が画面中央(H/2)に来るよう配置し、行数が少ない分フォントも
-   大きくする。行数は文言と画面幅で変わるので、中央揃えの基準は実際の行数から求める */
-function drawOutroMsg(o, fillColor, shadowColor) {
-  if (!(o.msgAlpha > 0)) return;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const lineDy = _outroMsgFontSize() * 2.2;
-  const lines  = o.msgLines;
-  const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
-  ctx.font = _outroMsgFont(); // 折り返し計測と同一の書式（_outroMsgFont参照）
-  ctx.globalAlpha = o.msgAlpha;
-  lines.forEach((line, i) => outText(line, W / 2, lineY0 + i * lineDy, fillColor, shadowColor, 6));
-  ctx.globalAlpha = 1;
-}
-
-/* キングギヨウザ縮小ブリッジ（startKingDefeatShrink）用の定数。
-   _KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
-   （createDumpling の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
-   横画面380*0.75*2=570px）から逆算した約0.075。これより極端に小さくすると、続けて
-   出るギヨウザの集合体より先に見えなくなり、クロスフェードしてもサイズ感の食い違いが
-   違和感として残る。
-   _KING_DEFEAT_XFADE_START_DSCALE: このdscaleまで縮んだらクロスフェード開始。
-   _KING_DEFEAT_XFADE_FRAMES: クロスフェードの長さ（フレーム数）。 */
-const _KING_DEFEAT_SHRINK_SCALE = 0.075;
-const _KING_DEFEAT_XFADE_START_DSCALE = 0.18;
-const _KING_DEFEAT_XFADE_FRAMES = 20;
-let _kingDefeatXfade = 0; // 0=キングのみ表示 〜 1=ギヨウザ群のみ表示
-
-/* 画面全体フェード（汎用）: phase切り替えの継ぎ目を暗転でつなぐ演出。
-   暗転が最大になった瞬間にonMidを呼んで実際のphase切り替え（kingBattleEnd等の重い処理）
-   を行い、その後フェードインすることで、切り替えの瞬間を暗闇の中に隠す。
-   どのphaseから呼んでも使える汎用実装 */
-const _SCREEN_FADE_FRAMES = 35;
-let screenFade = null; // { stage:'out'|'in', timer, alpha, onMid }
-function startScreenFade(onMid, frames = _SCREEN_FADE_FRAMES) {
-  if (screenFade) return; // 多重起動防止（連打でフェードが再スタートしないように）
-  screenFade = { stage: 'out', timer: 0, frames, alpha: 0, onMid };
-}
-function updateScreenFade() {
-  const f = screenFade;
-  f.timer++;
-  if (f.stage === 'out') {
-    f.alpha = Math.min(1, f.timer / f.frames);
-    if (f.timer >= f.frames) {
-      f.onMid?.();
-      f.stage = 'in'; f.timer = 0;
-    }
-  } else {
-    f.alpha = Math.max(0, 1 - f.timer / f.frames);
-    if (f.timer >= f.frames) screenFade = null;
-  }
-}
-function drawScreenFade() {
-  if (!screenFade || screenFade.alpha <= 0) return;
-  ctx.save();
-  ctx.globalAlpha = screenFade.alpha;
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-}
-
-/* ギヨウザ群の弾け散りアイテムを生成する（位置のみ確定、まだ動かさない）。
-   startKingDefeatShrinkでのクロスフェード表示・updateKingDefeatOutroでの
-   拡散アニメの両方が同じdefeatOutro.dumplingsを参照するため、生成は一箇所に
-   まとめる（クロスフェード用に別配列を作って後で捨てるとdumplingAllocの
-   プール返却漏れ＝リークになるため、必ず単一の配列を使い回す） */
-function _createDefeatOutroDumplings() {
-  const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
-  const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
-  const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
-  const dumplings = [];
-  for (let i = 0; i < 44; i++) {
-    const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
-    dumplings.push(createDumpling(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
-  }
-  /* 締め2行は画面幅に収まるよう折り返しておく（wrapOutroLines参照）。
-     尺は目標秒数（_OUTRO_MSG_TARGET_SEC_DEFEAT）から逆算する。折り返し後の
-     文字数はフェードアウト長にだけ効く（createOutroMsgTiming参照） */
-  const msgLines = wrapOutroLines(_DEFEAT_OUTRO_LINES);
-  return { step: 0, timer: 0, dumplings, cx, cy, msgAlpha: 0,
-           msgLines, msgTiming: createOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
-}
-
-/* こんがりしっぱい画面（kingDefeat, CONTINUEタップ後）から、ギヨウザ群への弾け散り演出
-   （kingDefeatOutro）へ切り替える前段。
-   縮みきった瞬間にphaseを差し替えるだけだと紙芝居のめくりのように見えるため、
-   (1) 縮小目標スケールをアイテム1個ぶんの見た目サイズに合わせ、
-   (2) 縮小の終盤でキング（フェードアウト）とギヨウザ群（フェードイン）を一定フレームだけ
-       重ねて描く、
-   の2点で滑らかにつなぐ。
-   誕生演出・戦闘位置移行・勝利拡大と同じeaseKingXformの指数収束をそのまま再利用し、
-   キングギヨウザを等倍から弾け散り開始位置（中心=defeatOutroのcx,cy）へ縮小・移動させる */
-function startKingDefeatShrink() {
-  phase = 'kingDefeatShrink';
-  kingDefeatShrinkTimer = 0;
-  _kingDefeatXfade = 0;
-  if (kingState) {
-    kingState.bx = W / 2;
-    kingState.by = H / 2 - (IS_PORTRAIT ? 60 : 0); // defeatOutroのcx,cyと同値
-    kingState.scale = _KING_DEFEAT_SHRINK_SCALE;
-  }
-  /* ギヨウザ群はこの時点で生成し、位置を確定させておく（クロスフェード中は
-     静止したまま）。拡散運動はupdateKingDefeatOutroに入ってから始まる */
-  defeatOutro = _createDefeatOutroDumplings();
-}
-
-function updateKingDefeatShrink() {
-  kingDefeatShrinkTimer++;
-  updateKingCommonFx();
-  /* dscaleが目標近くまで縮んだらクロスフェードを開始し、キングとギヨウザ群を
-     一定フレームかけて滑らかに入れ替える */
-  if (kingState && kingState.dscale <= _KING_DEFEAT_XFADE_START_DSCALE) {
-    _kingDefeatXfade = Math.min(1, _kingDefeatXfade + 1 / _KING_DEFEAT_XFADE_FRAMES);
-  }
-  /* クロスフェード完了で本体を消して弾け散り演出へ。収束が遅れた場合の保険として
-     上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
-  if (!kingState || _kingDefeatXfade >= 1 || kingDefeatShrinkTimer > 60) {
-    if (kingState) releaseKingReelOCs(kingState.reels); // 的OCをプールへ返却（リーク防止・水平展開）
-    kingState = null; kingFx.lasers = []; kingFx.charFlights = []; // 弾けた瞬間に本体は消える
-    phase = 'kingDefeatOutro';
-    playSE('kingFlash');
-  }
-}
-
-function drawKingDefeatShrink() {
-  if (phase !== 'kingDefeatShrink') return;
-  ctx.save();
-  ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-  if (kingState) {
-    drawKingBody(1 - _kingDefeatXfade);
-    ctx.save();
-    ctx.globalAlpha = 1 - _kingDefeatXfade;
-    drawKingCharFlights();
-    ctx.restore();
-  }
-  if (defeatOutro && _kingDefeatXfade > 0) {
-    ctx.save();
-    ctx.globalAlpha = _kingDefeatXfade;
-    for (const g of defeatOutro.dumplings) drawOneDumpling(g);
-    ctx.restore();
-  }
-  ctx.restore();
-}
-
-function updateKingDefeatOutro() {
-  const o = defeatOutro;
-  if (!o) { phase = 'idle'; return; }
-  /* この時点でkingStateはnull・飛翔/レーザーも空なので実質no-opだが、キング戦系
-     フェーズは例外なく共通FXを呼ぶ形に揃えておく（将来この演出中まで残る
-     オブジェクトが増えたときに、ここだけ更新漏れになるのを防ぐ） */
-  updateKingCommonFx();
-  o.timer++;
-  /* step5の収束式 pos=c+(pos-c)*(1-K) を厳密に逆算した拡散式（重力は使わない） */
-  const inv = 1 / (1 - _DEFEAT_OUTRO_K);
-  for (const g of o.dumplings) {
-    g.x = o.cx + (g.x - o.cx) * inv;
-    g.y = o.cy + (g.y - o.cy) * inv;
-    g.rot -= 0.15; // step5の回転(+0.15)を逆再生
-  }
-  if (o.step === 0) {
-    /* step0: ギヨウザ群の拡散のみ。拡散しきってからメッセージへ移る */
-    if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
-  } else {
-    /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
-       行ごとの出し分けはしない。尺は目標秒数から逆算済み（createOutroMsgTiming参照） */
-    const done = advanceOutroMsg(o);
-    /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ戻る。
-       startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレームこの条件を
-       満たし続けて構わない */
-    if (done) startScreenFade(() => kingBattleEnd());
-  }
-}
-
 function drawKingOmen() {
   if (phase !== 'kingOmen' || !omen) return;
   const o = omen;
@@ -8212,6 +7317,645 @@ function drawKingOmen() {
     ctx.globalAlpha = 1;
   }
   ctx.restore();
+}
+
+/* ════════════════ キングギヨウザ 本体の見た目 ════════════════ */
+let kingOC = null, KING_S = 0; // キングギヨウザ本体スプライト（初回出現時に生成）
+
+/* 呼吸の拡縮。本体の描画・文字の着地先・帯電の描画が同じ値を使わないと、
+   焦げ跡や文字が本体から外れる。式を複製せずこの関数だけを見ること。
+   BGMとは無関係な一定周期でよい（曲に乗る動きはkingGrooveが別に受け持つ） */
+const _KING_BREATH_AMP = 0.02;
+const _KING_BREATH_MS  = 300;
+function kingBreath() { return 1 + _KING_BREATH_AMP * Math.sin(performance.now() / _KING_BREATH_MS); }
+
+/* ── キングの「ノリ」 ──
+   こんがりが進むほど、BGMに合わせて体が勝手に動きはじめる。呼吸（kingBreath）とは
+   別の層で、こちらだけが曲に同期する。
+   強度は_KING_GROOVE_FROMから立ち上がり_KING_GROOVE_FULLで満ちる。指数を掛けて
+   立ち上がりを鈍らせ「いつの間にか揺れていた」に見せる（線形だと閾値の直後から
+   動きが見えてしまい、演出の意図が割れる）。
+   時計は必ず音声基準（bgmBeatPos）にする。フレーム基準にすると処理落ちのたびに
+   ノリが曲から外れる。タイミングの正確さが報酬になっているこのゲームで、
+   キング本人が走ったり遅れたりするのは最も避けたい破綻。
+   音が引けないときは揺れない。フレーム基準で代用してはいけない（同上）。
+   決着後（kingShatter以降）は止める。砕けながら踊らせない */
+const _KING_GROOVE_FROM     = 0.50;  // ここから揺れ始める（こんがり比）
+const _KING_GROOVE_FULL     = 0.90;  // ここで振り切る
+const _KING_GROOVE_EXP      = 1.6;   // 立ち上がりの鈍らせ方
+const _KING_GROOVE_SWAY_PX  = 9;     // 左右の振れ（2拍で1往復）
+const _KING_GROOVE_LEAN_RAD = 0.055; // 振れた側へ倒れる角
+const _KING_GROOVE_BOB_PX   = 5;     // 拍頭で沈む量
+/* 毎フレーム複数箇所から呼ばれるので器を使い回す（GCを出さない）。
+   cos/sin を持たせてあるのは、ローカル座標の変換側（kingLocalToWorld）が
+   本体の回転とまったく同じ値を使う必要があるため */
+const _kingGrooveOfs = { dx: 0, dy: 0, rot: 0, cos: 1, sin: 0 };
+const kingWorldTmp  = { x: 0, y: 0 }; // kingLocalToWorld の受け皿（呼び出し直後に読み切る）
+function kingGroove() {
+  const o = _kingGrooveOfs;
+  o.dx = 0; o.dy = 0; o.rot = 0; o.cos = 1; o.sin = 0;
+  if (!kingState || phase !== 'kingBattle') return o;
+  const t = (kingState.cookPct / 100 - _KING_GROOVE_FROM) / (_KING_GROOVE_FULL - _KING_GROOVE_FROM);
+  if (t <= 0) return o;
+  const pos = bgmBeatPos();
+  if (pos === null) return o;
+  const g = Math.pow(Math.min(1, t), _KING_GROOVE_EXP);
+  const sw = Math.sin(Math.PI * pos); // 2拍で1往復
+  o.rot = _KING_GROOVE_LEAN_RAD * g * sw;
+  o.dx  = _KING_GROOVE_SWAY_PX  * g * sw;
+  o.dy  = _KING_GROOVE_BOB_PX   * g * getBeatPulse();
+  o.cos = Math.cos(o.rot); o.sin = Math.sin(o.rot);
+  return o;
+}
+
+/* 焦げ跡・文字のローカル座標を画面座標へ移す。本体の描画（translate→rotate→scale）と
+   まったく同じ変換であることが要件で、ずれると文字が本体から外れた所へ着弾し、
+   焦げ跡の発光も本体から浮く。組み立てを呼び出し側に置くと3箇所が静かに食い違うので、
+   ここに1本化する。
+   ofsX/ofsY はのけぞり等の一過性の変位で、呼び出し側によって渡したり渡さなかったりする
+   （文字の着地先には反映しない。座標計算へ一過性の揺れを持ち込まないため） */
+function kingLocalToWorld(lx, ly, breath, ofsX, ofsY, out) {
+  const g = kingGroove();
+  const x = lx * breath, y = ly * breath;
+  out.x = kingState.dbx + g.dx + ofsX + (x * g.cos - y * g.sin);
+  out.y = kingState.dby + g.dy + ofsY + (x * g.sin + y * g.cos);
+  return out;
+}
+
+/* 口の形を決める比率（本体サイズsに対する比）。表情の知覚的な要はこの口の
+   反転で、制御点Yが端点Yを下回れば「への字（怒り）」・上回れば「U字（笑顔）」。
+   地鳴りのマイルド化もこの同じ値から導くため（kingGentleness参照）、
+   マジックナンバーで散らさず定数として一箇所に置く */
+const _KING_MOUTH_END_Y   = 0.26; // 口の両端のY
+const _KING_MOUTH_CTRL_Y0 = 0.19; // pct=0（怒り）の制御点Y
+const _KING_MOUTH_CTRL_Y1 = 0.33; // pct=1（満面の笑み）の制御点Y
+
+/* 眉の折れ（drawKingFace参照）。眉頭から眉尻へ一直線ではなく途中で上へ折り、
+   角のある形で意志の強さを出す。
+   量は眉の長さに対する比で持つ: 眉の座標は目の大きさ(er)に従属して伸縮するので、
+   sの絶対値で持つと目のサイズを触るたびに折れの見え方が変わる */
+const _KING_BROW_KINK   = 0.11; // pct=0での折れ量（眉の長さ比）
+const _KING_BROW_KINK_T = 0.55; // 折れ点の位置（眉頭0〜眉尻1）
+
+/* キングの表情の「優しさ」0〜1。口の制御点が端点をどれだけ上回ったかで表す。
+   上式より pct=0.5 でちょうど平ら（怒り→笑顔の反転点）＝0、pct=1 で 1。
+   地鳴りのマイルド化（_bgmTierForCookPct）もこの値に従わせ、表情と音を同じ基準で
+   動かす。口の定数から導いているので、口の形を変えれば地鳴りも自動で追従する
+   （別々のしきい値を持たせると表情と音が食い違う） */
+function kingGentleness(pct01) {
+  const ctrl = _KING_MOUTH_CTRL_Y0 + (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_CTRL_Y0) * pct01;
+  return Math.max(0, Math.min(1, (ctrl - _KING_MOUTH_END_Y) / (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_END_Y)));
+}
+
+/* 表情（目+眉+口）。呼び出し側で scale(dpr)+translate(half,half)
+   適用済みの論理座標系であること前提（_buildKingOC から分離。理由は _buildKingOC
+   のコメント参照: こんがりトーンの対象から顔だけ除外するため独立レイヤーで作る）。
+   pct（こんがり進行度 0〜1）で吊り眉+への字口（怒り）から、寝た眉+U字口
+   （穏やかな笑顔）へ徐々に変化する。pct省略時（初期表情の焼き込み用）は0扱い。
+   gaze は視線（正=上／負=下）。篩い落としで下を睨む場面（_KING_SIFT_GAZE）で使う。
+   ※ この値を変えたら _renderKingBody のキャッシュ判定にも反映が必要
+   （_gazeRendered参照。忘れると顔が更新されない） */
+function drawKingFace(c, s, pct = 0, gaze = 0) {
+  const ex = s*0.172, ey = s*0.064, er = s*0.050;
+  const ry = er * 1.28; // 目の縦半径（わずかな縦長。真円だと幼く、これ以上伸ばすと険しくなる）
+  /* 視線。白目を持たない目なので、白目の中で瞳を動かすという手が使えない。
+     目の「形」で見せる: 上を向くほど縦に伸びて見開き、下を向くほど潰れて伏し目になる。
+     ハイライトは目の中で上下に振る（白目が無い目では光の位置が視線の主役）。
+     目を上下に平行移動させるだけの形にしてはいけない: 動きが小さすぎて、
+     遠目でも縮小表示でも視線が変わったと読めない */
+  const g = Math.max(-1, Math.min(1, gaze));
+  const ryG   = ry * (1 + (g > 0 ? 0.22 * g : 0.40 * g));
+  const eyeDy = -ry  * 0.30 * g;
+  const hiDy  = -ryG * 0.38 * g;
+  /* 眉: 元の眉ライン（眉頭=ex-1.2er,ey-1.5er 〜 眉尻=ex+1.2er,ey-2.7er）を、
+     ピボットを中心に回転させる。ピボットは元の眉ライン上に置く（Xは目の中心より
+     わずかに眉頭寄り）ため、pct=0では回転量0＝素の見た目と完全に一致する。
+     pct→1でangle1（ほぼ水平・少し眉尻が下がる程度）まで回転し、眉頭・眉尻の
+     両方が滑らかに動く。
+     眉頭を固定して眉尻だけ動かす形にはしない: 上下移動に見えて回転に見えない */
+  const innerX0 = ex - er*1.2, innerY0 = ey - er*1.5;
+  const outerX0 = ex + er*1.2, outerY0 = ey - er*2.7;
+  const pivotX = ex - er*0.25;
+  const pivotT = (pivotX - innerX0) / (outerX0 - innerX0);
+  const pivotY = innerY0 + pivotT * (outerY0 - innerY0);
+  const angle0 = Math.atan2(outerY0 - innerY0, outerX0 - innerX0);
+  const angle1 = 3 * Math.PI/180;
+  const dTheta = (angle1 - angle0) * pct;
+  const cosT = Math.cos(dTheta), sinT = Math.sin(dTheta);
+  const rot = (px, py) => {
+    const vx = px - pivotX, vy = py - pivotY;
+    return [pivotX + vx*cosT - vy*sinT, pivotY + vx*sinT + vy*cosT];
+  };
+  const [innerX, innerY] = rot(innerX0, innerY0);
+  const [outerX, outerY] = rot(outerX0, outerY0);
+  for (const sx of [-1, 1]) {
+    /* 目。白目と黒枠は持たない。焦げ色とのコントラストは目の濃さが担う
+       （_buildKingOC参照）。純黒(#000系)にはしない: 生地の暖色と喧嘩する */
+    const cx = sx*ex, cy = ey + eyeDy;
+    c.beginPath(); c.ellipse(cx, cy, er, ryG, 0, 0, Math.PI*2);
+    c.fillStyle = 'hsl(28,38%,15%)'; c.fill();
+    /* ハイライト。左右で鏡像にせず、どちらも目の左上へ置く。本体のハイライトが
+       左上にあるので（drawDumplingBody参照）、光源をそこへ揃える。
+       右下の弱い光は目の下縁の照り返しなので、視線の振り(hiDy)には乗せない */
+    c.beginPath(); c.arc(cx - er*0.36, cy - ryG*0.40 + hiDy, er*0.33, 0, Math.PI*2);
+    c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill();
+    c.beginPath(); c.arc(cx + er*0.30, cy + ryG*0.42, er*0.15, 0, Math.PI*2);
+    c.fillStyle = 'rgba(255,255,255,0.45)'; c.fill();
+    /* 眉。折れ点は眉の法線ではなく画面の真上へ持ち上げる（眉の傾きに関係なく
+       「眉が上へ山を作る」見え方に揃うため。傾き約27度なので差は1割ほど）。
+       折れ量はpctで0へ落とす: 据え置くと笑顔でも眉に角が残って小さな屋根に見える。
+       笑顔で直線へ戻す前提だから、怒っている側の折れを強く取れる。
+       端は丸めない（butt）。丸めると筆圧が消えて柔らかくなる */
+    const bx0 = sx*innerX, by0 = innerY, bx1 = sx*outerX, by1 = outerY;
+    const bdx = bx1 - bx0, bdy = by1 - by0;
+    const kink = Math.hypot(bdx, bdy) * _KING_BROW_KINK * (1 - pct);
+    c.beginPath();
+    c.moveTo(bx0, by0);
+    c.lineTo(bx0 + bdx*_KING_BROW_KINK_T, by0 + bdy*_KING_BROW_KINK_T - kink);
+    c.lineTo(bx1, by1);
+    c.strokeStyle = 'hsl(30,50%,30%)'; c.lineWidth = s*0.02;
+    c.lineCap = 'butt'; c.lineJoin = 'miter'; c.stroke();
+  }
+  /* 口: 制御点Yが端点Y(_KING_MOUTH_END_Y)を下回れば「への字」(不満げ)、
+     上回れば「U字」(笑顔)。pct=0で0.19s(への字)→pct=1で0.33s(端点を0.07s
+     上回るU字＝への字と対称の笑顔)。ちょうどpct=0.5で平ら＝怒りと笑顔の反転点 */
+  const mouthCtrlY = s * (_KING_MOUTH_CTRL_Y0
+    + (_KING_MOUTH_CTRL_Y1 - _KING_MOUTH_CTRL_Y0) * pct);
+  c.beginPath();
+  c.moveTo(-s*0.09, s*_KING_MOUTH_END_Y);
+  c.quadraticCurveTo(0, mouthCtrlY, s*0.09, s*_KING_MOUTH_END_Y);
+  c.strokeStyle = 'hsl(30,45%,25%)'; c.lineWidth = s*0.018; c.lineCap = 'round'; c.stroke();
+}
+
+/* キングギヨウザ本体を初回に1枚のOCへ焼き込み（怒り顔付き・毎フレームはdrawImageのみ） */
+function _buildKingOC() {
+  if (kingOC) return;
+  const s = KING_S = IS_PORTRAIT ? 300 : 380;
+  const half = Math.ceil(s * 0.75);
+  const REF = DUMPLING_SPRITE_REF, kk = s / REF;
+  const createOC = () => createCache(half * 2 * dpr, half * 2 * dpr);
+  /* 本体レイヤー（顔なし）: こんがりトーン合成はこのレイヤーにのみ適用する。
+     目・眉・口はトーンの影響を受けさせない。生地が焦げ色へ寄っても目の濃さが
+     そのまま残ることが、そのままコントラストになる（_renderKingBody 参照）。
+     本体は通常サイズ(42)で組んで scale 変換で拡大する。drawDumplingBody の線幅は
+     小サイズ用の絶対値なので、直接 s=300 で描くとひだ・輪郭が細すぎて「白い卵」に
+     見える（scale なら線幅も比例して太る） */
+  const bodyOC = createOC();
+  const bc = bodyOC.getContext('2d');
+  bc.scale(dpr, dpr);
+  bc.translate(half, half);
+  /* 焼き色はアイテムのようなランダムではなく固定（キングは1体しかいない） */
+  const grd = dumplingBodyGradient(bc, REF, ...KING_SKIN);
+  bc.save();
+  bc.scale(kk, kk);
+  drawDumplingBody(bc, REF, 0, 0, grd, undefined, kingDecoSpec());
+  bc.restore();
+  /* 顔だけの一時レイヤー。body+face を1枚に合成するためだけに使い、保持はしない。
+     ライブ合成側は静的なコピーではなく毎回ベクタで顔を描く（_renderKingBody参照）ので、
+     持ち続けても読む人が居ないまま 1140×1140＝約5MB を抱えることになる */
+  const faceOC = createOC();
+  const fc = faceOC.getContext('2d');
+  fc.scale(dpr, dpr);
+  fc.translate(half, half);
+  drawKingFace(fc, s);
+  /* 通常表示（予告演出など）用に body+face を1枚に合成したもの */
+  const oc = createOC();
+  const c = oc.getContext('2d');
+  c.drawImage(bodyOC, 0, 0);
+  c.drawImage(faceOC, 0, 0);
+  /* 合成用のliveOCもここで確保しておく。1140x1140＝約130万画素の確保を戦闘開始時に
+     行うと、的が回り始めるフレームにぶつかって回転の速度ムラになる。予兆は演出だけの
+     区間なので、ここで確保しておけば戦闘開始時の確保は0になる。戦闘をまたいで使い回す */
+  const liveOC = createCache(half * 2 * dpr, half * 2 * dpr);
+  /* 中身がある矩形。スプライトは 0.75s 四方の安全枠で作ってあるので、そのまま
+     転送すると面積の48%を透明なまま塗ることになる。これは画面内で最大の矩形で、
+     実解像度2では画面の44%を占める。
+     範囲は本体楕円＋輪郭線の外側半分で決まる。焦げ跡は source-atop で本体の
+     アルファ内にしか乗らないため外へは出ない（_renderKingBody参照）。
+     余白を0にすると輪郭の端が欠けるので少しだけ残す（1pxで画素は完全一致する） */
+  const strokeOut = 1.2 / 2 * (s / REF), pad = 2;
+  const rx = s * DUMPLING_BODY_RX + strokeOut + pad, ry = s * DUMPLING_BODY_RY + strokeOut + pad;
+  kingOC = { oc, bodyOC, half, liveOC,
+              rect: { x: -rx, y: s * DUMPLING_BODY_CY - ry, w: rx * 2, h: ry * 2 } };
+}
+
+/* ════════════════ キングギヨウザ 的 ════════════════ */
+/* こんがりミニリール: キングギヨウザ戦の砲台代わり。createWheel/_buildWheelOC/hitResult と
+   同じ位置判定（wheelの回転角に対する固定ポインタ）をそのまま再利用し、通常ゲームと
+   同じ「1本ずつ順番にタップして止める」操作感にする */
+function createKingReel(x, y, weights) {
+  /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。シャッフルすると
+     的ごと・再スピンごとに並びが変わって「こんがり」と読めない。角度は0から昇順に
+     積むので、canvasの座標系（y下向き＝正の角度が時計回り）では時計回りに
+     こ→ん→が→りと並ぶ。
+     並びを固定してもゲーム性は落ちない: どの文字がポインタに来るかは的の初期回転(rot)と
+     回転速度で決まるため、ランダム性は並び順ではなく回転が担う。文字ごとの当たりやすさの
+     偏り（_adjustKingCharWeight）もspanで表現するので並び順とは独立に機能する */
+  const chars = KING_CHARS;
+  /* weights（%、KING_CHARS各文字→数値）が渡されればその配分で角度を割る
+     （的ごとの命中履歴で偏らせる。kingState.charWeights・_adjustKingCharWeight参照）。
+     合計は理論上100だが、加減算の丸め誤差を吸収するため実際の合計で正規化する
+     （createWheelの重み→角度変換と同じ考え方）。省略時は均等4等分 */
+  const sum = weights ? KING_CHARS.reduce((a, c) => a + weights[c], 0) : 0;
+  let angle = 0;
+  const segs = chars.map(c => {
+    const span = weights ? (weights[c] / sum) * Math.PI * 2 : Math.PI / 2;
+    const seg = { char: c, start: angle, span };
+    angle += span;
+    return seg;
+  });
+  const w = {
+    x, y, segs,
+    rot:    Math.random() * Math.PI * 2,
+    speed:  (Math.random() * 0.08 + 0.18) * 0.5, // 通常ホイールの半分の回転速度
+    locked: false,
+    result: null,
+    _oc:    null,
+  };
+  _buildKingReelOC(w);
+  return w;
+}
+
+/* ひびの位置を的の絵柄に固定するための基準となる文字。
+   的の segs は再スピンのたびにシャッフルされ、開始角も w.rot も作り直されるため、
+   ひびを「ワールド角 − そのときのw.rot」で保存すると次のトライで別の場所へ移動する。
+   セグメント配置そのものを基準にすれば絵柄に対する相対位置が保たれるので、
+   この文字のエリアの開始角を原点としてひびの角度を保存・復元する。
+   どこにひびが入るかは「文字が当たったところ」 */
+const _KING_CRACK_ANCHOR_CHAR = 'こ';
+
+/* 的ローカル座標系（w.rotを含まない、segs.startと同じ系）における
+   基準文字エリアの開始角。segsは必ず4文字すべてを含むが、防御的に0で代替する。
+   文字の並びを固定した現在（createKingReel参照）「こ」は常に先頭＝この関数は
+   常に0を返すが、「ひびは基準文字エリアを原点とする」という不変条件を明示する
+   ために残している（並び順を変えたくなった時にひびの位置が壊れない） */
+function kingReelAnchorAngle(w) {
+  const seg = w && w.segs && w.segs.find(s => s.char === _KING_CRACK_ANCHOR_CHAR);
+  return seg ? seg.start : 0;
+}
+
+/* 的のひび割れ（破壊演出）用の先細りウェッジ（扇形の破片）ポリゴンを1個生成する。
+   ひびは「飛んできた文字が的に当たった場所」を起点に、的の縁から中心方向へ割れる。
+   中心までは割らず、半径の1/2程度までに留める。幅は縁で広く、中心へ向かうほど狭い。
+   割れる向きは当たった向きを勘案する。
+
+   ポリゴンは**的の回転(w.rot)に追従するローカル座標系**（drawKingReelの
+   ctx.rotate(w.rot)の内側）で組む。ワールド座標で固定すると、回転する的の上を
+   ひびだけが滑って見える。
+   引数baseAngleは呼び出し側（kingReelShoot）で「文字が実際に当たったワールド座標上の
+   角度」からその時点のw.rotを差し引いて渡された、的自身から見たローカル角度。
+   的が生きている（ロック中〜再スピン後の回転中）間はこの値を使い続けるため、着弾直後は
+   実際の衝突位置と一致し、以後は的の回転にそのまま追従する */
+function createKingCrackWedge(baseAngle) {
+  const outerR = KING_WR;                                    // 起点＝的の縁
+  const innerR = KING_WR * (0.15 + Math.random() * 0.35);    // 終点＝中心からの距離（最大でも半径の約半分）
+  const segCount = 3 + Math.floor(Math.random() * 2);        // 3〜4節の折れ線（先細りの芯線）
+  const spine = [];
+  for (let j = 0; j <= segCount; j++) {
+    const t = j / segCount;
+    const r = outerR + (innerR - outerR) * t;
+    const a = baseAngle + (Math.random() - 0.5) * 0.5 * t; // 中心へ向かうにつれ左右にわずかに蛇行
+    spine.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
+  }
+  /* 芯線の左右にオフセットして先細りの帯を作る（端が広く、先端でほぼ0幅） */
+  const outerW = KING_WR * 0.11;
+  const left = [], right = [];
+  for (let j = 0; j < spine.length; j++) {
+    const t = j / (spine.length - 1);
+    const hw = outerW * (1 - t) / 2; // 半幅（先端に向けて先細り）
+    const prev = spine[Math.max(0, j - 1)], next = spine[Math.min(spine.length - 1, j + 1)];
+    const dx = next.x - prev.x, dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len; // 進行方向に対する法線
+    left.push({ x: spine[j].x + nx * hw, y: spine[j].y + ny * hw });
+    right.push({ x: spine[j].x - nx * hw, y: spine[j].y - ny * hw });
+  }
+  return [...left, ...right.reverse()]; // 閉じたポリゴン（先端は左右がほぼ同点で自然に尖る）
+}
+
+/* キング的のOCをプールへ返却する。通常ホイールのreleaseWheelOCsと対になる。
+   respinのたびに新規生成して解放しない作りにしてはいけない: 長い戦闘では数十枚の
+   OffscreenCanvasがGC待ちで滞留し、iOS Safariのcanvasメモリを圧迫して戦闘後の処理落ち・
+   音途切れの原因になる。OffscreenCanvasを作る場所は必ずプール運用にすること */
+function releaseKingReelOCs(reels) {
+  if (!reels) return;
+  for (const w of reels) {
+    if (w?._oc) { freeKingReelOCs.push(w._oc); w._oc = null; }
+  }
+}
+
+/* キング的用フォント計算（spanに応じて9〜18px。通常ホイールと違い事前計算
+   フィールドを持たないため都度計算する） */
+function _kingReelFontOf(s) {
+  const fontSize = Math.max(9, Math.min(18, (s.span/(Math.PI*2))*62));
+  return `bold ${fontSize}px ${FONT_MIN}`;
+}
+
+function _buildKingReelOC(w) {
+  const ocR = KING_WR + 4;
+  /* optを都度組むのはKING_WRが縦画面のinitKingBattleで確定するため
+     （静的constにすると初期値のKING_WRで固まってしまう）。4個/respinの
+     小オブジェクト生成でcanvas描画コストに比べ無視できる */
+  _buildSegWheelOC(w, {
+    r: KING_WR, ocR, pool: freeKingReelOCs,
+    segLW: 1, charOff: 0.6, charLW: 2.5, hubR: KING_WR*0.16,
+    fontOf: _kingReelFontOf,
+  });
+  w._ocR = ocR;
+}
+
+/* 的の三角ポインタ先端のワールド座標。ポインタは画面の向きによらず常に的の
+   真上固定（当たり位置は hitResult 呼び出し側で常に -PI/2 を渡して揃える）。
+   drawKingReelの描画と_kingFireBeamのビーム発射元の両方から参照する共通式 */
+function kingReelPointerPos(w) {
+  const pointer = -Math.PI / 2;
+  return { x: w.x + Math.cos(pointer) * (KING_WR + 12), y: w.y + Math.sin(pointer) * (KING_WR + 12) };
+}
+
+/* マーク済みの的の三角ポインタに帯電演出を描く。4つマークした状態で次のアクションが
+   必要だと分かるようにするための表示。
+   時間ベースのバケツ値を擬似乱数シードにして数十msごとにジグザグの向きを切り替え、
+   静電気のような点滅を表現する（的4本ぶんの極小描画なので、パーティクル化・
+   プール化の対象外） */
+function _drawKingReelCharge(px, py, idx) {
+  /* 帯電の勢いを打ち込みの残り拍に連動させる（副表示）。プレイヤーの視線は的に
+     釘付けなので、画面下端のセルを見に行かなくても「もう電気が無い」が手元で
+     分かるようにする。残りが多いほど強く、尽きかけると弱々しくなる */
+  const pw = KING_STEP_BEATS > 0 ? kingStepsLeft() / KING_STEP_BEATS : 1;
+  const vigor = 0.35 + 0.65 * pw;
+  let seed = Math.floor(performance.now() / 45) + idx * 7;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  /* 大きさは的の半径基準にする（縦横でKING_WRが変わるので比で持つ）。固定pxだと
+     画面サイズによって見え方が変わり、小さすぎて気付かれない。
+     広がりは0.39〜0.81倍。本数・線幅・グローはそのままなので、密度と輝きを保ったまま
+     長さだけを抑えている */
+  const R = KING_WR;
+  const flick = 0.55 + rnd() * 0.45; // 明滅
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  /* 稲妻は本数を増やし（3→6）、折れも1回から3回にして荒れた放電に見せる。
+     全部を1本のパスへ積んでから「太く暗いグロー → 細く明るい芯」の順で2回ストローク
+     する。shadowBlurを使わずに光らせる既存のビーム描画（drawKingBattle）と同じ手法で、
+     的あたりのストロークも2回に収まる */
+  ctx.beginPath();
+  const N = 7;
+  for (let b = 0; b < N; b++) {
+    const baseAng = (b / N) * Math.PI * 2 + rnd() * 0.9;
+    const len = R * (0.39 + rnd() * 0.42) * vigor;
+    ctx.moveTo(0, 0);
+    for (let s = 1; s <= 3; s++) {
+      const t = s / 3;
+      /* 根元ほど大きく振れ、先端へ向かって収束させると稲妻らしくなる */
+      const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - t * 0.5);
+      ctx.lineTo(Math.cos(a) * len * t, Math.sin(a) * len * t);
+    }
+  }
+  /* 線幅はグロー 0.15R・芯 0.045R。細めに締めることで、長さ・本数（density）は
+     そのままに、密度感を保ったまま線を締めて見せる */
+  ctx.globalAlpha = 0.40 * flick * vigor;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = Math.max(3.5, R * 0.15);
+  ctx.stroke();
+  ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = Math.max(1.2, R * 0.045);
+  ctx.stroke();
+  /* 根元の輝き。稲妻だけだと中心が空くので、帯びている芯を1枚置く */
+  ctx.globalAlpha = 0.30 * flick * vigor;
+  ctx.fillStyle = Y;
+  ctx.beginPath(); ctx.arc(0, 0, R * 0.18 * (0.85 + 0.3 * flick), 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+/* 発射の瞬間の放電（KING_FIRE_FLASH_FRAMES 参照）。帯電のジグザグを外向きへ
+   飛ばして消す＝溜めていた電気を撃ち出した、という見え方にする。
+   帯電（_drawKingReelCharge）と同じ疑似乱数の作りで、こちらは経過フレームで
+   長さを伸ばしながら薄くしていく */
+function _drawKingReelDischarge(px, py, idx) {
+  const k = kingFx.fireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
+  let seed = idx * 13 + 7;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  /* 帯電（_drawKingReelCharge）を的の半径基準へ拡大したので、こちらも同じ基準に
+     揃える。片方だけ小さいと放電が弱く見える */
+  const R = KING_WR;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  const spread = (1 - k) * R * 0.85; // 外へ広がっていく
+  for (let b = 0; b < 8; b++) {
+    const ang = (b / 8) * Math.PI * 2 + rnd() * 0.5;
+    const r0 = R * 0.10 + spread, r1 = r0 + R * (0.18 + rnd() * 0.28);
+    const mid = ang + (rnd() - 0.5) * 0.5;
+    ctx.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0);
+    ctx.lineTo(Math.cos(mid) * (r0 + r1) / 2, Math.sin(mid) * (r0 + r1) / 2);
+    ctx.lineTo(Math.cos(ang) * r1, Math.sin(ang) * r1);
+  }
+  /* 帯電と同じ「太く暗いグロー → 細く明るい芯」の2回ストローク */
+  ctx.globalAlpha = k * 0.34;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = Math.max(4, R * 0.17) * (0.6 + k * 0.4);
+  ctx.stroke();
+  ctx.globalAlpha = k * 0.95;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = Math.max(1.6, R * 0.06) * (0.5 + k * 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* 発射直後、まだ撃ち込まれていない的の三角マークと、その結果文字を稲妻で繋ぐ
+   （KING_TETHER_* の定義部参照）。両端は必ずマーク／文字にピタリと付け、振れ幅を
+   中央で最大にすることで「張られた線」に見せる。
+   _drawKingReelCharge と同じく、時間バケツを疑似乱数シードにして数十msごとに
+   形を切り替え、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
+   ストロークで光らせる（描画規約） */
+function drawKingChargeTether(x0, y0, x1, y1, idx) {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 2) return;
+  const nx = -dy / len, ny = dx / len; // 法線＝横揺れの方向
+  let seed = Math.floor(performance.now() / 45) * 31 + idx * 7 + 1;
+  const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+  const flick = 0.55 + rnd() * 0.45;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  for (let s = 1; s < KING_TETHER_SEG; s++) {
+    const t = s / KING_TETHER_SEG;
+    const amp = Math.sin(t * Math.PI) * len * KING_TETHER_AMP;
+    const o = (rnd() - 0.5) * 2 * amp;
+    ctx.lineTo(x0 + dx * t + nx * o, y0 + dy * t + ny * o);
+  }
+  ctx.lineTo(x1, y1);
+  ctx.globalAlpha = 0.26 * flick;
+  ctx.strokeStyle = '#ffd34d';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  ctx.globalAlpha = 0.5 + 0.4 * flick;
+  ctx.strokeStyle = '#fffde7';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* 撃ち込み済み・焼き込み待ちの焦げ跡の位置で、文字の「外」に走る帯電
+   （KING_TETHER_* の定義部参照）。三角との接続が切れた分のエネルギーがそこに
+   溜まっている、という見え方にする。座標変換は _kingFlightTargetPos および
+   アクセントの発光と同じ（ボスの表示位置・呼吸・のけぞりに追従）。
+
+   描き方は的の三角の帯電（_drawKingReelCharge）と揃える: 時間バケツを疑似乱数
+   シードにして数十msごとに形を切り替え、根元ほど大きく振れて先端へ収束する
+   3折れの稲妻を、shadowBlur を使わず「太く暗いグロー → 細く明るい芯」の2回
+   ストロークで光らせる。うねる曲線（プラズマボール風）にはしない: 同じ画面にある
+   的側の帯電と別物に見えて統一感が崩れる。違いは発生点だけ（的は中心から、
+   こちらは文字の縁から外へ）。
+
+   充電の進みは「その文字が撃ち込まれた時刻 → 5音目の予約時刻」の比で出し、
+   的の帯電が打ち込みの残り拍で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
+   いちばん長く明るい */
+function drawKingMarkCharges(breath, ofsX, ofsY) {
+  if (kingFx.chargedMarks.length === 0) return;
+  const ct = audioCtx ? audioCtx.currentTime : null;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const m of kingFx.chargedMarks) {
+    let p = 1; // 時計が引けない場合は満充電で描く
+    if (ct !== null && m.chargedAt !== null && kingState.seqAccentAt !== null) {
+      const span = kingState.seqAccentAt - m.chargedAt;
+      p = span > 0.05 ? Math.max(0, Math.min(1, (ct - m.chargedAt) / span)) : 1;
+    }
+    kingLocalToWorld(m.lx, m.ly, breath, ofsX, ofsY, kingWorldTmp);
+    const mx = kingWorldTmp.x, my = kingWorldTmp.y;
+    /* 基準は焦げ跡の半径ではなく文字の大きさ（m.chargeR）。焦げ跡は文字の数倍の
+       面積で描かれるため、そちらを基準にすると文字から離れた別物に見える */
+    const R = m.chargeR;
+    /* シードの作りも的側と同じ（45msバケツ）。位相だけマークごとにずらして、
+       4箇所が同じ形で明滅しないようにする */
+    let seed = Math.floor(performance.now() / 45) + Math.floor(m.rot * 97);
+    const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const flick = 0.55 + rnd() * 0.45;
+    const vigor = 0.55 + 0.45 * p;
+    const rIn = R * 0.5; // 発生点＝グリフの縁。ここから外へ伸ばす＝「文字の外」
+    ctx.beginPath();
+    for (let b = 0; b < KING_CHARGE_BOLTS; b++) {
+      const baseAng = (b / KING_CHARGE_BOLTS) * Math.PI * 2 + rnd() * 0.9;
+      const len = R * (0.45 + rnd() * 0.5) * vigor;
+      ctx.moveTo(mx + Math.cos(baseAng) * rIn, my + Math.sin(baseAng) * rIn);
+      for (let s = 1; s <= 3; s++) {
+        const u = s / 3;
+        const a = baseAng + (rnd() - 0.5) * 1.0 * (1 - u * 0.5);
+        const r = rIn + len * u;
+        ctx.lineTo(mx + Math.cos(a) * r, my + Math.sin(a) * r);
+      }
+    }
+    /* 線幅の比も的側と同じ（グロー 0.15R・芯 0.045R） */
+    ctx.globalAlpha = 0.40 * flick * vigor;
+    ctx.strokeStyle = '#ffd34d';
+    ctx.lineWidth = Math.max(3, R * 0.15);
+    ctx.stroke();
+    ctx.globalAlpha = (0.72 + 0.28 * flick) * vigor;
+    ctx.strokeStyle = '#fffde7';
+    ctx.lineWidth = Math.max(1.2, R * 0.045);
+    ctx.stroke();
+    /* 的側にある「根元の輝き」に相当するものはここでは置かない（中心はグリフが
+       占めていて空かないため。文字の上に光を乗せると読めなくなる） */
+  }
+  ctx.restore();
+}
+
+function drawKingReel(w, active, idx) {
+  /* 被弾揺れは的まるごと（絵柄・リング・三角ポインタ・結果文字）に効かせたいので、
+     関数全体を包む外側のsave/translateで掛ける（kingReelShakeOffset参照） */
+  const _shk = kingReelShakeOffset(idx);
+  ctx.save();
+  if (_shk) ctx.translate(_shk.x, _shk.y);
+  ctx.save();
+  ctx.translate(w.x, w.y);
+  ctx.rotate(w.rot);
+  ctx.drawImage(w._oc, -w._ocR, -w._ocR, w._ocR*2, w._ocR*2);
+  /* ひび割れ（破壊演出）: 飛んできた文字が実際に当たった場所を起点に、中心へ向けて先細りに
+     割れる（createKingCrackWedge参照）。この ctx.rotate(w.rot) の内側で描くことで、的が
+     回転する（再スピン後の回転中も含む）とひびも一緒に回転する＝ひびごと的が回る。
+     さらにここで基準文字エリアの開始角ぶんを回す。ポリゴンはその開始角を原点とした相対角で
+     保存されているため（_addKingReelCrackAtCollision参照）、現在の的の開始角を足し戻すことで
+     絵柄に対する位置が一定になる。
+     的は再スピンのたびに新しいrot・新しいセグメント配置で作り直されるが、ひびは
+     kingState.reelCracks[idx]にスロット単位で蓄積して残るため、この足し戻しが無いとトライごとに
+     ひびが絵柄の上を回転移動してしまう */
+  if (kingState && kingState.reelCracks && idx != null) {
+    const cracks = kingState.reelCracks[idx];
+    if (cracks && cracks.length) {
+      ctx.save();
+      ctx.rotate(kingReelAnchorAngle(w));
+      ctx.fillStyle = 'rgba(12,9,7,0.82)';
+      for (const c of cracks) {
+        const poly = c.poly;
+        ctx.beginPath();
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j].x, poly[j].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+  /* ビートリング: これから射つ的の外側に、拍ごとに広がって消える輪を出す。
+     ボス戦は drawSyncMeter が除外され drawWheel のグロー光輪も使わないため、これが
+     無いと拍の手掛かりが一つも無くなる（全タップが calcSyncScore で採点されるのに、
+     打ち込みメーターの進み方しか手掛かりが無い状態になる）。
+     通常モードはプリレンダのグロースプライト（WR基準）を使うが、KING_WRは縦画面で
+     動的に変わるので流用できない。shadowBlurも規約で使えないため、広がる輪＋減衰する
+     線幅で表現する（ミュート時の画面枠と同じ考え方）。 */
+  if (active && !w.locked) {
+    const bp = getBeatPulse(); // 0-1、ビート直後=1
+    if (bp > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = bp * 0.8;
+      ctx.strokeStyle = Y;
+      ctx.lineWidth = 1 + bp * 3.5;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, KING_WR + 5 + (1 - bp) * KING_WR * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  ctx.beginPath(); ctx.arc(w.x, w.y, KING_WR + 3, 0, Math.PI*2);
+  ctx.strokeStyle = w.locked ? 'rgba(255,221,85,0.9)' : (active ? Y : 'rgba(255,255,255,0.4)');
+  ctx.lineWidth = active ? 3 : (w.locked ? 2 : 1.5);
+  ctx.stroke();
+  /* ポインタ三角形は画面の向きによらず常に的の真上（当たり位置は hitResult 呼び出し側で
+     常に -PI/2 を渡して揃える）。台座半径は「リング外縁（最大 KING_WR+4.5）に接するが
+     重ならない」よう、先端が KING_WR+5 に来る値にしてある */
+  const pointer = -Math.PI/2;
+  const { x: px, y: py } = kingReelPointerPos(w);
+  ctx.save(); ctx.translate(px, py); ctx.rotate(pointer + Math.PI/2);
+  ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.closePath();
+  ctx.fillStyle = Y; ctx.fill();
+  ctx.restore();
+  /* マーク済み（射った）が未発射の的は三角を帯電させ、次のアクション（発射）が必要なことを
+     視覚的に伝える。消えるのは「その的のビームが実際にマークへ飛んだ瞬間」で、発射タイミングで
+     一斉に消すのではない。再生では的ごとに撃つ時刻がずれるので、順に消えていく */
+  if (w.locked && kingState && !kingState.reelBeamed[idx]) _drawKingReelCharge(px, py, idx);
+  /* 発射タップの瞬間の放電はそのまま重ねて出す（帯電の有無とは独立） */
+  if (w.locked && kingFx.fireFlash > 0) _drawKingReelDischarge(px, py, idx);
+  /* 当たった文字は的の下に表示（ロック前は何も出さない） */
+  if (w.result) {
+    ctx.save();
+    ctx.translate(w.x, w.y + KING_WR + 3 + KING_RESULT_GAP + KING_RESULT_FONT/2);
+    ctx.font = `bold ${KING_RESULT_FONT}px ${FONT_MIN}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)'; ctx.strokeText(w.result, 0, 0);
+    ctx.fillStyle = '#fffde7'; ctx.fillText(w.result, 0, 0);
+    ctx.restore();
+  }
+  ctx.restore(); // 被弾揺れの外側save
 }
 
 /* ════════════════ キングギヨウザ 戦闘 ════════════════
@@ -10710,6 +10454,123 @@ function drawKingVictory() {
   });
 }
 
+/* ════════════════ キングギヨウザ 締めメッセージ ════════════════ */
+/* 締めメッセージ（達成側・失敗側で共通の書式）のフォント。
+   折り返しの計測（wrapOutroLines）と実描画（drawOutroMsg）で必ず同じ書式を
+   使わないと、計測結果と実際の幅がずれてそのまま横はみ出しになる（実機で一度
+   発生済み）。サイズだけでなくフォント文字列そのものを一本化しておく */
+function _outroMsgFontSize() { return IS_PORTRAIT ? 26 : 30; }
+function _outroMsgFont() { return `bold ${_outroMsgFontSize()}px ${FONT_MIN}`; }
+/* 締めメッセージを画面幅に収まるよう折り返す。
+   縦画面（W=420）は横画面よりずっと狭いので、固定の行配列をそのまま描くと文字が
+   はみ出す。文言は後から調整する前提なので、必ずここを通してどんな文言でも収まる
+   ようにする。区切りはエンドロールと同じく空白（半角・全角）位置。
+   ctx.measureTextを使うので演出の開始時に1度だけ実行し、結果を状態に持たせる
+   （毎フレーム計測しない） */
+function wrapOutroLines(lines) {
+  return lines.flatMap(t => wrapTrueEndingLine(t, _outroMsgFont(), W - 48)); // 左右24pxずつの余白
+}
+
+/* 締めメッセージ（_DEFEAT_OUTRO_LINES）の見せ方。全行を1つのメッセージとして
+   同時に出し、フェードイン・フェードアウトも全体で1回ずつ行う（誕生予告drawKingOmenの
+   「過去行を薄く残して積んでいく」見せ方とは意図的に別物）。
+   HOLDは全文を表示したまま保持する長さ。
+   フェードアウトはイン側と分離して3倍の長さを取る（同じ長さでは消えるのが速すぎて
+   余韻が残らない）。さらに easeOut カーブ（easeF参照）を掛け、消え際の薄い状態が
+   長く尾を引くようにする。線形だと最後まで一定速度で消えて余韻が出ない */
+/* ── 締めメッセージの尺は「目標の表示秒数」を直接持つ ──
+   失敗側はおよそ3秒、達成側はおよそ6秒を目標とする。文章量が違う（失敗18文字・
+   縦画面2行／達成31文字・縦画面4行）ので、両者で同じ固定フレーム数を共有させると
+   達成側が読み終わらない。
+   一方で「1文字あたり◯ms」のような係数モデルにもしない: 文字数比1.72倍に対して
+   目標時間比が2倍なので、2つの目標を1本の直線で通そうとすると意味を持たない
+   係数と下駄になり、モデルとして破綻する。
+   よって目標の表示秒数そのものを定数として持ち、保持時間は
+     保持 = 目標フレーム数 - フェードイン - フェードアウト
+   の引き算で求める。利点:
+   - 定数がそのまま仕様（達成は6秒）を表すので、尺を変えたいときはこの秒数だけ触ればよい。
+   - 文言を差し替えても目標秒数は変わらない＝尺が勝手にずれない。
+     文字数に応じて動くのはフェードアウトの長さだけで、その分だけ保持が自動的に詰まり
+     合計は目標どおりに保たれる */
+const _OUTRO_MSG_FADE_IN = 22;          // 登場（両者固定）
+/* 目標の表示秒数（フェードイン開始からフェードアウト終了まで）。ユーザー指定。
+   ここが仕様の本体なので、尺を変えたいときはこの2つだけを触る */
+const _OUTRO_MSG_TARGET_SEC_DEFEAT  = 3.0; // こんがり失敗の締め
+const OUTRO_MSG_TARGET_SEC_VICTORY = 6.0; // こんがり達成（キングクリア）の締め
+/* 保持時間の下限。フェードだけで目標秒数を食い潰すほど長い文言になった場合の保険
+   （引き算の結果が0以下になりうる）。その場合だけは合計が目標秒数を超える＝読ませることを
+   優先する */
+const _OUTRO_MSG_HOLD_MIN      = 40;
+/* フェードアウト（余韻）の長さは文章量で伸ばす。長い文なら締めもゆったりする
+   のが自然なため。合計は目標秒数に固定されるので、ここが伸びたぶんは保持から
+   引かれる（＝余韻と静止表示の配分が文章量で変わる） */
+const _OUTRO_MSG_FADE_OUT_BASE     = 40;
+const _OUTRO_MSG_FADE_OUT_PER_CHAR = 1.45;
+
+/* 表示行の総文字数（空白は読解負荷に数えないので除く。「……」は意図した
+   一拍の間なので1文字ぶんずつ数える） */
+function _outroMsgCharCount(lines) {
+  return lines.reduce((n, t) => n + t.replace(/[\s　]/g, '').length, 0);
+}
+/* 折り返し済みの表示行と目標秒数から尺を確定させる。演出開始時に1度だけ呼んで
+   状態に持たせる（毎フレーム計算しない。折り返し自体も同じ方針。wrapOutroLines参照）。
+   targetSec は _OUTRO_MSG_TARGET_SEC_DEFEAT / _VICTORY のどちらかを呼び出し側が渡す。
+   保持は目標からフェード2つを引いた残りなので、合計は必ず目標秒数に一致する
+   （唯一の例外はフェードだけで目標を超えてしまう極端に長い文言で、その場合は
+   下限が効いて目標を超える＝読ませることを優先する） */
+function createOutroMsgTiming(msgLines, targetSec) {
+  const chars   = _outroMsgCharCount(msgLines);
+  const fadeIn  = _OUTRO_MSG_FADE_IN;
+  const fadeOut = Math.round(_OUTRO_MSG_FADE_OUT_BASE + _OUTRO_MSG_FADE_OUT_PER_CHAR * chars);
+  const total   = Math.round(targetSec * 60); // 60fps基準のフレーム数へ
+  return {
+    fadeIn, fadeOut,
+    hold: Math.max(_OUTRO_MSG_HOLD_MIN, total - fadeIn - fadeOut),
+  };
+}
+/* 締めメッセージのフェードイン→保持→フェードアウトを1フレーム進め、o.msgAlpha を
+   確定させる（update で状態を決めて draw は読むだけ、というこのプロジェクトの分離方針）。
+   戻り値=消えきったか。
+   達成側・失敗側で式は同一なので必ずここに集約する。同じ式を2箇所へコピーすると、
+   片側だけ尺を変えたときにもう片側が古い尺のまま取り残される。
+   消え際に薄いまま長く尾を引かせるため easeOut を掛ける（線形だと一定速度で消えて
+   余韻が出ない） */
+function advanceOutroMsg(o) {
+  const T = o.msgTiming;
+  const fadeOutStart = T.fadeIn + T.hold;
+  if (o.timer < T.fadeIn) {
+    o.msgAlpha = o.timer / T.fadeIn;
+  } else if (o.timer < fadeOutStart) {
+    o.msgAlpha = 1;
+  } else {
+    const p = Math.min(1, (o.timer - fadeOutStart) / T.fadeOut);
+    o.msgAlpha = Math.max(0, 1 - easeF(p, 'easeOut'));
+  }
+  return o.timer > fadeOutStart + T.fadeOut;
+}
+
+/* 締めメッセージを描く（達成側・失敗側で共通）。色だけが呼び出し側の指定で、
+   フォント・行間・中央揃えの基準・透明度の扱いはすべて共通。
+   描画側もupdate側（advanceOutroMsg）と同様に必ず一本化する: 色以外が同一のブロックを
+   複製すると、折り返しや配置を変えたときに片側だけ直す事故が起きる。
+   誕生予告（drawKingOmen）は行を1つずつ積み上げ過去行を薄く残す見せ方だが、こちらは
+   全行を1つのメッセージとして同時に出す。
+   位置も誕生予告とは別建て: 誕生予告は4行ぶんを見込んでH*0.30から始めるが、こちらは
+   行数が少なく同じ開始位置だと画面上寄りに偏って見える。画面に固定のボスが居ないぶん
+   余裕があるため、全行の中心が画面中央(H/2)に来るよう配置し、行数が少ない分フォントも
+   大きくする。行数は文言と画面幅で変わるので、中央揃えの基準は実際の行数から求める */
+function drawOutroMsg(o, fillColor, shadowColor) {
+  if (!(o.msgAlpha > 0)) return;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lineDy = _outroMsgFontSize() * 2.2;
+  const lines  = o.msgLines;
+  const lineY0 = H / 2 - lineDy * (lines.length - 1) / 2;
+  ctx.font = _outroMsgFont(); // 折り返し計測と同一の書式（_outroMsgFont参照）
+  ctx.globalAlpha = o.msgAlpha;
+  lines.forEach((line, i) => outText(line, W / 2, lineY0 + i * lineDy, fillColor, shadowColor, 6));
+  ctx.globalAlpha = 1;
+}
+
 /* ════════════════ こんがり達成の退場演出（kingVictoryOutro） ════════════════
    達成側と失敗側は必ず対になる段数を踏ませる。失敗側は
    kingDefeat →（縮小ブリッジ）→ kingDefeatOutro（拡散＋締め2行）→ 画面フェード
@@ -10875,6 +10736,349 @@ function drawKingVictoryOutro() {
     drawOutroMsg(o, '#ffe9a8', 'rgba(60,20,0,0.9)');
   }
   ctx.restore();
+}
+
+/* ════════════════ キングギヨウザ 敗北 ════════════════
+   こんがり攻撃の失敗が _KING_MAX_FAILS 回に達すると、的が砕け（kingShatter）、没収を見せる
+   画面（kingDefeat）を経て、CONTINUE でキングが縮み（kingDefeatShrink）、ふつうのギヨウザ群へ
+   弾け散ってメッセージを出し（kingDefeatOutro）、通常モードへ戻る。
+   弾け散りは出現予告の収束の厳密な逆再生なので、片方を変えたらもう片方も合わせること */
+/* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
+   （_updateKingCharFlights参照）。的が砕けて破片が全て消えてから、キングギヨウザ失敗が
+   確定するという順序を守るための段。
+   4的それぞれの4セグメントをそのまま破片として使い（新規ジオメトリを起こさず既存のsegs/色を
+   そのまま流用）、的の中心から外向きに飛び散らせる。
+   phaseを'kingShatter'に切り替えて入力を止め、updateKingReelShatterが全破片の消滅を監視して
+   _startKingDefeatへ引き継ぐ */
+/* 角度を 0〜2π へ正規化 */
+function _norm2pi(a) { const t = a % (Math.PI * 2); return t < 0 ? t + Math.PI * 2 : t; }
+
+/* 的1枚を「ひびの入った位置」で分割した破片の境界角（的ローカル＝OCの座標系、昇順）を返す。
+   均等に4つへ割るのではなく、実際に入ったひびの位置で割ること（位置と無関係な等分割は
+   違和感になる）。
+   ひびの保存角は基準文字エリア起点の相対角なので、現在の的の基準角を足してOCの座標系へ戻す
+   （drawKingReelの描画と同じ変換）。
+   ひびが2本未満だと扇形に分割できないため、その場合だけ文字セグメントの境界で割る
+   （_KING_MAX_FAILS回失敗して破砕に至る時点では通常6本あるので、これは保険の経路） */
+function _kingReelShatterBounds(w, idx) {
+  const cracks = (kingState.reelCracks && kingState.reelCracks[idx]) || [];
+  const anchor = kingReelAnchorAngle(w);
+  let bounds = cracks.map(c => _norm2pi(c.angle + anchor)).sort((a, b) => a - b);
+  /* ほぼ同じ角度のひびが重なると極端に細い破片ができるのでまとめる */
+  const MIN_GAP = 0.12;
+  bounds = bounds.filter((a, i) => i === 0 || a - bounds[i - 1] > MIN_GAP);
+  /* 先頭と末尾が2π跨ぎで近すぎる場合も末尾を落とす */
+  if (bounds.length > 1 && (bounds[0] + Math.PI * 2 - bounds[bounds.length - 1]) <= MIN_GAP) bounds.pop();
+  if (bounds.length >= 2) return bounds;
+  return w.segs.map(s => _norm2pi(s.start)).sort((a, b) => a - b);
+}
+
+function startKingReelShatter() {
+  phase = 'kingShatter';
+  const pieces = [];
+  for (let idx = 0; idx < kingState.reels.length; idx++) {
+    const w = kingState.reels[idx];
+    const bounds = _kingReelShatterBounds(w, idx);
+    for (let i = 0; i < bounds.length; i++) {
+      const a0 = bounds[i];
+      const a1 = (i + 1 < bounds.length) ? bounds[i + 1] : bounds[0] + Math.PI * 2;
+      const span = a1 - a0;
+      const mid  = a0 + span / 2;                 // 的ローカルでの破片の中心角
+      const world = w.rot + mid;                  // 現在の的の向きを反映したワールド角
+      /* 細い破片ほど軽い＝速く飛ぶようにして、割れ方の不均等さを動きにも出す */
+      const spd = (2.5 + Math.random() * 3) * (1 + (Math.PI / 2 - Math.min(span, Math.PI / 2)) * 0.35);
+      pieces.push({
+        cx: w.x, cy: w.y, x: 0, y: 0,
+        vx: Math.cos(world) * spd, vy: Math.sin(world) * spd - 2.5, // 少し上向きに弾ける
+        rot: world, rotSpd: (Math.random() - 0.5) * 0.3,
+        span, mid,
+        /* 破片は的のOCを扇形にクリップして描く＝元の絵柄（文字・色）がそのまま
+           乗るので「同じ的が割れた」ように見える。OCは破砕中は生きている
+           （返却はcleanupKingBattleState/updateKingDefeatShrinkで、いずれも
+           破砕完了後に実行される）。未対応環境向けにcharも保持してフラット塗り
+           にフォールバックできるようにしておく */
+        oc: w._oc, ocR: w._ocR,
+        char: (w.segs.find(s => mid >= s.start && mid < s.start + s.span) || w.segs[0]).char,
+      });
+    }
+  }
+  kingFx.shatter = { pieces, timer: 0 };
+  playSE('kingFlash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
+}
+
+function updateKingReelShatter() {
+  /* ボス本体の呼吸・位置イージング、直前attemptの文字飛翔（まだ落下中の
+     ものが残っている場合）、レーザー演出は破砕中も止めない */
+  updateKingCommonFx();
+
+  const s = kingFx.shatter;
+  if (!s) { _startKingDefeat(); return; }
+  s.timer++;
+  for (const p of s.pieces) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.3; // 重力
+    p.rot += p.rotSpd;
+  }
+  /* 全破片が画面外に出きった、または保険の上限フレームに達したら敗北確定へ
+     （破片が全て消えてから敗北が確定する順序を守る） */
+  const allGone = s.timer > KING_SHATTER_MAX_FRAMES || s.pieces.every(p => {
+    const x = p.cx + p.x, y = p.cy + p.y;
+    return x < -80 || x > W + 80 || y < -80 || y > H + 80;
+  });
+  if (allGone) {
+    kingFx.shatter = null;
+    _startKingDefeat();
+  }
+}
+
+function drawKingReelShatter() {
+  if (phase !== 'kingShatter' || !kingFx.shatter) return;
+  for (const p of kingFx.shatter.pieces) {
+    ctx.save();
+    ctx.translate(p.cx + p.x, p.cy + p.y);
+    ctx.rotate(p.rot);
+    /* 破片の形は「ひびから隣のひびまで」の扇形。回転の基準を破片の中心角に
+       置いているので、ローカルでは -span/2〜+span/2 の扇形になる */
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, KING_WR, -p.span / 2, p.span / 2);
+    ctx.closePath();
+    if (p.oc) {
+      /* 元の絵柄を扇形で切り出して貼る。rotate(-p.mid)でOCの座標系へ戻すことで、
+         OC上の角度θが この破片ローカルの (θ-mid) に来る＝割れる前と同じ位置の
+         模様がそのまま乗る */
+      ctx.save();
+      ctx.clip();
+      ctx.rotate(-p.mid);
+      ctx.drawImage(p.oc, -p.ocR, -p.ocR, p.ocR * 2, p.ocR * 2);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = SEG_L[p.char]; // OC未対応環境向けフォールバック
+      ctx.fill();
+    }
+    /* 割れ口の縁を描いて破片の輪郭を立たせる */
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* こんがり攻撃失敗が_KING_MAX_FAILS回に達し、ルーレットが完全破壊された＝敗北。
+   所持ギヨウザの半分がキングギヨウザに吸収され、通常ゲームへ戻る。
+   演出はdrawKingVictoryと対になる構成（暗幕・ボス・タイトル・CONTINUEバッジ）に揃え、
+   勝利側との対称性を保つ */
+function _startKingDefeat() {
+  phase = 'kingDefeat';
+  kingDefeatTimer = 0;
+  /* 敗北時のking値: 0（振り出しに戻す）ではなく、途中からやり直しにする。
+     戦闘開始時点でinitKingBattleが0にリセット済みのため、ここで上書きする。
+     戻す先は予兆の窓より下にする（KING_DEFEAT_RESTART_RATIOの定義部参照） */
+  kingMeter = KING_METER_THRESHOLD * KING_DEFEAT_RESTART_RATIO;
+  lsSaveStats();
+  if (kingState) {
+    kingState.scale = 1;
+    /* 没収額は端数を切り上げる（半分を残すのではなく半分を取る側を優先）。
+       これにより所持1の場合はceil(1/2)=1で残数ゼロまで没収され、「1だったら全部没収されて
+       ゲームオーバー」という直感的な期待に一致する（floorだと1所持時に没収0になり、何も
+       没収されないまま復帰してしまう） */
+    const lost = Math.ceil(coins / 2);
+    coins -= lost;
+    kingState.lostCoins = lost; // 敗北画面での表示用（kingBattleEndでのちにkingStateがnullになるため先に記録）
+    /* 没収分はキングに取り込まれたものとしてプールし、いつかこんがり達成した時に
+       まとめて返す。敗北を重ねるほどプールが厚くなり、達成時の見返りが大きくなる。
+       永続化はlsSaveStats側 */
+    kingLostPool += lost;
+    lsSave();
+    lsSaveStats();
+  }
+  /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、予兆演出・
+     通常ゲームオーバーと同じ手法）。ここで止めないとBGMが鳴りっぱなしになり、
+     ゲームオーバーSEと被って聞こえづらい。
+     kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートからイーズインする
+     ため、ここで止めても復帰時に自然に繋がる */
+  stopBGMTape(700);
+  playSE('gameOver');
+}
+
+function updateKingDefeat() {
+  kingDefeatTimer++;
+  /* 勝利側と同様、直前に飛ばした文字の演出（跳ね返り等）を決着後も止めない */
+  updateKingCommonFx();
+}
+
+function drawKingDefeat() {
+  if (phase !== 'kingDefeat') return;
+  /* 没収で所持ギヨウザが尽きた場合も、この「こんがり しっぱい」＋キングが縮んで
+     ギヨウザ群へ戻っていく演出を先に見せ、そのあとで通常モードのコイン枯渇ゲームオーバー
+     画面へ進む。coins<=0をここで早期分岐させて通常ゲームオーバー画面を先に出してはいけない。
+     出口の切り替えはkingBattleEnd側で行う */
+  drawKingOutcomeScreen({
+    veil: 'rgba(30,0,0,0.5)',
+    title: 'こんがり しっぱい……',
+    titleFill: '#ff6655', titleStroke: 'rgba(40,0,0,0.9)',
+    /* 没収は個数の実数ではなく割合で表示する。_startKingDefeatの没収ロジック
+       （Math.ceil(coins/2)）が常に「所持数の半分」である事実をそのまま文言にする */
+    sub: '所持ギヨウザの半数が 吸収された……',
+    subFill: '#d8d8ff', subStroke: 'rgba(0,0,0,0.85)',
+    timer: kingDefeatTimer,
+  });
+}
+
+function drawKingDefeatOutro() {
+  if (phase !== 'kingDefeatOutro' || !defeatOutro) return;
+  const o = defeatOutro;
+  ctx.save();
+  ctx.fillStyle = 'rgba(2,4,8,0.7)';
+  ctx.fillRect(0, 0, W, H);
+  for (const g of o.dumplings) drawOneDumpling(g);
+  if (o.step >= 1) {
+    /* 透明度はupdateKingDefeatOutroが確定させたo.msgAlphaを読むだけ。
+       描画本体は達成側と共通（drawOutroMsg参照） */
+    drawOutroMsg(o, '#e8e2d0', 'rgba(0,0,0,0.9)');
+  }
+  /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない */
+  ctx.restore();
+}
+
+/* ── 弾け散り（kingDefeatOutro）──
+   通常モードへ戻る前のつなぎ演出。誕生演出（バラバラのギヨウザが収束してキングギヨウザになる）を
+   逆再生するイメージで、キングの姿がふつうのギヨウザ群へ弾け散り、そのあと誕生演出と
+   同じ台詞スタイルでメッセージを出してから復帰する */
+const _DEFEAT_OUTRO_LINES = ['ちからが とけて……', 'かえっていった……'];
+/* 誕生演出（updateKingOmen step5: バラバラのギヨウザが中心へ収束してキングになる）の
+   純粋な逆回し。重力落下ではなく、渦を巻きながら中心から外へ拡散する＝収束演出そのものの
+   巻き戻しとして見せる。
+   同じ中心・同じ半径・同じ収束係数・同じフレーム数を使い、1フレームごとの更新式を
+   厳密に逆算する:
+     収束(forward): pos = c + (pos-c)*(1-K)  ⇔  拡散(reverse): pos = c + (pos-c)/(1-K)
+   これを110フレーム続けると、収束後に残るごく小さな半径(startR)から出現時の半径
+   R(=Math.hypot(W,H)*0.6、step5と同値)までを寸分違わず逆再生する */
+const _DEFEAT_OUTRO_K = 0.06;      // updateKingOmen step5 の収束係数と同値
+const _DEFEAT_OUTRO_FRAMES = 110;  // 同 step5 の収束フレーム数と同値
+
+/* キングギヨウザ縮小ブリッジ（startKingDefeatShrink）用の定数。
+   _KING_DEFEAT_SHRINK_SCALE: 縮小目標スケール。アイテム1個の見た目サイズ
+   （createDumpling の size=34〜42px）÷ キング全幅（half*2、縦画面300*0.75*2=450px・
+   横画面380*0.75*2=570px）から逆算した約0.075。これより極端に小さくすると、続けて
+   出るギヨウザの集合体より先に見えなくなり、クロスフェードしてもサイズ感の食い違いが
+   違和感として残る。
+   _KING_DEFEAT_XFADE_START_DSCALE: このdscaleまで縮んだらクロスフェード開始。
+   _KING_DEFEAT_XFADE_FRAMES: クロスフェードの長さ（フレーム数）。 */
+const _KING_DEFEAT_SHRINK_SCALE = 0.075;
+const _KING_DEFEAT_XFADE_START_DSCALE = 0.18;
+const _KING_DEFEAT_XFADE_FRAMES = 20;
+let _kingDefeatXfade = 0; // 0=キングのみ表示 〜 1=ギヨウザ群のみ表示
+
+/* ギヨウザ群の弾け散りアイテムを生成する（位置のみ確定、まだ動かさない）。
+   startKingDefeatShrinkでのクロスフェード表示・updateKingDefeatOutroでの
+   拡散アニメの両方が同じdefeatOutro.dumplingsを参照するため、生成は一箇所に
+   まとめる（クロスフェード用に別配列を作って後で捨てるとdumplingAllocの
+   プール返却漏れ＝リークになるため、必ず単一の配列を使い回す） */
+function _createDefeatOutroDumplings() {
+  const cx = W / 2, cy = H / 2 - (IS_PORTRAIT ? 60 : 0); // step5の収束先と同値
+  const R = Math.hypot(W, H) * 0.6; // step5の出現半径と同式
+  const startR = R * Math.pow(1 - _DEFEAT_OUTRO_K, _DEFEAT_OUTRO_FRAMES); // 収束後に残る半径
+  const dumplings = [];
+  for (let i = 0; i < 44; i++) {
+    const ang = (i / 44) * Math.PI * 2 + Math.random() * 0.2; // step5と同じ角度配分
+    dumplings.push(createDumpling(cx + Math.cos(ang) * startR, cy + Math.sin(ang) * startR, 0, 0));
+  }
+  /* 締め2行は画面幅に収まるよう折り返しておく（wrapOutroLines参照）。
+     尺は目標秒数（_OUTRO_MSG_TARGET_SEC_DEFEAT）から逆算する。折り返し後の
+     文字数はフェードアウト長にだけ効く（createOutroMsgTiming参照） */
+  const msgLines = wrapOutroLines(_DEFEAT_OUTRO_LINES);
+  return { step: 0, timer: 0, dumplings, cx, cy, msgAlpha: 0,
+           msgLines, msgTiming: createOutroMsgTiming(msgLines, _OUTRO_MSG_TARGET_SEC_DEFEAT) };
+}
+
+/* こんがりしっぱい画面（kingDefeat, CONTINUEタップ後）から、ギヨウザ群への弾け散り演出
+   （kingDefeatOutro）へ切り替える前段。
+   縮みきった瞬間にphaseを差し替えるだけだと紙芝居のめくりのように見えるため、
+   (1) 縮小目標スケールをアイテム1個ぶんの見た目サイズに合わせ、
+   (2) 縮小の終盤でキング（フェードアウト）とギヨウザ群（フェードイン）を一定フレームだけ
+       重ねて描く、
+   の2点で滑らかにつなぐ。
+   誕生演出・戦闘位置移行・勝利拡大と同じeaseKingXformの指数収束をそのまま再利用し、
+   キングギヨウザを等倍から弾け散り開始位置（中心=defeatOutroのcx,cy）へ縮小・移動させる */
+function startKingDefeatShrink() {
+  phase = 'kingDefeatShrink';
+  kingDefeatShrinkTimer = 0;
+  _kingDefeatXfade = 0;
+  if (kingState) {
+    kingState.bx = W / 2;
+    kingState.by = H / 2 - (IS_PORTRAIT ? 60 : 0); // defeatOutroのcx,cyと同値
+    kingState.scale = _KING_DEFEAT_SHRINK_SCALE;
+  }
+  /* ギヨウザ群はこの時点で生成し、位置を確定させておく（クロスフェード中は
+     静止したまま）。拡散運動はupdateKingDefeatOutroに入ってから始まる */
+  defeatOutro = _createDefeatOutroDumplings();
+}
+
+function updateKingDefeatShrink() {
+  kingDefeatShrinkTimer++;
+  updateKingCommonFx();
+  /* dscaleが目標近くまで縮んだらクロスフェードを開始し、キングとギヨウザ群を
+     一定フレームかけて滑らかに入れ替える */
+  if (kingState && kingState.dscale <= _KING_DEFEAT_XFADE_START_DSCALE) {
+    _kingDefeatXfade = Math.min(1, _kingDefeatXfade + 1 / _KING_DEFEAT_XFADE_FRAMES);
+  }
+  /* クロスフェード完了で本体を消して弾け散り演出へ。収束が遅れた場合の保険として
+     上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
+  if (!kingState || _kingDefeatXfade >= 1 || kingDefeatShrinkTimer > 60) {
+    if (kingState) releaseKingReelOCs(kingState.reels); // 的OCをプールへ返却（リーク防止・水平展開）
+    kingState = null; kingFx.lasers = []; kingFx.charFlights = []; // 弾けた瞬間に本体は消える
+    phase = 'kingDefeatOutro';
+    playSE('kingFlash');
+  }
+}
+
+function drawKingDefeatShrink() {
+  if (phase !== 'kingDefeatShrink') return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(30,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+  if (kingState) {
+    drawKingBody(1 - _kingDefeatXfade);
+    ctx.save();
+    ctx.globalAlpha = 1 - _kingDefeatXfade;
+    drawKingCharFlights();
+    ctx.restore();
+  }
+  if (defeatOutro && _kingDefeatXfade > 0) {
+    ctx.save();
+    ctx.globalAlpha = _kingDefeatXfade;
+    for (const g of defeatOutro.dumplings) drawOneDumpling(g);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function updateKingDefeatOutro() {
+  const o = defeatOutro;
+  if (!o) { phase = 'idle'; return; }
+  /* この時点でkingStateはnull・飛翔/レーザーも空なので実質no-opだが、キング戦系
+     フェーズは例外なく共通FXを呼ぶ形に揃えておく（将来この演出中まで残る
+     オブジェクトが増えたときに、ここだけ更新漏れになるのを防ぐ） */
+  updateKingCommonFx();
+  o.timer++;
+  /* step5の収束式 pos=c+(pos-c)*(1-K) を厳密に逆算した拡散式（重力は使わない） */
+  const inv = 1 / (1 - _DEFEAT_OUTRO_K);
+  for (const g of o.dumplings) {
+    g.x = o.cx + (g.x - o.cx) * inv;
+    g.y = o.cy + (g.y - o.cy) * inv;
+    g.rot -= 0.15; // step5の回転(+0.15)を逆再生
+  }
+  if (o.step === 0) {
+    /* step0: ギヨウザ群の拡散のみ。拡散しきってからメッセージへ移る */
+    if (o.timer > _DEFEAT_OUTRO_FRAMES) { o.step = 1; o.timer = 0; }
+  } else {
+    /* step1: 2行を1つのメッセージとしてまとめて フェードイン→保持→フェードアウト。
+       行ごとの出し分けはしない。尺は目標秒数から逆算済み（createOutroMsgTiming参照） */
+    const done = advanceOutroMsg(o);
+    /* フェードアウトしきったら、タップ待ちにせず時間経過で自動的に通常モードへ戻る。
+       startScreenFadeは多重起動防止済みなので、フェード開始後も毎フレームこの条件を
+       満たし続けて構わない */
+    if (done) startScreenFade(() => kingBattleEnd());
+  }
 }
 
 /* ════════════════ 真エンディング ════════════════
@@ -11488,203 +11692,6 @@ function finishTrueEnding() {
   trueEndingState = null;
   phase = 'startup';
   setBgmGainNow(1);
-}
-
-/* 6回目の失敗で、4的それぞれに最後のひびが入り終えた瞬間に呼ばれる
-   （_updateKingCharFlights参照）。的が砕けて破片が全て消えてから、キングギヨウザ失敗が
-   確定するという順序を守るための段。
-   4的それぞれの4セグメントをそのまま破片として使い（新規ジオメトリを起こさず既存のsegs/色を
-   そのまま流用）、的の中心から外向きに飛び散らせる。
-   phaseを'kingShatter'に切り替えて入力を止め、updateKingReelShatterが全破片の消滅を監視して
-   _startKingDefeatへ引き継ぐ */
-/* 角度を 0〜2π へ正規化 */
-function _norm2pi(a) { const t = a % (Math.PI * 2); return t < 0 ? t + Math.PI * 2 : t; }
-
-/* 的1枚を「ひびの入った位置」で分割した破片の境界角（的ローカル＝OCの座標系、昇順）を返す。
-   均等に4つへ割るのではなく、実際に入ったひびの位置で割ること（位置と無関係な等分割は
-   違和感になる）。
-   ひびの保存角は基準文字エリア起点の相対角なので、現在の的の基準角を足してOCの座標系へ戻す
-   （drawKingReelの描画と同じ変換）。
-   ひびが2本未満だと扇形に分割できないため、その場合だけ文字セグメントの境界で割る
-   （_KING_MAX_FAILS回失敗して破砕に至る時点では通常6本あるので、これは保険の経路） */
-function _kingReelShatterBounds(w, idx) {
-  const cracks = (kingState.reelCracks && kingState.reelCracks[idx]) || [];
-  const anchor = kingReelAnchorAngle(w);
-  let bounds = cracks.map(c => _norm2pi(c.angle + anchor)).sort((a, b) => a - b);
-  /* ほぼ同じ角度のひびが重なると極端に細い破片ができるのでまとめる */
-  const MIN_GAP = 0.12;
-  bounds = bounds.filter((a, i) => i === 0 || a - bounds[i - 1] > MIN_GAP);
-  /* 先頭と末尾が2π跨ぎで近すぎる場合も末尾を落とす */
-  if (bounds.length > 1 && (bounds[0] + Math.PI * 2 - bounds[bounds.length - 1]) <= MIN_GAP) bounds.pop();
-  if (bounds.length >= 2) return bounds;
-  return w.segs.map(s => _norm2pi(s.start)).sort((a, b) => a - b);
-}
-
-function startKingReelShatter() {
-  phase = 'kingShatter';
-  const pieces = [];
-  for (let idx = 0; idx < kingState.reels.length; idx++) {
-    const w = kingState.reels[idx];
-    const bounds = _kingReelShatterBounds(w, idx);
-    for (let i = 0; i < bounds.length; i++) {
-      const a0 = bounds[i];
-      const a1 = (i + 1 < bounds.length) ? bounds[i + 1] : bounds[0] + Math.PI * 2;
-      const span = a1 - a0;
-      const mid  = a0 + span / 2;                 // 的ローカルでの破片の中心角
-      const world = w.rot + mid;                  // 現在の的の向きを反映したワールド角
-      /* 細い破片ほど軽い＝速く飛ぶようにして、割れ方の不均等さを動きにも出す */
-      const spd = (2.5 + Math.random() * 3) * (1 + (Math.PI / 2 - Math.min(span, Math.PI / 2)) * 0.35);
-      pieces.push({
-        cx: w.x, cy: w.y, x: 0, y: 0,
-        vx: Math.cos(world) * spd, vy: Math.sin(world) * spd - 2.5, // 少し上向きに弾ける
-        rot: world, rotSpd: (Math.random() - 0.5) * 0.3,
-        span, mid,
-        /* 破片は的のOCを扇形にクリップして描く＝元の絵柄（文字・色）がそのまま
-           乗るので「同じ的が割れた」ように見える。OCは破砕中は生きている
-           （返却はcleanupKingBattleState/updateKingDefeatShrinkで、いずれも
-           破砕完了後に実行される）。未対応環境向けにcharも保持してフラット塗り
-           にフォールバックできるようにしておく */
-        oc: w._oc, ocR: w._ocR,
-        char: (w.segs.find(s => mid >= s.start && mid < s.start + s.span) || w.segs[0]).char,
-      });
-    }
-  }
-  kingFx.shatter = { pieces, timer: 0 };
-  playSE('kingFlash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
-}
-
-function updateKingReelShatter() {
-  /* ボス本体の呼吸・位置イージング、直前attemptの文字飛翔（まだ落下中の
-     ものが残っている場合）、レーザー演出は破砕中も止めない */
-  updateKingCommonFx();
-
-  const s = kingFx.shatter;
-  if (!s) { _startKingDefeat(); return; }
-  s.timer++;
-  for (const p of s.pieces) {
-    p.x += p.vx; p.y += p.vy;
-    p.vy += 0.3; // 重力
-    p.rot += p.rotSpd;
-  }
-  /* 全破片が画面外に出きった、または保険の上限フレームに達したら敗北確定へ
-     （破片が全て消えてから敗北が確定する順序を守る） */
-  const allGone = s.timer > KING_SHATTER_MAX_FRAMES || s.pieces.every(p => {
-    const x = p.cx + p.x, y = p.cy + p.y;
-    return x < -80 || x > W + 80 || y < -80 || y > H + 80;
-  });
-  if (allGone) {
-    kingFx.shatter = null;
-    _startKingDefeat();
-  }
-}
-
-function drawKingReelShatter() {
-  if (phase !== 'kingShatter' || !kingFx.shatter) return;
-  for (const p of kingFx.shatter.pieces) {
-    ctx.save();
-    ctx.translate(p.cx + p.x, p.cy + p.y);
-    ctx.rotate(p.rot);
-    /* 破片の形は「ひびから隣のひびまで」の扇形。回転の基準を破片の中心角に
-       置いているので、ローカルでは -span/2〜+span/2 の扇形になる */
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, KING_WR, -p.span / 2, p.span / 2);
-    ctx.closePath();
-    if (p.oc) {
-      /* 元の絵柄を扇形で切り出して貼る。rotate(-p.mid)でOCの座標系へ戻すことで、
-         OC上の角度θが この破片ローカルの (θ-mid) に来る＝割れる前と同じ位置の
-         模様がそのまま乗る */
-      ctx.save();
-      ctx.clip();
-      ctx.rotate(-p.mid);
-      ctx.drawImage(p.oc, -p.ocR, -p.ocR, p.ocR * 2, p.ocR * 2);
-      ctx.restore();
-    } else {
-      ctx.fillStyle = SEG_L[p.char]; // OC未対応環境向けフォールバック
-      ctx.fill();
-    }
-    /* 割れ口の縁を描いて破片の輪郭を立たせる */
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-/* こんがり攻撃失敗が_KING_MAX_FAILS回に達し、ルーレットが完全破壊された＝敗北。
-   所持ギヨウザの半分がキングギヨウザに吸収され、通常ゲームへ戻る。
-   演出はdrawKingVictoryと対になる構成（暗幕・ボス・タイトル・CONTINUEバッジ）に揃え、
-   勝利側との対称性を保つ */
-function _startKingDefeat() {
-  phase = 'kingDefeat';
-  kingDefeatTimer = 0;
-  /* 敗北時のking値: 0（振り出しに戻す）ではなく、途中からやり直しにする。
-     戦闘開始時点でinitKingBattleが0にリセット済みのため、ここで上書きする。
-     戻す先は予兆の窓より下にする（KING_DEFEAT_RESTART_RATIOの定義部参照） */
-  kingMeter = KING_METER_THRESHOLD * KING_DEFEAT_RESTART_RATIO;
-  lsSaveStats();
-  if (kingState) {
-    kingState.scale = 1;
-    /* 没収額は端数を切り上げる（半分を残すのではなく半分を取る側を優先）。
-       これにより所持1の場合はceil(1/2)=1で残数ゼロまで没収され、「1だったら全部没収されて
-       ゲームオーバー」という直感的な期待に一致する（floorだと1所持時に没収0になり、何も
-       没収されないまま復帰してしまう） */
-    const lost = Math.ceil(coins / 2);
-    coins -= lost;
-    kingState.lostCoins = lost; // 敗北画面での表示用（kingBattleEndでのちにkingStateがnullになるため先に記録）
-    /* 没収分はキングに取り込まれたものとしてプールし、いつかこんがり達成した時に
-       まとめて返す。敗北を重ねるほどプールが厚くなり、達成時の見返りが大きくなる。
-       永続化はlsSaveStats側 */
-    kingLostPool += lost;
-    lsSave();
-    lsSaveStats();
-  }
-  /* 敗北の瞬間、ボスBGMをテープが止まるように減速させる（stopBGMTape、予兆演出・
-     通常ゲームオーバーと同じ手法）。ここで止めないとBGMが鳴りっぱなしになり、
-     ゲームオーバーSEと被って聞こえづらい。
-     kingBattleEnd経由で通常モードへ戻る際のstartBGMTapeが現在のレートからイーズインする
-     ため、ここで止めても復帰時に自然に繋がる */
-  stopBGMTape(700);
-  playSE('gameOver');
-}
-
-function updateKingDefeat() {
-  kingDefeatTimer++;
-  /* 勝利側と同様、直前に飛ばした文字の演出（跳ね返り等）を決着後も止めない */
-  updateKingCommonFx();
-}
-
-function drawKingDefeat() {
-  if (phase !== 'kingDefeat') return;
-  /* 没収で所持ギヨウザが尽きた場合も、この「こんがり しっぱい」＋キングが縮んで
-     ギヨウザ群へ戻っていく演出を先に見せ、そのあとで通常モードのコイン枯渇ゲームオーバー
-     画面へ進む。coins<=0をここで早期分岐させて通常ゲームオーバー画面を先に出してはいけない。
-     出口の切り替えはkingBattleEnd側で行う */
-  drawKingOutcomeScreen({
-    veil: 'rgba(30,0,0,0.5)',
-    title: 'こんがり しっぱい……',
-    titleFill: '#ff6655', titleStroke: 'rgba(40,0,0,0.9)',
-    /* 没収は個数の実数ではなく割合で表示する。_startKingDefeatの没収ロジック
-       （Math.ceil(coins/2)）が常に「所持数の半分」である事実をそのまま文言にする */
-    sub: '所持ギヨウザの半数が 吸収された……',
-    subFill: '#d8d8ff', subStroke: 'rgba(0,0,0,0.85)',
-    timer: kingDefeatTimer,
-  });
-}
-
-function drawKingDefeatOutro() {
-  if (phase !== 'kingDefeatOutro' || !defeatOutro) return;
-  const o = defeatOutro;
-  ctx.save();
-  ctx.fillStyle = 'rgba(2,4,8,0.7)';
-  ctx.fillRect(0, 0, W, H);
-  for (const g of o.dumplings) drawOneDumpling(g);
-  if (o.step >= 1) {
-    /* 透明度はupdateKingDefeatOutroが確定させたo.msgAlphaを読むだけ。
-       描画本体は達成側と共通（drawOutroMsg参照） */
-    drawOutroMsg(o, '#e8e2d0', 'rgba(0,0,0,0.9)');
-  }
-  /* タップ待ちにせず時間経過で自動的に戻るため、CONTINUEバッジは出さない */
-  ctx.restore();
 }
 
 /* ════════════════ サウンドテスト ════════════════
