@@ -553,10 +553,6 @@ function _applyRenderScale(v) {
   canvas.height = Math.round(H * v);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(v, v);
-  bgGradient = ctx.createLinearGradient(0, 0, 0, H);
-  bgGradient.addColorStop(0, '#145c24');
-  bgGradient.addColorStop(0.5, '#0f5020');
-  bgGradient.addColorStop(1, '#0a3d18');
   _lastFilter = ''; // 次のdraw()で掛け直させる（要素の状態は残っているが安全側に倒す）
 }
 
@@ -616,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.14';
+const VERSION = 'v8.15';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -626,16 +622,6 @@ const GN  = '#0f5c22';
 /* canvasのfont指定で使う明朝ファミリ。フォント名は必ずここを通す（直書きしない）。
    CSS側のbody指定はフォールバックを含む別の並びなので、変更時は両方見ること */
 const FONT_MIN = "'Hiragino Mincho ProN',serif";
-
-/* ホイールハブグラジェント: 全ホイール・全トライ共通（毎トライの生成＆GCを排除）
-   ctx.scale(_dpr,_dpr)適用済み・カラー定数定義後に1回だけ生成。
-   drawWheel()内でctx.translate後に使うためグラジェント座標(0,0)は
-   常にホイール中心に正しくマッピングされる。 */
-const _WHEEL_HUB_GRD = (() => {
-  const g = ctx.createRadialGradient(0,0,0,0,0,10);
-  g.addColorStop(0,'#fffde7'); g.addColorStop(1,YD);
-  return g;
-})();
 
 const SEG_D = { 'ギ':'#7b1a1a', 'ヨ':'#164d28', 'ウ':'#7a4e00', 'ザ':'#1a2e5a',
   'こ':'#5c3a1e', 'ん':'#6e2f12', 'が':'#4a2408', 'り':'#7a4a10' };
@@ -692,7 +678,6 @@ const WYS = IS_PORTRAIT ? [186, 339, 492, 645] : [235, 235, 235, 235];
 /* ════════════════ キャッシュ・プール ════════════════ */
 
 /* ── キャッシュ（canvas生成後に初期化） ── */
-let bgGradient = null;   // 背景グラジェント（fitCanvas後に1回生成）
 let _lastFilter = '';    // canvas.style.filter の前回値（変化時のみ書き込み）
 /* getBoundingClientRect() キャッシュ: 入力ハンドラ内での強制レイアウトを排除
    fitCanvas（リサイズ時）にのみ更新する */
@@ -710,7 +695,6 @@ let _noiseBuffer = null; // 事前生成ホワイトノイズバッファ（play
 /* ?nooc: OffscreenCanvas が無い環境（iOS 16.4未満）の経路を実機で試すためのフラグ。
    コピーしたHTMLでOffscreenCanvasを消して確かめる、といった手間を無くす */
 const _HAS_OC = !_dbgFlag('nooc') && (typeof OffscreenCanvas !== 'undefined');
-const _CACHE_OK = _HAS_OC || typeof document.createElement === 'function';
 function _mkCache(w, h) {
   const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
   if (_HAS_OC) return new OffscreenCanvas(cw, ch);
@@ -736,8 +720,6 @@ let _shishiAccent = 0;         // 獅子のアクセント反応の残量フレ�
 let _bgAnimSec = 0;            // 背景の環境演出の経過秒（フレーム基準。_updateAlways参照）
 
 function _prebuildStaticLayers() {
-  /* OffscreenCanvas 未対応の古いブラウザではスキップ（通常描画にフォールバック） */
-  if (!_CACHE_OK) return;
   const oc  = _mkCache(W * _dpr, H * _dpr);
   const oc2 = oc.getContext('2d');
   oc2.scale(_dpr, _dpr);
@@ -819,7 +801,6 @@ const _COINS_FONT   = `bold 60px ${FONT_MIN}`;
 const _COINS_TEXT_H = 72;
 let _coinsTextOC = null, _coinsTextW = 0, _coinsTextColor = '', _coinsTextStr = '';
 function _ensureCoinsTextOC(color) {
-  if (!_CACHE_OK) return null;
   if (_coinsTextOC && _coinsTextStr === _cachedCoinsStr && _coinsTextColor === color) return _coinsTextOC;
   ctx.save(); ctx.font = _COINS_FONT;
   const tw = Math.ceil(ctx.measureText(_cachedCoinsStr).width) + 8;
@@ -846,7 +827,6 @@ const _BET_FONT   = IS_PORTRAIT
 const _BET_TEXT_H = 56;
 let _betTextOC = null, _betTextStr = '';
 function _ensureBetTextOC() {
-  if (!_CACHE_OK) return null;
   if (_betTextOC && _betTextStr === _cachedBetStr) return _betTextOC;
   const tw = Math.ceil(_cachedBetNumW) + 8; // _updateDisplayCaches で計測済み
   if (!_betTextOC || _betTextOC.width < tw * _dpr) {
@@ -891,14 +871,12 @@ function _updateDisplayCaches() {
 }
 
 /* ── アイテムオブジェクトプール ──
-   makeItem() が毎回オブジェクトを生成するのを防ぐ。
-   ニラの配置の器も一度確保したら書き込み直して再利用する（makeItem参照）。 */
+   makeItem() が毎回オブジェクトを生成するのを防ぐ。 */
 const _ITEM_POOL_SIZE = 300;
 function _makePoolItem() {
   return {
     x:0, y:0, vx:0, vy:0, rot:0, rotSpd:0, size:0, age:0, _flush:false,
-    skinL:'', skinD:'', bodyGrd:null, _spr:null, _dead:true, _rotPhase:0,
-    nira: null, // フォールバック経路でだけ使う。makeItem が初回に確保する
+    _spr:null, _dead:true, _rotPhase:0,
   };
 }
 const _itemPool = [];
@@ -1108,7 +1086,6 @@ let _cachedSyncChainVal = -1, _cachedSyncChainStr = '';
    毎フレーム stroke で描く（ブラーなしの stroke は安価）。 */
 const _GLOW_LEVELS = 8;
 const _wheelGlowSprites = (() => {
-  if (!_CACHE_OK) return null;
   const arr = [];
   const OFF = 4096; // 本体リングを画面外へ追い出すオフセット
   for (let i = 0; i < _GLOW_LEVELS; i++) {
@@ -1147,7 +1124,7 @@ function _buildPointerSprite(fill, glow, blur) {
   c.closePath(); c.fill();
   return { oc, ox: bx0 - _PTR_PAD, oy: by0 - _PTR_PAD, w: cw, h: ch };
 }
-const _pointerSprites = (!_CACHE_OK) ? null : {
+const _pointerSprites = {
   inactive: _buildPointerSprite(YD, null, 0),
   locked:   _buildPointerSprite('#cc2200', '#ff4422', 18),
   active:   [0,1,2,3].map(i => _buildPointerSprite(Y, Y, 18 + (i / 3) * 18)),
@@ -1157,7 +1134,6 @@ const _pointerSprites = (!_CACHE_OK) ? null : {
    毎フレーム最大256個 × shadowBlur=6 の save/restore を drawImage に置換。 */
 const _GIGI_SPRITE_R = 4, _GIGI_SPRITE_HALF = 14; // 描画半径4 + グロー余白10
 const _gigiSparkSprites = (() => {
-  if (!_CACHE_OK) return null;
   const m = {};
   for (const col of ['#fff', '#ffaa00', '#ff4400']) {
     const oc = _mkCache(_GIGI_SPRITE_HALF * 2, _GIGI_SPRITE_HALF * 2);
@@ -1512,7 +1488,6 @@ function _releaseWheelOCs(ws) {
 const _RESULT_OC_HALF = 52; // 44px 文字 + 最大グロー30 を収める半径
 const _NO_RES_BLUR = _dbgFlag('noresblur'); // 下記の焼き込みからグローを外す（調査用）
 function _buildResultOC(w) {
-  if (!_CACHE_OK) return;
   const _t0 = PERF_ON ? performance.now() : 0;
   _mark('resOC');
   const sz = _RESULT_OC_HALF * 2 * _dpr;
@@ -5195,18 +5170,7 @@ const _WHEEL_OC_OPT = {
 };
 
 function _buildWheelOC(w) {
-  if (!_CACHE_OK) return;
   _buildSegWheelOC(w, _WHEEL_OC_OPT);
-}
-
-/* セグメント塗りのグラジェント（OffscreenCanvas未対応環境のフォールバック描画用）。
-   生成箇所を1つにまとめ、必要になった時点でだけ作れるようにする */
-function _segFallbackGradient(char, mid) {
-  const grd = ctx.createRadialGradient(
-    Math.cos(mid)*WR*0.3, Math.sin(mid)*WR*0.3, 0, 0, 0, WR);
-  grd.addColorStop(0, SEG_L[char]);
-  grd.addColorStop(1, SEG_D[char]);
-  return grd;
 }
 
 function createWheel(x, y, feverChar) {
@@ -5219,23 +5183,16 @@ function createWheel(x, y, feverChar) {
   let angle = 0;
   const segs = chars.map((c, i) => {
     const span = (weights[i] / sum) * Math.PI * 2;
-    const mid  = angle + span / 2;
-    /* gradient は OffscreenCanvas 未対応時のフォールバック描画専用。対応環境では
-       _buildSegWheelOC が OC 座標で作り直すので、ここで作ると毎トライ16個
-       （4的×4セグメント）の CanvasGradient をそのまま捨てることになる。
-       トライの切り替わりは、稀な引っかかりが出るとしたらGCが疑わしい場所なので、
-       作らずに済むものは作らない。未対応環境では描画側が必要になった時点で
-       作る（_segFallbackGradient参照）。
-       font は OC 描画でも使うので常に作る（fontOf: s => s.font） */
-    const grd = !_CACHE_OK ? _segFallbackGradient(c, mid) : null;
+    /* 塗りのグラデーションは _buildSegWheelOC が OC 座標で作るので、ここでは持たない。
+       font は OC 描画でも使う（fontOf: s => s.font） */
     const fontSize = Math.max(12, Math.min(33, (span / (Math.PI * 2)) * 116));
     const font = `bold ${fontSize}px ${FONT_MIN}`;
-    const s = { char: c, start: angle, span, gradient: grd, font };
+    const s = { char: c, start: angle, span, font };
     angle += span;
     return s;
   });
   const w = {
-    x, y, segs, hubGrd: _WHEEL_HUB_GRD, // フォールバック用（通常は _buildWheelOC で描画済み）
+    x, y, segs,
     rot:       Math.random() * Math.PI * 2,
     speed:     (Math.random() * 0.08 + 0.18) * (isSlowSpin ? _slowHandRate(bet) : 1),
     locked:    false,
@@ -5260,8 +5217,7 @@ function hitResult(w, pointer = IS_PORTRAIT ? 0 : -Math.PI / 2) { // 縦画面�
 
 /* こんがりミニリール: キングギヨウザ戦の砲台代わり。createWheel/_buildWheelOC/hitResult と
    同じ位置判定（wheelの回転角に対する固定ポインタ）をそのまま再利用し、通常ゲームと
-   同じ「1本ずつ順番にタップして止める」操作感にする（OffscreenCanvas必須環境限定のため
-   フォールバック描画は持たない：ボス戦自体が非対応環境では発生しない） */
+   同じ「1本ずつ順番にタップして止める」操作感にする */
 function _createKingReel(x, y, weights) {
   /* 文字の並びはKING_CHARSの順（こ→ん→が→り）で固定する。シャッフルすると
      的ごと・再スピンごとに並びが変わって「こんがり」と読めない。角度は0から昇順に
@@ -5904,9 +5860,8 @@ function _updateAlways() {
      蓄積と実績の条件は _kingOmenProgress が両方まとめて持つ（どちらかが足りなければ0を
      返す）ので、ここで実績を別に見ない。以前は「こんがり以外の全実績」を要求していたが、
      それだと初回は最後の実績が解除された瞬間にいきなり最終段から始まり、浅い段が一度も
-     起きなかった。
-     OffscreenCanvas非対応環境は戦闘自体が起きない（_initBossBattle）ので、こちらも出さない */
-  if (_CACHE_OK && _omenFx.length === 0 && _isSpinPhase() && !isFever) {
+     起きなかった。 */
+  if (_omenFx.length === 0 && _isSpinPhase() && !isFever) {
     const u = _kingOmenProgress();
     if (u > 0 && Math.random() < _kingOmenLerp(KING_OMEN_FX_RATE, u)) _spawnOmenFx();
   }
@@ -6311,8 +6266,7 @@ function drawWorms(list) {
    （最大240個）の描画が idle の約20倍のコストを占める。
    起動時に皮色×具配置のバリアントを OC へ焼き込み、毎フレームは回転付き drawImage 1回に
    置換する（実測 約2.5倍高速）。
-   個体差は _ITEM_VARIANT_N 種に量子化されるが落下群では知覚できない。
-   OffscreenCanvas 未対応時は null → パス描画へフォールバック */
+   個体差は _ITEM_VARIANT_N 種に量子化されるが落下群では知覚できない */
 const _ITEM_VARIANT_N   = 12;
 /* ギヨウザ本体の楕円（サイズ s に対する比）。中心は s*CY だけ下、半径は RX/RY。
    この形は輪郭だけでなく、影の広がり・湯気の湧き出す弧・スプライトの中身の矩形・
@@ -6351,7 +6305,6 @@ const GYOZA_NIRA_ALPHA = 0.8;
 const _ITEM_SPRITE_REF  = 42; // 焼き込み基準サイズ（makeItem の size 上限）
 const _ITEM_SPRITE_HALF = 32; // 影・具を含む必要半径（≈0.75×REF + 余白）
 const _itemVariantSprites = (() => {
-  if (!_CACHE_OK) return null;
   const arr = [];
   const s = _ITEM_SPRITE_REF;
   const nira = _newNiraSpec(); // 焼き込んだら読み捨てるので、バリアント間で使い回す
@@ -6378,7 +6331,6 @@ const _itemVariantSprites = (() => {
    sx/sy/sw/sh はスプライトの画素、x/y/w/h は基準サイズ(_ITEM_SPRITE_REF)での
    中心からの位置。描くときは size/REF を掛ける */
 const _ITEM_SPRITE_RECT = (() => {
-  if (!_itemVariantSprites) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const oc of _itemVariantSprites) {
     const d = oc.getContext('2d').getImageData(0, 0, oc.width, oc.height).data;
@@ -6409,20 +6361,8 @@ function makeItem(x, y, vx, vy) {
   g.rotSpd   = (Math.random() - 0.5) * 0.14;
   g._rotPhase = Math.random() * Math.PI * 2;
   g.size   = size;
-  if (_itemVariantSprites) {
-    /* スプライトモード: 外観は焼き込み済みバリアントを割り当て（皮・具の生成をスキップ） */
-    g._spr = _itemVariantSprites[(Math.random() * _ITEM_VARIANT_N) | 0];
-    return g;
-  }
-  g._spr   = null;
-  const skin = _gyozaSkinPalette();
-  g.skinL  = skin.skinL;
-  g.skinD  = skin.skinD;
-  /* ボディグラジェントをここで1回だけ生成してキャッシュ */
-  g.bodyGrd = _gyozaBodyGradient(ctx, size, g.skinL, g.skinD);
-  /* ニラの器はプール要素ごとに初回だけ作り、以後は書き込み直して使い回す（GCを出さない）。
-     プールの生成時に作らないのは、プールがニラの定数より先に評価されるため */
-  _gyozaNiraSpec(g.nira || (g.nira = _newNiraSpec()), Math.random, false);
+  /* 外観は焼き込み済みバリアントから選ぶ（_itemVariantSprites 参照） */
+  g._spr = _itemVariantSprites[(Math.random() * _ITEM_VARIANT_N) | 0];
   return g;
 }
 
@@ -6606,11 +6546,7 @@ function updateItems() {
 }
 
 /* ── ギヨウザの外観パラメータ ──────────────────────────
-   アイテムは「起動時に焼き込んだスプライトを転写する」経路と「毎フレーム
-   ベクタで描く」フォールバック経路の2つを持ち、同じ見た目を別々のコードで
-   作っていた（片方を直してもう片方が古いまま、が起きる形）。
-   両経路が同じ関数を呼ぶようにして、外観の定義を1箇所にまとめる。
-   Math.randomを消費する順序は 皮→ニラ。
+   外観の定義はここと _drawGyozaBody に集める。Math.randomを消費する順序は 皮→ニラ。
    これらは起動時のスプライト生成（即時実行）からも呼ばれるが、関数宣言は
    ホイスティングされるため定義位置より前から参照できる */
 
@@ -6709,7 +6645,7 @@ function _drawGyozaShadow(c2, s) {
   c2.restore();
 }
 
-/* ギヨウザ本体を描く。落下ギヨウザ（スプライトとフォールバック）・幽霊・ギョギョ魚・キングが
+/* ギヨウザ本体を描く。落下ギヨウザ（起動時のスプライト）・幽霊・ギョギョ魚・キングが
    すべてここを通るので、本体の見た目はここだけで決まる。影・オーラ・輪・尾・顔は呼び出し側が描く。
    nira: ニラの配置（_gyozaNiraSpec の結果）。省略するとニラを描かない
    part を渡すと層を選んで描く。省略時は全部を元の順序で描く。
@@ -6779,20 +6715,13 @@ function drawOneItem(g) {
   ctx.translate(g.x, g.y);
   ctx.rotate(g.rot);
 
-  if (g._spr) {
-    /* スプライトモード: 影・本体・ニラを焼き込み済みのOCを基準サイズ比で1回転写 */
-    const k = s / _ITEM_SPRITE_REF, r = _ITEM_SPRITE_RECT;
-    if (r) ctx.drawImage(g._spr, r.sx, r.sy, r.sw, r.sh, r.x * k, r.y * k, r.w * k, r.h * k);
-    else {
-      const h = _ITEM_SPRITE_HALF * k;
-      ctx.drawImage(g._spr, -h, -h, h * 2, h * 2);
-    }
-    ctx.restore();
-    return;
+  /* 影・本体・ニラを焼き込み済みのOCを基準サイズ比で1回転写 */
+  const k = s / _ITEM_SPRITE_REF, r = _ITEM_SPRITE_RECT;
+  if (r) ctx.drawImage(g._spr, r.sx, r.sy, r.sw, r.sh, r.x * k, r.y * k, r.w * k, r.h * k);
+  else {
+    const h = _ITEM_SPRITE_HALF * k;
+    ctx.drawImage(g._spr, -h, -h, h * 2, h * 2);
   }
-
-  _drawGyozaShadow(ctx, s);
-  _drawGyozaBody(ctx, s, 0, 0, g.bodyGrd, undefined, g.nira);
   ctx.restore();
 }
 
@@ -6969,19 +6898,9 @@ function drawGigigigi() {
   /* 火花: プリレンダ済みグロースプライトを drawImage（shadowBlur・save/restore なし） */
   for (const s of gigiSparks) {
     ctx.globalAlpha = Math.min(1, (s.life / 24) * intensity);
-    const sp = _gigiSparkSprites && _gigiSparkSprites[s.color];
-    if (sp) {
-      const half = _GIGI_SPRITE_HALF * (s.r / _GIGI_SPRITE_R);
-      ctx.drawImage(sp, s.x - half, s.y - half, half * 2, half * 2);
-    } else {
-      /* フォールバック: OffscreenCanvas 未対応時 */
-      ctx.save();
-      ctx.fillStyle = s.color;
-      ctx.shadowColor = s.color;
-      ctx.shadowBlur = 6;
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
+    const sp = _gigiSparkSprites[s.color];
+    const half = _GIGI_SPRITE_HALF * (s.r / _GIGI_SPRITE_R);
+    ctx.drawImage(sp, s.x - half, s.y - half, half * 2, half * 2);
   }
   ctx.globalAlpha = 1;
 
@@ -7560,10 +7479,7 @@ function _kingOmenProgress() {
 /* 予兆のギヨウザを1組ぶん出す（KING_OMEN_FX_*の定義部参照）。
    外周半径と中心は本番の収束と同じ値を使う。同じ場所から同じように現れることが、
    これから起きることの予告になる。
-   g.size を書き換えてよいのは、スプライトモード（_itemVariantSprites）では drawOneItem が
-   基準サイズとの比で拡縮するだけだから。パス描画側はボディグラジェントを生成時のサイズで
-   焼いているので書き換えると崩れるが、_CACHE_OK が false のときはキング戦自体が起きない
-   （_initBossBattle が即 _kingBattleEnd する）ため、呼び出し側で _CACHE_OK を条件にしている */
+   g.size を書き換えてよいのは、drawOneItem がスプライトを基準サイズとの比で拡縮するだけだから */
 function _spawnOmenFx() {
   const t = _kingOmenProgress();
   const n = Math.min(KING_OMEN_FX_N_MAX, 1 + Math.floor(t * KING_OMEN_FX_N_MAX));
@@ -7777,7 +7693,7 @@ function _drawKingFace(c, s, pct = 0, gaze = 0) {
 }
 
 function _buildBossOC() {
-  if (_bossOC || !_CACHE_OK) return;
+  if (_bossOC) return;
   const s = _BOSS_S = IS_PORTRAIT ? 300 : 380;
   const half = Math.ceil(s * 0.75);
   const REF = 42, kk = s / REF;
@@ -8794,7 +8710,7 @@ let _scorchBlotSprite = null;
 
 /* 焼き目スタンプの元絵を初回に1回だけ生成（不定形の焦げ跡×3層） */
 function _buildScorchBlotSprite() {
-  if (_scorchBlotSprite || !_CACHE_OK) return;
+  if (_scorchBlotSprite) return;
   const sz = 64, half = sz / 2;
   const oc = _mkCache(sz, sz);
   const c = oc.getContext('2d');
@@ -8842,7 +8758,7 @@ function _initBossBattle() {
   _kingMeterAtBattleStart = kingGyozaMeter;
   kingGyozaMeter = 0;
   lsSaveStats();
-  if (!_CACHE_OK || !_bossOC) { _kingBattleEnd(); return; } // 非対応環境は戦闘なしで復帰
+  if (!_bossOC) { _kingBattleEnd(); return; } // 本体スプライトが無ければ戦闘なしで復帰
   _buildScorchBlotSprite();
   _buildKingFlashSprite(); // 5音目アクセントの焦げ跡発光（戦闘中に初回生成しないよう先に確保）
   /* 縦画面: 的（こんがりミニリール）のサイズを、左右上部のアイコン（トロフィー/ポーズ・
@@ -8869,8 +8785,7 @@ function _initBossBattle() {
      GC待ちで滞留する（キング的OCと同じリーククラス）。合成状態のキャッシュキー
      （_toneRenderedPct等）は_king側に持つため、canvasを使い回しても過去の戦闘の内容が
      誤って再利用されることはない */
-  /* liveOCは_buildBossOC（予兆の入口）で確保済み。ここでの確保は保険
-     （OffscreenCanvas未対応環境は上で復帰するので通常は通らない）。
+  /* liveOCは_buildBossOC（予兆の入口）で確保済み。ここでの確保は保険。
      1140x1140＝約130万画素の確保を戦闘開始のフレームで行うと、的が回り始める瞬間に
      ぶつかって回転の速度ムラになる。確保は必ず予兆側で済ませておくこと */
   const liveOC = _bossOC.liveOC ||
@@ -9916,7 +9831,7 @@ function _kingPushHit(f) {
 /* 焦げ跡の発光用スプライト（アクセントで一斉に光らせる）。
    色停止以外は_buildSteamSpriteと同一なので_buildRadialSpriteに委ねる */
 function _buildKingFlashSprite() {
-  if (_kingFlashSprite || !_CACHE_OK) return;
+  if (_kingFlashSprite) return;
   _kingFlashSprite = _buildRadialSprite([
     [0,    'rgba(255,226,150,0.95)'],
     [0.45, 'rgba(255,180,70,0.45)'],
@@ -10302,7 +10217,7 @@ const _wrapPi = a => { a = (a + Math.PI) % (2 * Math.PI); return (a < 0 ? a + 2 
    回り出す瞬間に引っかかる。入力のタイミングが絡まない達成の瞬間に済ませる */
 function _buildKingSpinLayers() {
   _kingSpinSphere = _kingSpinSurface = null;
-  if (!_king || !_CACHE_OK || !_bossOC) return;
+  if (!_king || !_bossOC) return;
   const s = _BOSS_S, half = _king.half, REF = 42, kk = s / REF, pct = _king.cookPct / 100;
   const prep = () => {
     const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
@@ -10674,7 +10589,7 @@ function drawKingCookGauge(achieved = false) {
 /* 湯気スプライト（柔らかい放射状グラデーションの円）を1回だけ生成する。
    保持する形は_kingFlashSpriteと揃えて生キャンバス1枚 */
 function _buildSteamSprite() {
-  if (_steamSprite || !_CACHE_OK) return;
+  if (_steamSprite) return;
   _steamSprite = _buildRadialSprite([
     [0,    'rgba(255,250,240,0.55)'],
     [0.55, 'rgba(255,250,240,0.24)'],
@@ -13254,7 +13169,6 @@ function _drawCloudTo(c2, cx, cy, sc, alpha, rot) {
   c2.fill();
   c2.restore();
 }
-function drawCloud(cx, cy, sc, alpha, rot) { _drawCloudTo(ctx, cx, cy, sc, alpha, rot); }
 
 /* 雲を1tickぶん流す。画面外へ出たら自分の幅ぶん余分に回り込ませる
    （幅を含めずに折り返すと、端で消えて端から現れる） */
@@ -13460,7 +13374,6 @@ function _drawShishiPair() {
     ctx.restore();
   }
 }
-function drawShishi(cx, cy, sc, mirX) { _drawShishiTo(ctx, cx, cy, sc, mirX); }
 
 /* ════════════════ Draw helpers ════════════════ */
 
@@ -13979,25 +13892,11 @@ function draw() {
     }
   }
 
-  /* 背景 + 吉祥雲 + 獅子 + 上下帯: すべて焼き込み済みの静的レイヤー1枚を drawImage
-     キャッシュ未構築のフォールバックは通常描画（_mkCache により実質到達しない） */
-  if (_staticLayerCanvas) {
-    ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
-    _drawClouds();
-    _drawShishiPair();
-  } else {
-    ctx.fillStyle = bgGradient || '#0f5020'; ctx.fillRect(0,0,W,H);
-    for (let i=0;i<CLOUDS.length;i++) drawCloud(CLOUDS[i].x,CLOUDS[i].y,CLOUDS[i].s,CLOUDS[i].a,_cloudRot[i]);
-    if (!IS_PORTRAIT) {
-      ctx.globalAlpha = 0.6;
-      drawShishi(SHISHI_X[0], SHISHI_Y, SHISHI_SCALE, false);
-      drawShishi(SHISHI_X[1], SHISHI_Y, SHISHI_SCALE, true);
-      ctx.globalAlpha = 1;
-    }
-    /* 上下帯 */
-    ctx.fillStyle=Y; ctx.fillRect(0,0,W,6); ctx.fillRect(0,H-6,W,6);
-    ctx.globalAlpha=0.4; ctx.fillRect(0,8,W,3); ctx.fillRect(0,H-11,W,3); ctx.globalAlpha=1;
-  }
+  /* 背景＋上下帯は焼き込み済みの静的レイヤー1枚を貼る（fitCanvas が起動時に作る）。
+     雲と獅子は動かすのでスプライトを変換して描く */
+  ctx.drawImage(_staticLayerCanvas, 0, 0, W, H);
+  _drawClouds();
+  _drawShishiPair();
 
   /* 弓 (縦画面のみ) */
   if (IS_PORTRAIT && _isSpinPhase()) drawBow();
@@ -14095,13 +13994,8 @@ function _drawBetCenterLabel(cx, cy, gap, labelFs) {
   ctx.font = `bold ${labelFs}px ${FONT_MIN}`;
   ctx.fillText('BET', startX, cy);
   const oc = _ensureBetTextOC();
-  if (oc) {
-    ctx.drawImage(oc, 0, 0, oc.width, _BET_TEXT_H * _dpr,
-      startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, oc.width / _dpr, _BET_TEXT_H);
-  } else {
-    ctx.font = _BET_FONT;
-    ctx.fillText(_cachedBetStr, startX + wBet + gap, cy);
-  }
+  ctx.drawImage(oc, 0, 0, oc.width, _BET_TEXT_H * _dpr,
+    startX + wBet + gap - 4, cy - _BET_TEXT_H / 2, oc.width / _dpr, _BET_TEXT_H);
 }
 
 /* ── BETボタン描画ヘルパー ── */
@@ -14127,46 +14021,19 @@ function drawWheel(i) {
      fill/stroke/strokeText/fillText すべてに乗るので 8〜12セグ × 4操作 =
      32〜48パス/フレームになり、Input Delay が 17〜27ms 悪化する */
   if (active) {
-    if (_wheelGlowSprites) {
-      /* プリレンダ済みグロー（bp 8段階量子化）+ クリスプなリング本体 */
-      const g = _wheelGlowSprites[Math.min(_GLOW_LEVELS - 1, (bp * _GLOW_LEVELS) | 0)];
-      ctx.drawImage(g.oc, -g.half, -g.half);
-      ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
-      ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
-    } else {
-      /* フォールバック: OffscreenCanvas 未対応時のみ shadowBlur を使用 */
-      ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
-      ctx.shadowColor=Y; ctx.shadowBlur=50+bp*40;
-      ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
-      ctx.shadowBlur=0; // セグメント描画前にリセット
-    }
+    /* プリレンダ済みグロー（bp 8段階量子化）+ クリスプなリング本体 */
+    const g = _wheelGlowSprites[Math.min(_GLOW_LEVELS - 1, (bp * _GLOW_LEVELS) | 0)];
+    ctx.drawImage(g.oc, -g.half, -g.half);
+    ctx.beginPath(); ctx.arc(0,0,WR+2,0,Math.PI*2);
+    ctx.strokeStyle=Y; ctx.lineWidth=3; ctx.stroke();
   }
 
   /* セグメント・文字・ハブ: 事前描画済み OffscreenCanvas を回転して貼る
      文字はホイール中心が下方になるよう _buildWheelOC で固定済み */
-  if (w._oc) {
-    ctx.save();
-    ctx.rotate(w.rot);
-    ctx.drawImage(w._oc, -_WHEEL_OC_R, -_WHEEL_OC_R, _WHEEL_OC_R*2, _WHEEL_OC_R*2);
-    ctx.restore();
-  } else {
-    /* フォールバック: OffscreenCanvas 未対応時はパス描画（文字は回転なし） */
-    for (const s of w.segs) {
-      const a1=s.start+w.rot, a2=a1+s.span, mid=a1+s.span/2;
-      ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,WR,a1,a2); ctx.closePath();
-      /* createWheelでは作らない場合があるので、この経路に入った時点で用意する */
-      if (!s.gradient) s.gradient = _segFallbackGradient(s.char, s.start + s.span/2);
-      ctx.fillStyle=s.gradient; ctx.fill();
-      ctx.strokeStyle='rgba(245,208,32,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
-      const tx=Math.cos(mid)*WR*0.62, ty=Math.sin(mid)*WR*0.62;
-      ctx.save(); ctx.translate(tx,ty);
-      ctx.font=s.font; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.lineWidth=4; ctx.strokeStyle='rgba(0,0,0,0.88)'; ctx.strokeText(s.char,0,0);
-      ctx.fillStyle='#fffde7'; ctx.fillText(s.char,0,0); ctx.restore();
-    }
-    ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2);
-    ctx.fillStyle=w.hubGrd; ctx.fill();
-  }
+  ctx.save();
+  ctx.rotate(w.rot);
+  ctx.drawImage(w._oc, -_WHEEL_OC_R, -_WHEEL_OC_R, _WHEEL_OC_R*2, _WHEEL_OC_R*2);
+  ctx.restore();
   ctx.beginPath(); ctx.arc(0,0,WR+4,0,Math.PI*2);
   ctx.strokeStyle=active?Y:YD; ctx.lineWidth=active?4.5+bp*2.5:2; ctx.stroke();
   /* ビート拍動: 外側に広がる拍動リング（テーブルで文字列生成ゼロ） */
@@ -14180,26 +14047,10 @@ function drawWheel(i) {
 
   /* ポインタ三角形: PC=▼(上), 縦=◀(右から左向き)
      プリレンダ済みスプライト（グロー込み）を状態別に選択して drawImage */
-  if (_pointerSprites) {
-    const sp = w.locked ? _pointerSprites.locked
-             : active   ? _pointerSprites.active[Math.min(3, (bp * 4) | 0)]
-             : _pointerSprites.inactive;
-    ctx.drawImage(sp.oc, sp.ox, sp.oy, sp.w, sp.h);
-  } else {
-    /* フォールバック: OffscreenCanvas 未対応時のみ shadowBlur を使用 */
-    if (active || w.locked) {
-      ctx.shadowColor = w.locked ? '#ff4422' : Y;
-      ctx.shadowBlur  = 18 + bp * 18;
-    }
-    if (IS_PORTRAIT) {
-      ctx.beginPath(); ctx.moveTo(WR+5,0); ctx.lineTo(WR+26,-12); ctx.lineTo(WR+26,12); ctx.closePath();
-    } else {
-      ctx.beginPath(); ctx.moveTo(0,-WR-5); ctx.lineTo(-13,-WR-28); ctx.lineTo(13,-WR-28); ctx.closePath();
-    }
-    ctx.fillStyle = w.locked ? '#cc2200' : (active ? Y : YD);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  }
+  const sp = w.locked ? _pointerSprites.locked
+           : active   ? _pointerSprites.active[Math.min(3, (bp * 4) | 0)]
+           : _pointerSprites.inactive;
+  ctx.drawImage(sp.oc, sp.ox, sp.oy, sp.w, sp.h);
 
   if (w.result) {
     /* 結果文字はロック時に一度だけ OC へ焼き込み（グロー＋グリフラスタライズは1回のみ）
@@ -14209,16 +14060,7 @@ function drawWheel(i) {
     ctx.save();
     if (IS_PORTRAIT) ctx.translate(WR+58, 0); else ctx.translate(0, WR+58);
     ctx.scale(pop,pop);
-    if (w._resOC) {
-      ctx.drawImage(w._resOC, -_RESULT_OC_HALF, -_RESULT_OC_HALF, _RESULT_OC_HALF*2, _RESULT_OC_HALF*2);
-    } else {
-      /* フォールバック: OffscreenCanvas 未対応時 */
-      const [fillC, glowC] = _syncBarColor(w.syncScore);
-      ctx.font=`bold 44px ${FONT_MIN}`;
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.shadowColor=glowC; ctx.shadowBlur=10 + w.syncScore * 20;
-      ctx.fillStyle=fillC; ctx.fillText(w.result,0,0);
-    }
+    ctx.drawImage(w._resOC, -_RESULT_OC_HALF, -_RESULT_OC_HALF, _RESULT_OC_HALF*2, _RESULT_OC_HALF*2);
     ctx.restore();
   }
   ctx.restore();
@@ -14335,15 +14177,8 @@ function drawCoinHeader() {
   /* コイン数（大）: プリレンダOC を drawImage（静止時のグリフラスタライズをゼロに） */
   ctx.globalAlpha = blink;
   const _cOC = _ensureCoinsTextOC(mainColor);
-  if (_cOC) {
-    ctx.drawImage(_cOC, 0, 0, _coinsTextW * _dpr, _COINS_TEXT_H * _dpr,
-      cx - _coinsTextW / 2, py + ph / 2 - 1 - _COINS_TEXT_H / 2, _coinsTextW, _COINS_TEXT_H);
-  } else {
-    ctx.font = _COINS_FONT;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = mainColor;
-    ctx.fillText(_cachedCoinsStr, cx, py + ph / 2 - 1);
-  }
+  ctx.drawImage(_cOC, 0, 0, _coinsTextW * _dpr, _COINS_TEXT_H * _dpr,
+    cx - _coinsTextW / 2, py + ph / 2 - 1 - _COINS_TEXT_H / 2, _coinsTextW, _COINS_TEXT_H);
 
   /* ベストスコア（小・右下） */
   if (bestCoins > coins) {
@@ -14514,7 +14349,7 @@ function touchToCanvas(touch) {
 /* リーチ用フリッカーリングのスプライト（初回リーチ時に1回だけ生成、shadowBlur 排除） */
 let _reachRingSprite = null;
 function _getReachRingSprite() {
-  if (_reachRingSprite || !_CACHE_OK) return _reachRingSprite;
+  if (_reachRingSprite) return _reachRingSprite;
   const r = WR + 8, blur = 20;
   const half = Math.ceil(r + blur * 1.6 + 4);
   const oc = _mkCache(half * 2 * _dpr, half * 2 * _dpr);
@@ -14552,21 +14387,9 @@ function drawReachOverlay() {
   if (reachTimer > REACH_DECEL_FRAMES) {
     const flicker = Math.floor(reachTimer / 8) % 2 === 0 ? 1 : 0.5;
     const rs = _getReachRingSprite();
-    if (rs) {
-      ctx.globalAlpha = flicker * fadeIn; // 基本アルファ0.7はスプライトに焼き込み済み
-      ctx.drawImage(rs.oc, wx - rs.half, wy - rs.half, rs.half * 2, rs.half * 2);
-      ctx.globalAlpha = 1;
-    } else {
-      /* フォールバック: OffscreenCanvas 未対応時 */
-      ctx.beginPath();
-      ctx.arc(wx, wy, WR + 8, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(245,208,32,${0.7 * flicker * fadeIn})`;
-      ctx.lineWidth = 4;
-      ctx.shadowColor = Y;
-      ctx.shadowBlur  = 20;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
+    ctx.globalAlpha = flicker * fadeIn; // 基本アルファ0.7はスプライトに焼き込み済み
+    ctx.drawImage(rs.oc, wx - rs.half, wy - rs.half, rs.half * 2, rs.half * 2);
+    ctx.globalAlpha = 1;
   }
 
   ctx.restore();
@@ -14664,7 +14487,7 @@ function drawEndOverlay() {
    エンド画面・リーチ演出のタイトルは固定文字列 × 固定スタイルのため、初回使用時にグロー込みで
    OC へ焼き、毎フレームは drawImage 1回にする（shadowBlur は Canvas 2D 最重量級の GPU 操作。
    このプロジェクトでは shadowBlur を毎フレーム描画から全廃する方針）。
-   LRU 上限でメモリを制限。OffscreenCanvas 未対応時はパス描画へフォールバック */
+   LRU 上限でメモリを制限 */
 const _titleOCCache = new Map(); // key → { oc, w, h }
 const _TITLE_CACHE_MAX = 8;
 function _titleCachePrune() {
@@ -14694,14 +14517,6 @@ function _mkTextOC(text, font, lw, glowB) {
 }
 
 function _outTextCached(key, text, font, fill, stroke, lw, glowC, glowB, x, y) {
-  if (!_CACHE_OK) {
-    ctx.font = font;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.shadowColor = glowC; ctx.shadowBlur = glowB;
-    outText(text, x, y, fill, stroke, lw);
-    ctx.shadowBlur = 0;
-    return;
-  }
   let e = _titleOCCache.get(key);
   if (!e) {
     const { oc, c, w, h } = _mkTextOC(text, font, lw, glowB);
@@ -14906,17 +14721,11 @@ function drawEndScreen() {
       grad.addColorStop(0.5, `hsl(${(hue+120)%360},100%,65%)`);
       grad.addColorStop(0.75,`hsl(${(hue+200)%360},100%,65%)`);
       grad.addColorStop(1,   `hsl(${(hue+300)%360},100%,65%)`);
-      if (_CACHE_OK) {
-        const e = _titleOCCache.get('rjp_t') ||
-          _bakeGlowStroke('rjp_t', '超大当たり', _rjFont, 'rgba(0,0,0,0.92)', _fsR(13), '#fff', 60);
-        ctx.drawImage(e.oc, -e.w/2, -e.h/2, e.w, e.h);
-        ctx.fillStyle = grad;
-        ctx.fillText('超大当たり', 0, 0);
-      } else {
-        ctx.shadowColor = '#fff'; ctx.shadowBlur = 60;
-        outText('超大当たり',0,0, grad, 'rgba(0,0,0,0.92)', _fsR(13));
-        ctx.shadowBlur = 0;
-      }
+      const e = _titleOCCache.get('rjp_t') ||
+        _bakeGlowStroke('rjp_t', '超大当たり', _rjFont, 'rgba(0,0,0,0.92)', _fsR(13), '#fff', 60);
+      ctx.drawImage(e.oc, -e.w/2, -e.h/2, e.w, e.h);
+      ctx.fillStyle = grad;
+      ctx.fillText('超大当たり', 0, 0);
       _outTextCached('rjp_s', 'リーチ達成！ ギ ヨ ウ ザ', `bold ${_fs(36)}px ${FONT_MIN}`,
         '#ffffff', 'rgba(0,0,0,0.88)', _fs(8), '#fff', 22, 0, _fy(92));
       ctx.restore();
@@ -16230,12 +16039,6 @@ function fitCanvas() {
   );
   canvas.style.width  = Math.floor(W * scale) + 'px';
   canvas.style.height = Math.floor(H * scale) + 'px';
-  /* 背景グラジェントを再生成（canvasサイズ変化時のみ） */
-  bgGradient = ctx.createLinearGradient(0, 0, 0, H);
-  bgGradient.addColorStop(0, '#145c24');
-  bgGradient.addColorStop(0.5, '#0f5020');
-  bgGradient.addColorStop(1, '#0a3d18');
-
   /* 静的レイヤー（雲・獅子）を OffscreenCanvas に事前描画
      毎フレームの Canvas パス命令群 → drawImage() 1回に圧縮 */
   _prebuildStaticLayers();
