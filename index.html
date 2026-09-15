@@ -612,7 +612,7 @@ function _rsApplyPending() {
 }
 
 
-const VERSION = 'v8.16';
+const VERSION = 'v8.17';
 
 /* ── カラー ── */
 const Y   = '#f5d020';
@@ -2235,7 +2235,7 @@ function _rebaseAudioClockState() {
   _bgmRateStart = 0; _bgmRateDur = 0;
   /* 勝利演出の「チーン」の時刻。nullにすると音声時計を諦めてフレーム側の代用へ落ちる
      （_kingChimeElapsed参照）。残すと回転も音符も始まらないまま演出が終わる */
-  _kingSpinChimeAt = null;
+  _kingFx.spinChimeAt = null;
   /* 焦げ跡の帯電の進捗の分母。次のアクセントで引き直される */
   if (_king) _king.seqAccentAt = null;
   _dpLoopRebaseClock();
@@ -5398,7 +5398,7 @@ function _drawKingReelCharge(px, py, idx) {
    帯電（_drawKingReelCharge）と同じ疑似乱数の作りで、こちらは経過フレームで
    長さを伸ばしながら薄くしていく */
 function _drawKingReelDischarge(px, py, idx) {
-  const k = _kingFireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
+  const k = _kingFx.fireFlash / KING_FIRE_FLASH_FRAMES; // 1→0
   let seed = idx * 13 + 7;
   const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
   /* 帯電（_drawKingReelCharge）を的の半径基準へ拡大したので、こちらも同じ基準に
@@ -5483,12 +5483,12 @@ function _drawKingChargeTether(x0, y0, x1, y1, idx) {
    的の帯電が打ち込みの残り拍で勢いを変えるのと同じ vigor に掛ける＝焼き込み直前が
    いちばん長く明るい */
 function _drawKingMarkCharges(breath, ofsX, ofsY) {
-  if (_kingChargedMarks.length === 0) return;
+  if (_kingFx.chargedMarks.length === 0) return;
   const ct = audioCtx ? audioCtx.currentTime : null;
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  for (const m of _kingChargedMarks) {
+  for (const m of _kingFx.chargedMarks) {
     let p = 1; // 時計が引けない場合は満充電で描く
     if (ct !== null && m.chargedAt !== null && _king.seqAccentAt !== null) {
       const span = _king.seqAccentAt - m.chargedAt;
@@ -5608,7 +5608,7 @@ function drawKingReel(w, active, idx) {
      一斉に消すのではない。再生では的ごとに撃つ時刻がずれるので、順に消えていく */
   if (w.locked && _king && !_king.reelBeamed[idx]) _drawKingReelCharge(px, py, idx);
   /* 発射タップの瞬間の放電はそのまま重ねて出す（帯電の有無とは独立） */
-  if (w.locked && _kingFireFlash > 0) _drawKingReelDischarge(px, py, idx);
+  if (w.locked && _kingFx.fireFlash > 0) _drawKingReelDischarge(px, py, idx);
   /* 当たった文字は的の下に表示（ロック前は何も出さない） */
   if (w.result) {
     ctx.save();
@@ -5819,8 +5819,8 @@ function _updateAlways() {
      draw() で減らすと、draw の呼ばれ方がフレームレートと追いつき処理で変わるぶん揺れの
      長さが端末ごとにぶれる（120Hz端末では半分、追いつきが起きた時は数倍になる）。
      ボス系phaseは各分岐が早期returnするので、この常時更新セクションに置く必要がある */
-  if (_kingSiftShake   > 0) _kingSiftShake--;
-  if (_kingImpactShake > 0) _kingImpactShake--;
+  if (_kingFx.siftShake   > 0) _kingFx.siftShake--;
+  if (_kingFx.impactShake > 0) _kingFx.impactShake--;
   /* localStorageの溜まり分は「矢を放った直後」に書き出す。プレイヤーは拍に乗せて
      打つので、発射直後は次のタップまで約1拍（395ms）の余裕がある＝ここで数ms
      止まっても入力は取りこぼさない。逆に固定遅延のタイマー任せにすると、
@@ -7887,21 +7887,10 @@ function _noBgmResumePhase() {
    両方から呼ぶ共通処理 */
 function _cleanupKingBattleState() {
   if (_king) _releaseKingReelOCs(_king.reels); // 最後の4的のOCをプールへ返却（リーク防止）
-  _king = null; _kingLasers = []; _kingCharFlights = [];
-  _victorySteam = []; // 湯気（勝利専用の独立配列、共有particlesは使わない）
+  _king = null;
+  _kingFx = _newKingFx();        // 演出の状態は丸ごと作り直す（_newKingFx参照）
   _bossBgmPendingTier = null; // 予約中の地鳴り段階切り替えを破棄（次戦は_initBossBattleでtier0から）
-  _kingSiftShake = 0;            // 篩い落としの画面揺れ残量（_kingはnull化されるがこれはモジュール変数）
-  _kingImpactShake = 0;          // 着弾の画面揺れ残量（同上）
-  _kingFireFlash = 0;            // 発射の放電残量（同上）
-  _kingAccentFlash = 0;          // 5音目アクセントの全身リアクション残量（同上）
-  _kingAccentRecoil = 0;
-  _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない（同上）
-  _kingSpinSphere = _kingSpinSurface = null; // 「くるり」用の層を次戦へ持ち越さない
-  _kingSpinChimeAt = null;
-  _kingNotes = []; _kingNoteFired = false;
-  _kingAccentMarks = [];         // 発光対象の焦げ跡参照を残さない（_king破棄後の保持を避ける）
-  _kingHits = [];                // 進行中の被弾リアクションを次戦へ持ち越さない
-  _kingChargedMarks = [];        // 帯電中の焦げ跡も同様（焼き込み前に戦闘が終わった場合）
+  _shishiAccent = 0;             // 背景の獅子の反応も次戦へ持ち越さない
   /* 3つの演出はいずれもプール由来のギヨウザを抱えている。破棄する前に必ず返す */
   if (_omen)        _omen.items        = _releaseAll(_omen.items);
   if (_defeatOutro) _defeatOutro.items = _releaseAll(_defeatOutro.items);
@@ -8158,7 +8147,7 @@ function _updateBossDefeatShrink() {
      上限フレームも設ける（万一到達しなくても同じ画面に留まり続けないように） */
   if (!_king || _bossDefeatXfade >= 1 || _bossDefeatShrinkTimer > 60) {
     if (_king) _releaseKingReelOCs(_king.reels); // 的OCをプールへ返却（リーク防止・水平展開）
-    _king = null; _kingLasers = []; _kingCharFlights = []; // 弾けた瞬間に本体は消える
+    _king = null; _kingFx.lasers = []; _kingFx.charFlights = []; // 弾けた瞬間に本体は消える
     phase = 'bossDefeatOutro';
     playSE('bossFlash');
   }
@@ -8400,7 +8389,6 @@ const KING_CHAR_RETURN_FRAMES = 10;
 /* 振り下ろしに合わせた画面の微揺れ（既存のdraw()冒頭のshake機構に加算する）。
    打撃感の補強なので短く小さく。フレームカウンタで良い（映像の進行に紐づく演出） */
 const KING_SIFT_SHAKE_FRAMES = 8;
-let _kingSiftShake = 0;
 /* 文字が的に当たった衝撃で、その的だけが小さく揺れる。
    減衰する上下振動を主体にし、横はごくわずかに添えるだけ（衝突点は常に的の真上なので、
    縦に叩かれた揺れ方が自然）。的スロット単位で持つのはひび（_king.reelCracks）と同じ理由で、
@@ -8417,13 +8405,12 @@ const KING_REEL_SHAKE_FRAMES = 12;
 const KING_REEL_SHAKE_AMP    = 6;
 const KING_REEL_SHAKE_FREQ   = 1.05; // 約6フレーム周期
 const KING_REEL_SHAKE_BIAS   = 0.35; // 下方向への偏り（0=上下等分、1=沈むだけ）
-/* 衝突の瞬間だけ入れる短い画面揺れ。振り下ろし時の画面揺れ（_kingSiftShake）は
+/* 衝突の瞬間だけ入れる短い画面揺れ。振り下ろし時の画面揺れ（_kingFx.siftShake）は
    衝突より9〜16フレーム早く終わるため、そちらを「当たった衝撃」と誤認して
    「タイミングが早い」と感じられていた。振り下ろし側を弱めるとキングの打撃感が
    死ぬので、本番（衝突）側にも揺れを入れて印象を取り戻す */
 const KING_IMPACT_SHAKE_FRAMES = 3;
 const KING_IMPACT_SHAKE_AMP    = 2.5;
-let _kingImpactShake = 0;
 /* ひびの金属音（_playKingCrackKin）の多重発音を間引くための最終発音時刻。
    4文字がほぼ同フレームに着弾するため、この窓の中の呼び出しは1発にまとめる
    （_addKingReelCrackAtCollision参照）。ミリ秒・wall-clock基準 */
@@ -8643,10 +8630,6 @@ const KING_FIRE_FLASH_FRAMES = 12;
 const KING_TETHER_SEG   = 7;    // 稲妻の折れ数
 const KING_TETHER_AMP   = 0.13; // 横揺れ幅（両端間の距離に対する比・中央で最大）
 const KING_CHARGE_BOLTS = 7;    // 文字側の帯電の本数（的側 _drawKingReelCharge と同数）
-let _kingFireFlash = 0;
-let _kingAccentFlash  = 0;
-let _kingAccentRecoil = 0;
-let _kingAccentMarks  = []; // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
 /* 1文字ごとの被弾リアクション（KING_ACCENT_* の縮小版）。
    撃ち込まれた瞬間に、キング本体をビームの進行方向（的の三角 → 着弾した焦げ跡）へ短く押す。
 
@@ -8671,22 +8654,43 @@ const KING_HIT_KNOCK_MAX    = KING_ACCENT_RECOIL_PX * 0.5;
    採らない。撃ち込みと同時に同じ場所で焦げ跡の帯電スパークが回り出すため、光が完全に
    埋もれて見えない（実機で確認済み）。着弾点に何か足したくなったら、まずスパークとの
    前後関係と明度差を解決すること */
-/* 進行中の被弾リアクション [{ux,uy,amp,life}]。1試技で最大4個・7フレームで消える */
-let _kingHits = [];
 const _predKingHitAlive = h => h.life > 0;
-let _kingChargedMarks = []; // 撃ち込み済みだがまだ焼き込まれていない焦げ跡（帯電中）
 let _kingFlashSprite  = null; // 焦げ跡の発光用スプライト（初回使用時に生成）
 let _king = null;       // { liveOC, half, marks, cookPct, bx, by, dbx, dby, dscale, tx, ty }
-let _kingLasers = [];   // { x1,y1,x2,y2, age, life, maxLife, color, glow }
-let _kingCharFlights = []; // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
-let _kingShatter = null; // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
+/* キング戦の演出の状態。戦闘が終わったら _newKingFx() で丸ごと作り直す。
+   **演出の状態を足すときは、モジュール変数にせずここへ足すこと。** 変数を散らすと、
+   戦闘の終わりにリセットする一覧へ1つずつ手で並べることになり、足し忘れた状態が
+   次の戦闘へ持ち越される。
+   _king（本体）とは寿命が違う: 敗北では本体が弾けて先に消えたあとも、揺れや湯気は
+   演出の終わりまで残る。そのため _king の中には入れず、null にならない別の器にする */
+function _newKingFx() {
+  return {
+    siftShake: 0,      // 振り下ろしの画面揺れの残りフレーム（KING_SIFT_SHAKE_FRAMES）
+    impactShake: 0,    // 着弾の画面揺れの残りフレーム（KING_IMPACT_SHAKE_*）
+    fireFlash: 0,      // 発射の放電の残りフレーム
+    accentFlash: 0,    // 5音目アクセントの全身リアクションの残りフレーム
+    accentRecoil: 0,   // 同じく仰け反りの残りフレーム
+    accentMarks: [],   // アクセントで一斉に発光させる焦げ跡（その試技で焼いた分）
+    hits: [],          // 進行中の被弾リアクション [{ux,uy,amp,life}]。1試技で最大4個・7フレームで消える
+    chargedMarks: [],  // 撃ち込み済みだがまだ焼き込まれていない焦げ跡（帯電中）
+    lasers: [],        // { x1,y1,x2,y2, age, life, maxLife, color, glow }
+    charFlights: [],   // { char, sx,sy, rtx,rty, state, frames, resolve, bx,by,bvx,bvy }
+    shatter: null,     // { pieces } 的が砕けて破片が飛び散る演出（6回目の失敗時のみ、_startKingReelShatter参照）
+    steam: [],         // こんがり達成の湯気（_spawnVictorySteamWisp。共有particlesを使わない理由は下の定数の説明）
+    spinSphere: null,  // 勝利回転の回さない層（生地＋こんがりトーン。KING_SPIN_*参照）
+    spinSurface: null, // 勝利回転の回す層（接地側の焦げ色・薄皮・ひだ・焦げ跡・顔）
+    spinChimeAt: null, // チーンのctx時刻。音が引けないときはnull
+    notes: [],         // チーンで飛ばす音符（KING_NOTE_*）
+    noteFired: false,
+  };
+}
+let _kingFx = _newKingFx();
 const KING_SHATTER_MAX_FRAMES = 150; // 破片が画面外に出きらない場合の保険上限
 /* こんがり達成時の湯気（蒸したての湯気、_spawnVictorySteamWisp参照）専用の独立した配列。
    共有particles配列には登録しないこと。共有particlesにはupdate()冒頭で全phase共通の
    汎用物理（重力+0.22・収縮×0.97）が掛かり、_updateBossVictory独自の浮力(-0.01)と
    二重適用されて正味+0.21/frameの下向き加速度になる。結果、約13フレームで上昇が失速し、
-   「上昇する湯気」ではなく「跳ねてすぐ落ちる火の粉」の動きになる */
-let _victorySteam = [];
+   「上昇する湯気」ではなく「跳ねてすぐ落ちる火の粉」の動きになる（_kingFx.steam の置き場所） */
 let _steamSprite = null; // 湯気用の柔らかい放射状グラデーションスプライト（初回使用時に生成）
 /* このこんがり達成が初回か（_startBossVictoryで確定）。trueを引き継いでbossVictoryの
    CONTINUEタップ時に真エンディングへ進むかどうかを決める（_startTrueEnding参照） */
@@ -8853,8 +8857,8 @@ function _initBossBattle() {
        一斉に消すのではなく、実際にビームが出た的から順に消す */
     reelBeamed: [false, false, false, false],
   };
-  _kingLasers = [];
-  _kingCharFlights = [];
+  _kingFx.lasers = [];
+  _kingFx.charFlights = [];
   phase = 'boss';
   /* BGMの段階をtier0（最も凶暴）にリセットする。startBossBGMTapeが
      bossBgmBuffer（tier0と同一内容）で新規ソースを作るため、ここでの状態
@@ -8987,7 +8991,7 @@ function _spawnKingCharFlight(w, reelIdx) {
     deferBurn: false, // 焦げを5音目まで遅らせるか（_kingBuildSequenceが立てる）
     rot: 0, rotSpd: 0, // 弾き飛ばし後の回転演出（衝突時に設定、drawKingCharFlights参照）
   };
-  _kingCharFlights.push(f);
+  _kingFx.charFlights.push(f);
   return f;
 }
 
@@ -9064,7 +9068,7 @@ function _kingReelShoot(inputPerfMs, forced = false) {
     /* 4打目だけオープンハット（kingFire）にして「コールを閉じた」ことを音で示す。
        発射トリガーがあった頃の5打目と同じ音・同じ役割で、位置が1つ前に移った */
     playSE(last ? 'kingFire' : 'kingMark');
-    if (last) _kingFireFlash = KING_FIRE_FLASH_FRAMES;
+    if (last) _kingFx.fireFlash = KING_FIRE_FLASH_FRAMES;
     _adjustKingCharWeight(_king.reelIdx, w.result); // この的で命中した文字の比率を少し上げる（次回respinから反映）
   }
   const f = _spawnKingCharFlight(w, _king.reelIdx);
@@ -9099,7 +9103,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
          4回刻むより、まとめて伸ばすほうが目に見える）。
          スコア平均（avgScore）はビーム色・JUST/GOOD/OKラベル表示のみに使う（%やサイズには
          使わない＝1本ずつ個別に判定する） */
-      const thisAttempt = _kingCharFlights.filter(f => f.resolve === null);
+      const thisAttempt = _kingFx.charFlights.filter(f => f.resolve === null);
       let gain = 0;
       for (const f of thisAttempt) {
         if (!f.markRef) continue; // OK以下のタップは焦げ跡なし
@@ -9149,7 +9153,7 @@ function _kingFireAttack(inputPerfMs, forced = false) {
        終えたか」を数える。6回目の失敗の破砕演出のトリガー（_updateKingCharFlights参照）と、
        次のトライの解放（_kingTrialGate参照）の両方がこの1つのカウンタで決まる */
     const attemptToken = { remaining: 0 };
-    for (const f of _kingCharFlights) {
+    for (const f of _kingFx.charFlights) {
       if (f.resolve !== null) continue;
       f.resolve = 'bounce';
       f.attemptToken = attemptToken; attemptToken.remaining++;
@@ -9504,11 +9508,11 @@ function _kingSeqAccent(e, flush) {
   /* 焼き込み: 帯電したまま待っていた焦げ跡を、5拍目のアクセントで一斉に出現させる。
      ここで初めて revealedAt が入り、_renderKingBody のフェード表示が4つ同時に始まる */
   const burnAt = performance.now();
-  for (const m of _kingChargedMarks) {
+  for (const m of _kingFx.chargedMarks) {
     if (m.revealedAt == null) m.revealedAt = burnAt;
     m.charging = false;
   }
-  _kingChargedMarks = [];
+  _kingFx.chargedMarks = [];
   /* 記録が無く再生イベントを持たない的（強制発射の自動確定分）の帯電もここで止める */
   if (_king.reelBeamed) _king.reelBeamed = [true, true, true, true];
   if (!e.dud) { // 焦げ跡ゼロ＝ダメージ無しなら加点しない
@@ -9516,11 +9520,11 @@ function _kingSeqAccent(e, flush) {
     /* 全身リアクション（フラッシュ・のけぞり・焦げ跡の発光）は「叩いた」ご褒美なので、
        時間切れの自動発射では出さない。ゲージは伸びるが締めの一撃は起きない */
     if (!e.forced) {
-      _kingAccentFlash  = KING_ACCENT_FLASH_FRAMES;
-      _kingAccentRecoil = KING_ACCENT_RECOIL_FRAMES;
+      _kingFx.accentFlash  = KING_ACCENT_FLASH_FRAMES;
+      _kingFx.accentRecoil = KING_ACCENT_RECOIL_FRAMES;
       _shishiAccent     = SHISHI_ACCENT_FRAMES; // 背景の獅子も同じ瞬間に反応する
-      _kingImpactShake  = KING_IMPACT_SHAKE_FRAMES;
-      _kingAccentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
+      _kingFx.impactShake  = KING_IMPACT_SHAKE_FRAMES;
+      _kingFx.accentMarks  = e.flights.filter(f => f.markRef).map(f => f.markRef);
       /* 全画面フラッシュが始まるこの瞬間は、実解像度を切り替えても1フレームぶんの
          間が見えない。トライ開始まで待つと1小節ぶん遅れる（_rsApplyPending参照） */
       _rsApplyPending();
@@ -9671,7 +9675,7 @@ function _kingFireBeam(f) {
   /* マークの色＝そのタップの飛翔文字の色（drawKingCharFlightsのf.score基準の
      色付けと同一。_syncBarColor(f.score)）にビーム色を一致させる */
   const [col, glow] = _syncBarColor(f.score);
-  _kingLasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
+  _kingFx.lasers.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
     age: 0, life: 14, maxLife: 14, color: col, glow });
   return true;
 }
@@ -9747,16 +9751,16 @@ function _updateKingCommonFx() {
   }
   /* 5音目アクセントの全身リアクション残量（KING_ACCENT_*の定義部参照）。
      映像の進行に紐づく演出なのでフレームカウンタでよい */
-  if (_kingFireFlash    > 0) _kingFireFlash--;
-  if (_kingAccentFlash  > 0) _kingAccentFlash--;
-  if (_kingAccentRecoil > 0) _kingAccentRecoil--;
+  if (_kingFx.fireFlash    > 0) _kingFx.fireFlash--;
+  if (_kingFx.accentFlash  > 0) _kingFx.accentFlash--;
+  if (_kingFx.accentRecoil > 0) _kingFx.accentRecoil--;
   if (_shishiAccent     > 0) _shishiAccent--;
   /* 1文字ごとの被弾リアクション（KING_HIT_*の定義部参照） */
-  for (const h of _kingHits) h.life--;
-  swapRemove(_kingHits, _predKingHitAlive);
+  for (const h of _kingFx.hits) h.life--;
+  swapRemove(_kingFx.hits, _predKingHitAlive);
   _updateKingCharFlights();
-  for (const l of _kingLasers) { l.age++; l.life--; }
-  swapRemove(_kingLasers, _predLife); // 既存の共通predを使う（毎フレームのクロージャ生成を避ける）
+  for (const l of _kingFx.lasers) { l.age++; l.life--; }
+  swapRemove(_kingFx.lasers, _predLife); // 既存の共通predを使う（毎フレームのクロージャ生成を避ける）
 }
 
 /* 篩い落としの縦変位（描画時オフセット。KING_SIFT_*の定義部参照）。
@@ -9788,15 +9792,15 @@ function _kingSiftOffsetY() {
 const _kingBodyOfs = { dx: 0, dy: 0 };
 function _kingBodyOffset() {
   let hx = 0, hy = 0;
-  for (const h of _kingHits) {
+  for (const h of _kingFx.hits) {
     const p = 1 - h.life / KING_HIT_KNOCK_FRAMES; // 0→1
     const k = h.amp * _kingReactEnv(p);
     hx += h.ux * k; hy += h.uy * k;
   }
   const len = Math.hypot(hx, hy);
   if (len > KING_HIT_KNOCK_MAX) { const s = KING_HIT_KNOCK_MAX / len; hx *= s; hy *= s; }
-  if (_kingAccentRecoil > 0) {
-    hy -= KING_ACCENT_RECOIL_PX * _kingReactEnv(1 - _kingAccentRecoil / KING_ACCENT_RECOIL_FRAMES);
+  if (_kingFx.accentRecoil > 0) {
+    hy -= KING_ACCENT_RECOIL_PX * _kingReactEnv(1 - _kingFx.accentRecoil / KING_ACCENT_RECOIL_FRAMES);
   }
   _kingBodyOfs.dx = hx; _kingBodyOfs.dy = hy;
   return _kingBodyOfs;
@@ -9813,7 +9817,7 @@ function _kingPushHit(f) {
     const dx = p1.x - p0.x, dy = p1.y - p0.y, d = Math.hypot(dx, dy);
     if (d > 1) { ux = dx / d; uy = dy / d; }
   }
-  _kingHits.push({ ux, uy, amp: f.tier === 'just' ? KING_HIT_KNOCK_JUST : KING_HIT_KNOCK_GOOD,
+  _kingFx.hits.push({ ux, uy, amp: f.tier === 'just' ? KING_HIT_KNOCK_JUST : KING_HIT_KNOCK_GOOD,
                    life: KING_HIT_KNOCK_FRAMES });
 }
 
@@ -9921,7 +9925,7 @@ function _addKingReelCrackAtCollision(f) {
   if (_king.reelShake) _king.reelShake[f.reelIdx] = KING_REEL_SHAKE_FRAMES;
   /* 衝突の瞬間だけ画面も短く揺らす（KING_IMPACT_SHAKE_*参照）。4文字は同じ
      フレームに着弾するので、加算せず同じ値をセットして暴れないようにする */
-  _kingImpactShake = KING_IMPACT_SHAKE_FRAMES;
+  _kingFx.impactShake = KING_IMPACT_SHAKE_FRAMES;
   /* ひびが入る瞬間の金属音（_playKingCrackKin参照）。
      揺れと同じ理由で多重発音を避ける: この関数は文字1体ごとに呼ばれ、4体はほぼ同じ
      フレームに着弾するため、素直に鳴らすと同じ音が4重になって音量が跳ね上がり、
@@ -9964,7 +9968,7 @@ function _stickKingChar(f) {
        _king.seqAccentAt との比で出すため。どちらも audioCtx の時計。
        時計が引けなければ null＝満充電表示で描く） */
     f.markRef.chargedAt = audioCtx ? audioCtx.currentTime : null;
-    _kingChargedMarks.push(f.markRef);
+    _kingFx.chargedMarks.push(f.markRef);
   }
 }
 
@@ -9974,7 +9978,7 @@ function _stickKingChar(f) {
    resolveが判明したらそのまま stick/bounce へ進めればよい（位置の作り直しは
    不要） */
 function _updateKingCharFlights() {
-  for (const f of _kingCharFlights) {
+  for (const f of _kingFx.charFlights) {
     if (f.state === 'fly') {
       f.frames++;
       if (f.frames >= KING_CHAR_FLY_FRAMES) {
@@ -10042,7 +10046,7 @@ function _updateKingCharFlights() {
       f.rot += f.rotSpd;
     }
   }
-  swapRemove(_kingCharFlights, _predKingCharAlive);
+  swapRemove(_kingFx.charFlights, _predKingCharAlive);
 }
 
 function _updateBossBattle() {
@@ -10055,12 +10059,12 @@ function _updateBossBattle() {
      bounce予定の文字が1つも'fly'に残っていないこと。最速発射でも常に
      「到着→振り下ろす→落ちる」の順になり、見え方が一定になる */
   if (_king.siftPending) {
-    const pend = _kingCharFlights.filter(f => f.resolve === 'bounce');
+    const pend = _kingFx.charFlights.filter(f => f.resolve === 'bounce');
     if (pend.length > 0 && pend.every(f => f.state === 'wait')) {
       _king.siftPending = false;
       _king.siftTimer = 0;
       _king.gaze = KING_SIFT_GAZE; // 振り下ろす間だけ下を見る（底で0へ戻す）
-      _kingSiftShake = KING_SIFT_SHAKE_FRAMES;
+      _kingFx.siftShake = KING_SIFT_SHAKE_FRAMES;
       playSE('kingSift');
       /* 画面が揺れているこの瞬間も切り替えの区切りにする。ハズレの経路には
          アクセントが無いので、ここが無いとトライ開始まで待つことになる */
@@ -10075,10 +10079,10 @@ function _updateBossBattle() {
      drawBossBattleが早期returnして「とどめの一撃のビームだけ一度も描画されない」状態になる。
      敗北側（pendingDefeat→文字の衝突完了を待って破砕へ）と同じ「予約してから演出の完了を
      待つ」形に揃える。ビームが1本も出なかった場合（全タップOK以下でmarkRefが無い）は
-     _kingLasersが空なので即座に確定する */
+     _kingFx.lasersが空なので即座に確定する */
   if (_king.pendingVictory) {
     /* 再生シーケンスを撃ち切り、ビームも消えきってから勝利を確定する */
-    if (_kingLasers.length === 0 && _king.seqEvents.length === 0) { _startBossVictory(); }
+    if (_kingFx.lasers.length === 0 && _king.seqEvents.length === 0) { _startBossVictory(); }
     return;
   }
   /* 打ち込みの持ち時間と、次トライの解放。
@@ -10120,13 +10124,10 @@ function _updateBossBattle() {
    短冊は等幅で切る。縁ほど元画像を大きく圧縮することになるが、それが正しい前縮み */
 const KING_SPIN_SEC     = 1.20; // 1回転に掛ける時間。ファンファーレの途中から回り始め、チーンへ着地する
 const KING_SPIN_STRIPS  = 64;   // 短冊の数（16でもほぼ同じ見た目だが、実測で0.064ms）
-let _kingSpinSphere = null;     // 回さない層（生地＋こんがりトーン）
-let _kingSpinSurface = null;    // 回す層（接地側の焦げ色・薄皮・ひだ・焦げ跡・顔）
-let _kingSpinChimeAt = null;    // チーンのctx時刻。音が引けないときはnull
 /* チーンからの経過秒。まだなら負、判定できなければ -Infinity。
    音が鳴っていれば音声時計、消音時だけ勝利からの経過フレームで代用する */
 function _kingChimeElapsed() {
-  if (_kingSpinChimeAt !== null && audioCtx) return audioCtx.currentTime - _kingSpinChimeAt;
+  if (_kingFx.spinChimeAt !== null && audioCtx) return audioCtx.currentTime - _kingFx.spinChimeAt;
   if (phase !== 'bossVictory' && phase !== 'bossVictoryOutro') return -Infinity;
   return (_bossVictoryTimer - KONGARI_CHIME_SEC * 60) / 60;
 }
@@ -10151,7 +10152,6 @@ const KING_NOTE_SPEED = 430;              // 初速 px/秒
 const KING_NOTE_DRAG  = 3.6;              // 減速（0.3秒でほぼ止まる）
 const KING_NOTE_GRAV  = 40;               // 失速してから軽く落ちる
 const KING_NOTE_ANGLE = -Math.PI / 6;     // 時計の2時＝水平から30度上
-let _kingNotes = [], _kingNoteFired = false;
 function _fireKingNote() {
   if (!_king) return;
   const s = _BOSS_S * _king.dscale;
@@ -10160,7 +10160,7 @@ function _fireKingNote() {
      （楕円の式 (x/rx)^2+(y/ry)^2=1 を方向ベクトルで解いたもの） */
   const ca = Math.cos(KING_NOTE_ANGLE), sa = Math.sin(KING_NOTE_ANGLE);
   const t = 1 / Math.hypot(ca / (s * GYOZA_BODY_RX), sa / (s * GYOZA_BODY_RY));
-  _kingNotes = [{
+  _kingFx.notes = [{
     x: _king.dbx + ca * t, y: _king.dby + s * GYOZA_BODY_CY + sa * t,
     vx: Math.cos(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
     vy: Math.sin(KING_NOTE_ANGLE) * KING_NOTE_SPEED,
@@ -10170,23 +10170,23 @@ function _fireKingNote() {
 /* 位置は実時間（秒）で進める。フレーム基準にすると処理落ちで飛距離が変わる。
    固定tickなので1tick＝_TARGET_FRAME_MSで割り切ってよい */
 function _updateKingNotes() {
-  if (_kingNotes.length === 0) return;
+  if (_kingFx.notes.length === 0) return;
   const dt = _TARGET_FRAME_MS / 1000, k = Math.exp(-KING_NOTE_DRAG * dt);
-  for (const n of _kingNotes) {
+  for (const n of _kingFx.notes) {
     n.t += dt;
     n.x += n.vx * dt; n.y += n.vy * dt;
     n.vx *= k; n.vy *= k;
     n.vy += KING_NOTE_GRAV * dt;
     n.rot += 0.9 * dt;
   }
-  _kingNotes = _kingNotes.filter(n => n.t < KING_NOTE_SEC);
+  _kingFx.notes = _kingFx.notes.filter(n => n.t < KING_NOTE_SEC);
 }
 function _drawKingNotes() {
-  if (_kingNotes.length === 0) return;
+  if (_kingFx.notes.length === 0) return;
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `bold ${Math.round(_BOSS_S * 0.14)}px ${FONT_MIN}`;
-  for (const n of _kingNotes) {
+  for (const n of _kingFx.notes) {
     const p = n.t / KING_NOTE_SEC;
     ctx.globalAlpha = Math.max(0, 1 - p * p); // 後半で速く消える
     ctx.save();
@@ -10205,7 +10205,7 @@ const _wrapPi = a => { a = (a + Math.PI) % (2 * Math.PI); return (a < 0 ? a + 2 
    確保を回転の直前まで遅らせてはいけない: この大きさの確保はフレームを1つ落とすので、
    回り出す瞬間に引っかかる。入力のタイミングが絡まない達成の瞬間に済ませる */
 function _buildKingSpinLayers() {
-  _kingSpinSphere = _kingSpinSurface = null;
+  _kingFx.spinSphere = _kingFx.spinSurface = null;
   if (!_king || !_bossOC) return;
   const s = _BOSS_S, half = _king.half, REF = 42, kk = s / REF, pct = _king.cookPct / 100;
   const prep = () => {
@@ -10237,17 +10237,17 @@ function _buildKingSpinLayers() {
      本体の輪郭で切るのは貼るときの楕円クリップが受け持つ */
   _drawKingScorchTo(su, _king.marks, performance.now());
   _drawKingFace(su, s, pct, 0);
-  _kingSpinSphere = spOC; _kingSpinSurface = suOC;
+  _kingFx.spinSphere = spOC; _kingFx.spinSurface = suOC;
 }
 
 /* 回転の進み 0〜1。範囲外（まだ・もう終わった・層が無い）は -1。
    時計は音声基準。フレーム基準で回すと処理落ちのぶんだけチーンから外れる。
    消音時は音が鳴らないので、その場合だけ勝利からの経過フレームで代用する */
 function _kingSpinProgress() {
-  if (!_kingSpinSurface) return -1;
+  if (!_kingFx.spinSurface) return -1;
   let p;
-  if (_kingSpinChimeAt !== null && audioCtx) {
-    const left = _kingSpinChimeAt - audioCtx.currentTime;
+  if (_kingFx.spinChimeAt !== null && audioCtx) {
+    const left = _kingFx.spinChimeAt - audioCtx.currentTime;
     if (left > KING_SPIN_SEC || left <= 0) return -1;
     p = 1 - left / KING_SPIN_SEC;
   } else {
@@ -10282,7 +10282,7 @@ function _kingSpecular(gain) {
 
 function _drawKingSpin(th) {
   const half = _king.half, s = _BOSS_S, R = s * GYOZA_BODY_RX, D = _dpr, N = KING_SPIN_STRIPS;
-  _blitKingBody(_kingSpinSphere);
+  _blitKingBody(_kingFx.spinSphere);
   ctx.save();
   ctx.beginPath(); ctx.ellipse(0, s * GYOZA_BODY_CY, R, s * GYOZA_BODY_RY, 0, 0, Math.PI * 2); ctx.clip();
   for (let i = 0; i < N; i++) {
@@ -10291,7 +10291,7 @@ function _drawKingSpin(th) {
     if (Math.abs(_wrapPi(lam((x0 + x1) / 2) - th)) > Math.PI / 2) continue; // 裏側＝無地
     const a0 = R * Math.sin(_wrapPi(lam(x0) - th)), a1 = R * Math.sin(_wrapPi(lam(x1) - th));
     const sa = Math.min(a0, a1), sb = Math.max(a0, a1);
-    ctx.drawImage(_kingSpinSurface,
+    ctx.drawImage(_kingFx.spinSurface,
       (sa + half) * D, 0, Math.max(0.5, (sb - sa) * D), half * 2 * D,
       x0, -half, x1 - x0, half * 2);
   }
@@ -10370,11 +10370,11 @@ function _drawKingOutcomeScreen(opts) {
 }
 
 function drawKingCharFlights() {
-  if (_kingCharFlights.length === 0) return;
+  if (_kingFx.charFlights.length === 0) return;
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.88)';
-  for (const f of _kingCharFlights) {
+  for (const f of _kingFx.charFlights) {
     const { x, y } = _kingCurrentFlightPos(f);
     /* 帯電中（焼き込み待ち）は薄めずそのまま出す。フェードが始まるのは5音目で
        焦げに変わる瞬間から（_predKingCharAlive参照） */
@@ -10410,7 +10410,7 @@ function drawBossBattle() {
      距離に関わらずKING_LASER_TRAVEL_FRAMES（時間基準の進行度）で先端をx1,y1→x2,y2へ
      進めるため、的とマークの距離が違っても4本が同時に着弾する
      （KING_LASER_TRAVEL_FRAMES定義部参照） */
-  for (const l of _kingLasers) {
+  for (const l of _kingFx.lasers) {
     const t = Math.min(1, l.age / KING_LASER_TRAVEL_FRAMES);
     const tx = l.x1 + (l.x2 - l.x1) * t, ty = l.y1 + (l.y2 - l.y1) * t;
     const a = l.life / l.maxLife;
@@ -10442,9 +10442,9 @@ function drawBossBattle() {
   _blitKingBody(bodySrc);
   /* 5音目アクセントの全身フラッシュ。同じ絵を 'lighter' で重ねて明度を持ち上げる
      （白い板を被せると輪郭やシルエットが潰れるため、本体の色を活かして光らせる） */
-  if (_kingAccentFlash > 0) {
+  if (_kingFx.accentFlash > 0) {
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (_kingAccentFlash / KING_ACCENT_FLASH_FRAMES) * 0.75;
+    ctx.globalAlpha = (_kingFx.accentFlash / KING_ACCENT_FLASH_FRAMES) * 0.75;
     _blitKingBody(bodySrc);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
@@ -10453,12 +10453,12 @@ function drawBossBattle() {
   /* その試技で焼いた焦げ跡を一斉に発光させる（アクセントの視覚。焦げ跡は
      liveOCへ合成済みで個別に光らせられないため、ワールド座標へ重ねて描く。
      _kingFlightTargetPos と同じ座標変換） */
-  if (_kingAccentFlash > 0 && _kingAccentMarks.length > 0 && _kingFlashSprite) {
-    const fa = _kingAccentFlash / KING_ACCENT_FLASH_FRAMES;
+  if (_kingFx.accentFlash > 0 && _kingFx.accentMarks.length > 0 && _kingFlashSprite) {
+    const fa = _kingFx.accentFlash / KING_ACCENT_FLASH_FRAMES;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = fa;
-    for (const m of _kingAccentMarks) {
+    for (const m of _kingFx.accentMarks) {
       const rr = m.r * breath * 1.6;
       _kingLocalToWorld(m.lx, m.ly, breath, ofs.dx, ofs.dy, _kingWorldTmp);
       const mx = _kingWorldTmp.x, my = _kingWorldTmp.y;
@@ -10475,7 +10475,7 @@ function drawBossBattle() {
      ハズレ経路と再生シーケンスを組めなかった経路では発射時に reelBeamed が
      一斉に true になるため、この線は1フレームも出ない */
   if (phase === 'boss' && _king.attemptFired) {
-    for (const f of _kingCharFlights) {
+    for (const f of _kingFx.charFlights) {
       if (_king.reelBeamed[f.reelIdx] || f.resolve !== null) continue;
       const p0 = _kingReelPointerPos(_king.reels[f.reelIdx]);
       const p1 = _kingCurrentFlightPos(f);
@@ -10600,7 +10600,7 @@ function _spawnVictorySteamWisp() {
   const cx = _king.dbx, cy = _king.dby + s * 0.08;
   const rx = s * GYOZA_BODY_RX, ry = s * GYOZA_BODY_RY;
   const ang = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.75; // 真上を中心に上半分の弧
-  _victorySteam.push({
+  _kingFx.steam.push({
     x: cx + Math.cos(ang) * rx * 0.85,
     y: cy + Math.sin(ang) * ry * 0.85,
     vx: (Math.random() - 0.5) * 0.3,
@@ -10615,7 +10615,7 @@ function _spawnVictorySteamWisp() {
 }
 
 function _updateVictorySteam() {
-  for (const p of _victorySteam) {
+  for (const p of _kingFx.steam) {
     p.age++;
     p.wobblePhase += p.wobbleSpd;
     p.x += p.vx + Math.sin(p.wobblePhase) * (p.wobbleAmp * 0.03); // 左右にゆらめきながら上昇
@@ -10626,7 +10626,7 @@ function _updateVictorySteam() {
        一瞬濃くなってしまうため、独立した係数を掛ける形にしている */
     if (p.disperse !== undefined) p.disperse = Math.max(0, p.disperse - _VICTORY_STEAM_DISPERSE_RATE);
   }
-  _victorySteam = _victorySteam.filter(p => p.age < p.maxAge && p.disperse !== 0);
+  _kingFx.steam = _kingFx.steam.filter(p => p.age < p.maxAge && p.disperse !== 0);
 }
 
 /* 溜めた湯気を一斉に霧散させる。キング中心から外向きに散らしつつ、独立した減衰係数で
@@ -10635,7 +10635,7 @@ function _updateVictorySteam() {
 const _VICTORY_STEAM_DISPERSE_RATE = 0.045; // 1フレームあたりの減衰量（約22フレームで消えきる）
 function _disperseVictorySteam() {
   const cx = _king ? _king.dbx : W / 2, cy = _king ? _king.dby : H / 2;
-  for (const p of _victorySteam) {
+  for (const p of _kingFx.steam) {
     const dx = p.x - cx, dy = p.y - cy;
     const d = Math.hypot(dx, dy) || 1;
     p.vx += (dx / d) * 1.7;
@@ -10646,9 +10646,9 @@ function _disperseVictorySteam() {
 }
 
 function _drawVictorySteam() {
-  if (!_steamSprite || _victorySteam.length === 0) return;
+  if (!_steamSprite || _kingFx.steam.length === 0) return;
   ctx.save();
-  for (const p of _victorySteam) {
+  for (const p of _kingFx.steam) {
     const t = p.age / p.maxAge;
     /* 0→1→0のなだらかな山型（現れて消えていく）。霧散中はさらに独立した
        減衰係数を掛ける（_disperseVictorySteam参照） */
@@ -10697,8 +10697,8 @@ function _startBossVictory() {
   const seAt = (!audioMuted && audioCtx && audioCtx.state === 'running')
     ? audioCtx.currentTime + 0.01 : null;
   playSE('kongariComplete', seAt ?? undefined);
-  _kingSpinChimeAt = seAt === null ? null : seAt + KONGARI_CHIME_SEC;
-  _kingNotes = []; _kingNoteFired = false;
+  _kingFx.spinChimeAt = seAt === null ? null : seAt + KONGARI_CHIME_SEC;
+  _kingFx.notes = []; _kingFx.noteFired = false;
   _buildKingSpinLayers(); // 「くるり」用の2層（_drawKingSpin参照）
   /* 真エンディングへ入るかどうかは trueEndingSeen で判定する（「実績が今回初めて解除された
      か」で判定してはいけない）。
@@ -10710,7 +10710,7 @@ function _startBossVictory() {
   _pendingTrueEnding = !trueEndingSeen;
   unlockAch(KONGARI_ACH_ID); // ギヨウザをこんがり焼いた（最後の実績）
   _buildSteamSprite();
-  _victorySteam = [];
+  _kingFx.steam = [];
 }
 
 function _updateBossVictory() {
@@ -10719,11 +10719,11 @@ function _updateBossVictory() {
      iOS Safari の canvas メモリを演出の間じゅう押さえておくものではない。
      判定に使うのは音声ではなくフレーム数: 消音時は音声の時計が無く、
      また戻らない値なので「もう終わった」の判定として安全 */
-  if (_kingSpinSurface && _bossVictoryTimer > KONGARI_CHIME_SEC * 60) {
-    _kingSpinSphere = _kingSpinSurface = null;
+  if (_kingFx.spinSurface && _bossVictoryTimer > KONGARI_CHIME_SEC * 60) {
+    _kingFx.spinSphere = _kingFx.spinSurface = null;
   }
   /* チーンを跨いだ瞬間に音符を1つ出す（_fireKingNote参照） */
-  if (!_kingNoteFired && _kingChimeElapsed() >= 0) { _kingNoteFired = true; _fireKingNote(); }
+  if (!_kingFx.noteFired && _kingChimeElapsed() >= 0) { _kingFx.noteFired = true; _fireKingNote(); }
   /* 勝利確定の瞬間、直前の試技で飛ばした文字がまだ吸い込まれフェード中の場合が
      あるため、決着後も完了まで動かし続ける（背景処理なので中断させない） */
   _updateKingCommonFx();
@@ -11585,7 +11585,7 @@ function _startKingReelShatter() {
       });
     }
   }
-  _kingShatter = { pieces, timer: 0 };
+  _kingFx.shatter = { pieces, timer: 0 };
   playSE('bossFlash'); // 破砕の衝撃（既存の演出用SEを流用、新規SEは追加しない）
 }
 
@@ -11594,7 +11594,7 @@ function _updateKingReelShatter() {
      ものが残っている場合）、レーザー演出は破砕中も止めない */
   _updateKingCommonFx();
 
-  const s = _kingShatter;
+  const s = _kingFx.shatter;
   if (!s) { _startBossDefeat(); return; }
   s.timer++;
   for (const p of s.pieces) {
@@ -11609,14 +11609,14 @@ function _updateKingReelShatter() {
     return x < -80 || x > W + 80 || y < -80 || y > H + 80;
   });
   if (allGone) {
-    _kingShatter = null;
+    _kingFx.shatter = null;
     _startBossDefeat();
   }
 }
 
 function drawKingReelShatter() {
-  if (phase !== 'bossShatter' || !_kingShatter) return;
-  for (const p of _kingShatter.pieces) {
+  if (phase !== 'bossShatter' || !_kingFx.shatter) return;
+  for (const p of _kingFx.shatter.pieces) {
     ctx.save();
     ctx.translate(p.cx + p.x, p.cy + p.y);
     ctx.rotate(p.rot);
@@ -13743,7 +13743,7 @@ function _drawForeground() {
    （_syncColorBuf と同じ流儀。ここで {x,y} を新造するとGCを毎フレーム誘発する） */
 const _shakeBuf = { x: 0, y: 0 };
 /* このフレームの画面シェイク量を合成して返す。各演出のシェイクは加算で重なる。
-   残量（_kingSiftShake / _kingImpactShake）の減衰は update() 側の担当で、ここでは読むだけ
+   残量（_kingFx.siftShake / _kingFx.impactShake）の減衰は update() 側の担当で、ここでは読むだけ
    （draw() の呼ばれ方はフレームレートと追いつき処理で変わるため） */
 function _computeScreenShake() {
   let shakeX = 0, shakeY = 0;
@@ -13761,13 +13761,13 @@ function _computeScreenShake() {
     shakeX += (Math.random()-0.5)*2;
     shakeY += (Math.random()-0.5)*1.5;
   }
-  if (_kingSiftShake > 0) { // 篩い落としの打撃感（KING_SIFT_SHAKE_FRAMES参照）
-    const k = _kingSiftShake / KING_SIFT_SHAKE_FRAMES;
+  if (_kingFx.siftShake > 0) { // 篩い落としの打撃感（KING_SIFT_SHAKE_FRAMES参照）
+    const k = _kingFx.siftShake / KING_SIFT_SHAKE_FRAMES;
     shakeX += (Math.random()-0.5) * 3 * k;
     shakeY += (Math.random()-0.5) * 5 * k;
   }
-  if (_kingImpactShake > 0) { // 文字が的に着弾した瞬間の衝撃（KING_IMPACT_SHAKE_*参照）
-    const k = _kingImpactShake / KING_IMPACT_SHAKE_FRAMES;
+  if (_kingFx.impactShake > 0) { // 文字が的に着弾した瞬間の衝撃（KING_IMPACT_SHAKE_*参照）
+    const k = _kingFx.impactShake / KING_IMPACT_SHAKE_FRAMES;
     shakeX += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * k;
     shakeY += (Math.random()-0.5) * KING_IMPACT_SHAKE_AMP * 1.6 * k;
   }
